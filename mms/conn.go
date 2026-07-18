@@ -1,0 +1,413 @@
+package mms
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/dscsystems/go-iec61850/asn1"
+	"github.com/dscsystems/go-iec61850/internal/osi/acse"
+	"github.com/dscsystems/go-iec61850/internal/osi/cotp"
+	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
+	"github.com/dscsystems/go-iec61850/internal/osi/session"
+)
+
+// Options configures an MMS client connection.
+type Options struct {
+	// TLS, when non-nil, wraps the TCP connection per IEC 62351-3. The
+	// default MMS-over-TLS port is 3782.
+	TLS *tls.Config
+	// Password, when non-empty, is sent as an ACSE authentication value.
+	Password string
+	// Initiate overrides the negotiated MMS parameters.
+	Initiate *InitiateRequest
+	// ConnectTimeout bounds the TCP + association handshake. Zero means
+	// no explicit deadline beyond the context.
+	ConnectTimeout time.Duration
+	// Logger receives protocol diagnostics; nil discards them.
+	Logger *slog.Logger
+}
+
+// Conn is an established MMS association. It is safe for concurrent use:
+// multiple goroutines may issue confirmed requests, which are matched to
+// responses by invoke ID. Unconfirmed PDUs (information reports) are
+// delivered to the handler registered with OnInformationReport.
+type Conn struct {
+	fr        *framing
+	raw       net.Conn
+	log       *slog.Logger
+	negotiate InitiateRequest
+
+	writeMu sync.Mutex
+
+	mu       sync.Mutex
+	nextID   uint32
+	pending  map[uint32]chan result
+	closed   bool
+	closeErr error
+
+	reportHandler func(*InformationReport)
+	readerDone    chan struct{}
+}
+
+type result struct {
+	pdu []byte
+	err error
+}
+
+// Dial establishes an MMS association to a "host:port" address.
+func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
+	d := net.Dialer{Timeout: opts.ConnectTimeout}
+	raw, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if opts.TLS != nil {
+		tlsConn := tls.Client(raw, opts.TLS)
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			raw.Close()
+			return nil, fmt.Errorf("mms: TLS handshake: %w", err)
+		}
+		raw = tlsConn
+	}
+	c, err := newClientConn(raw, opts)
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
+	return c, nil
+}
+
+func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	if opts.ConnectTimeout > 0 {
+		raw.SetDeadline(time.Now().Add(opts.ConnectTimeout))
+	}
+
+	// COTP handshake.
+	ct, err := cotp.Connect(raw, cotp.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("mms: COTP connect: %w", err)
+	}
+
+	init := DefaultInitiate()
+	if opts.Initiate != nil {
+		init = *opts.Initiate
+	}
+
+	// Build ACSE AARQ wrapping the MMS InitiateRequest, wrap in
+	// presentation CP, exchange via the session CONNECT.
+	aarq := acse.AARQ(EncodeInitiateRequest(init), opts.Password)
+	cp := presentation.BuildCP(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aarq)
+	cpaUserData, err := session.ConnectClient(ct, nil, nil, cp)
+	if err != nil {
+		return nil, fmt.Errorf("mms: session connect: %w", err)
+	}
+	aare, err := presentation.ParseCPUserData(cpaUserData)
+	if err != nil {
+		return nil, fmt.Errorf("mms: presentation CPA: %w", err)
+	}
+	res, err := acse.ParseAARE(aare)
+	if err != nil {
+		return nil, fmt.Errorf("mms: ACSE AARE: %w", err)
+	}
+	if !res.Accepted {
+		return nil, fmt.Errorf("mms: association rejected (diagnostic %d)", res.Diagnostic)
+	}
+	negotiated, err := ParseInitiateResponse(res.UserData)
+	if err != nil {
+		return nil, fmt.Errorf("mms: initiate response: %w", err)
+	}
+
+	if opts.ConnectTimeout > 0 {
+		raw.SetDeadline(time.Time{})
+	}
+
+	c := &Conn{
+		fr:         &framing{cotp: ct},
+		raw:        raw,
+		log:        logger,
+		negotiate:  negotiated,
+		nextID:     1,
+		pending:    make(map[uint32]chan result),
+		readerDone: make(chan struct{}),
+	}
+	go c.readLoop()
+	return c, nil
+}
+
+// MaxServOutstanding returns the negotiated maximum outstanding services.
+func (c *Conn) MaxServOutstanding() int { return c.negotiate.MaxServOutstanding }
+
+// OnInformationReport registers the handler for unconfirmed information
+// reports (used by ACSI reporting). It must be set before enabling any
+// report; the handler runs on the connection's reader goroutine and must
+// not block.
+func (c *Conn) OnInformationReport(h func(*InformationReport)) {
+	c.mu.Lock()
+	c.reportHandler = h
+	c.mu.Unlock()
+}
+
+func (c *Conn) readLoop() {
+	defer close(c.readerDone)
+	for {
+		pdu, err := c.fr.recvMMS()
+		if err != nil {
+			c.failAll(err)
+			return
+		}
+		c.dispatch(pdu)
+	}
+}
+
+func (c *Conn) dispatch(pdu []byte) {
+	dec := asn1.NewDecoder(pdu)
+	tag, content, err := dec.ReadTLV()
+	if err != nil {
+		c.log.Warn("mms: bad PDU", "err", err)
+		return
+	}
+	c.log.Debug("mms: rx PDU", "tag", tag.String(), "len", len(pdu), "hex", fmt.Sprintf("%x", pdu))
+	switch tag {
+	case tagConfirmedResponse, tagConfirmedError:
+		id, body, err := splitInvoke(content)
+		if err != nil {
+			c.log.Warn("mms: bad confirmed PDU", "err", err)
+			return
+		}
+		var r result
+		if tag == tagConfirmedResponse {
+			r.pdu = body
+		} else {
+			r.err = decodeServiceError(tag, body)
+		}
+		c.deliver(id, r)
+	case tagRejectPDU:
+		id, err := c.deliverReject(content)
+		if err != nil {
+			c.log.Warn("mms: bad reject PDU", "err", err)
+			return
+		}
+		_ = id
+	case tagUnconfirmed:
+		c.handleUnconfirmed(content)
+	case tagConcludeResponse:
+		// Peer accepted our conclude; the reader will see EOF next.
+	default:
+		c.log.Debug("mms: unhandled PDU tag", "tag", tag.String())
+	}
+}
+
+// splitInvoke reads the leading invokeID of a confirmed PDU and returns
+// the invoke id plus the remaining service-specific content. The invokeID
+// is a universal INTEGER in ConfirmedResponsePDU but is context-tagged
+// [0] in ConfirmedErrorPDU in the MMS module 61850 uses, so accept either.
+func splitInvoke(content []byte) (uint32, []byte, error) {
+	dec := asn1.NewDecoder(content)
+	tag, idBytes, err := dec.ReadTLV()
+	if err != nil {
+		return 0, nil, err
+	}
+	if tag != asn1.TagInteger && tag != asn1.ContextPrimitive(0) {
+		return 0, nil, fmt.Errorf("mms: unexpected invokeID tag %v: %w", tag, asn1.ErrUnexpected)
+	}
+	id, err := asn1.DecodeUint(idBytes)
+	if err != nil {
+		return 0, nil, err
+	}
+	return uint32(id), dec.Rest(), nil
+}
+
+// deliverReject parses a RejectPDU (originalInvokeID [0] IMPLICIT
+// Unsigned32 OPTIONAL, rejectReason CHOICE) and delivers a ServiceError.
+func (c *Conn) deliverReject(content []byte) (uint32, error) {
+	dec := asn1.NewDecoder(content)
+	var id uint32
+	if idBytes, ok, err := dec.Optional(asn1.ContextPrimitive(0)); err != nil {
+		return 0, err
+	} else if ok {
+		n, _ := asn1.DecodeUint(idBytes)
+		id = uint32(n)
+	}
+	se := &ServiceError{Rejected: true}
+	if dec.More() {
+		tag, rr, err := dec.ReadTLV()
+		if err == nil {
+			se.Class = uint8(tag.Number)
+			if n, err := asn1.DecodeInt(rr); err == nil {
+				se.Code = uint8(n)
+			}
+			se.Detail = rejectReasonName(tag.Number, se.Code)
+		}
+	}
+	c.deliver(id, result{err: se})
+	return id, nil
+}
+
+func rejectReasonName(category uint32, code uint8) string {
+	if category == 1 { // confirmed-requestPDU
+		names := map[uint8]string{
+			0: "other", 1: "unrecognized-service", 2: "unrecognized-modifier",
+			3: "invalid-invokeID", 4: "invalid-argument", 5: "invalid-modifier",
+			6: "max-serv-outstanding-exceeded", 8: "max-recursion-exceeded",
+			9: "value-out-of-range",
+		}
+		if s, ok := names[code]; ok {
+			return s
+		}
+	}
+	return fmt.Sprintf("reject category %d code %d", category, code)
+}
+
+func (c *Conn) deliver(id uint32, r result) {
+	c.mu.Lock()
+	ch, ok := c.pending[id]
+	if ok {
+		delete(c.pending, id)
+	}
+	c.mu.Unlock()
+	if ok {
+		ch <- r
+	} else {
+		c.log.Warn("mms: response for unknown invoke id", "id", id)
+	}
+}
+
+func (c *Conn) failAll(err error) {
+	c.mu.Lock()
+	if c.closed {
+		err = c.closeErr
+	} else {
+		c.closed = true
+		c.closeErr = err
+	}
+	pending := c.pending
+	c.pending = make(map[uint32]chan result)
+	c.mu.Unlock()
+	for _, ch := range pending {
+		ch <- result{err: err}
+	}
+}
+
+// call sends a confirmed request wrapping the fully-encoded service
+// element and waits for the matching response.
+func (c *Conn) call(ctx context.Context, service *asn1.Element) ([]byte, error) {
+	c.mu.Lock()
+	if c.closed {
+		err := c.closeErr
+		c.mu.Unlock()
+		return nil, err
+	}
+	id := c.nextID
+	c.nextID++
+	ch := make(chan result, 1)
+	c.pending[id] = ch
+	c.mu.Unlock()
+
+	// ConfirmedRequestPDU ::= [0] SEQUENCE { invokeID INTEGER, service }
+	req := asn1.Cons(tagConfirmedRequest,
+		asn1.UintElem(asn1.TagInteger, uint64(id)),
+		service,
+	).Encode()
+
+	c.log.Debug("mms: tx PDU", "hex", fmt.Sprintf("%x", req))
+	c.writeMu.Lock()
+	err := c.fr.sendMMS(req)
+	c.writeMu.Unlock()
+	if err != nil {
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, err
+	}
+
+	select {
+	case <-ctx.Done():
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.pdu, r.err
+	}
+}
+
+// Close releases the association (best-effort MMS conclude) and closes
+// the transport.
+func (c *Conn) Close() error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closed = true
+	c.closeErr = net.ErrClosed
+	c.mu.Unlock()
+
+	// Best-effort conclude, then ACSE/session release. Ignore errors.
+	c.writeMu.Lock()
+	conclude := asn1.Cons(tagConcludeRequest).Encode()
+	c.fr.sendMMS(conclude)
+	c.writeMu.Unlock()
+
+	err := c.raw.Close()
+	<-c.readerDone
+	return err
+}
+
+var errShort = errors.New("mms: short PDU")
+
+func decodeServiceError(tag asn1.Tag, body []byte) error {
+	if tag == tagRejectPDU {
+		return &ServiceError{Rejected: true, Detail: "rejectPDU"}
+	}
+	// ConfirmedErrorPDU carries serviceError { errorClass [n] CHOICE }.
+	// The nesting varies by module (serviceError [2] { errorClass [0] {
+	// class [n] value } }), so drill to the innermost primitive
+	// context-specific element: its tag number is the error class and its
+	// content is the code.
+	se := &ServiceError{}
+	class, code, ok := drillErrorClass(body, 0)
+	if ok {
+		se.Class = class
+		se.Code = code
+	}
+	return se
+}
+
+// drillErrorClass descends constructed context-specific elements to the
+// first primitive context-specific element, returning its tag number and
+// integer value.
+func drillErrorClass(body []byte, depth int) (class, code uint8, ok bool) {
+	if depth > 8 {
+		return 0, 0, false
+	}
+	dec := asn1.NewDecoder(body)
+	for dec.More() {
+		tag, content, err := dec.ReadTLV()
+		if err != nil {
+			return 0, 0, false
+		}
+		if tag.Class != asn1.ClassContextSpecific {
+			continue
+		}
+		if tag.Constructed {
+			if c, v, found := drillErrorClass(content, depth+1); found {
+				return c, v, true
+			}
+			continue
+		}
+		n, _ := asn1.DecodeInt(content)
+		return uint8(tag.Number), uint8(n), true
+	}
+	return 0, 0, false
+}

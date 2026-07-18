@@ -1,0 +1,9 @@
+/bin/
+*.test
+*.out
+*.pcap
+/dist/
+/.interop-work/
+/.claude/
+/.github/
+PLAN.md
