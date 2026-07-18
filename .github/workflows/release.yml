@@ -1,0 +1,81 @@
+name: Release binaries
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: arm }
+          - { goos: linux, goarch: "386" }
+          - { goos: linux, goarch: riscv64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+          - { goos: windows, goarch: "386" }
+          - { goos: freebsd, goarch: amd64 }
+          - { goos: freebsd, goarch: arm64 }
+          - { goos: openbsd, goarch: amd64 }
+          - { goos: netbsd, goarch: amd64 }
+    runs-on: ubuntu-latest
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          ext=""
+          [ "$GOOS" = "windows" ] && ext=".exe"
+          for cmd in cmd/*/; do
+            name=$(basename "$cmd")
+            go build -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
+          done
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME}"
+          archive="go-iec61850_${version}_${GOOS}_${GOARCH}"
+          cd dist
+          if [ "$GOOS" = "windows" ]; then
+            zip "../${archive}.zip" ./*
+          else
+            tar czf "../${archive}.tar.gz" ./*
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-iec61850_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
