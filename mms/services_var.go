@@ -58,6 +58,80 @@ func (c *Conn) ReadNamedVariableList(ctx context.Context, domain, listName strin
 	return parseReadResponse(resp)
 }
 
+// ReadNamedVariableListWithSpec reads a named variable list and asks the
+// server to echo the access specification, so the caller learns which members
+// the values correspond to without a separate
+// GetNamedVariableListAttributes round trip. Servers may omit the
+// specification even when asked; the returned refs are then nil.
+func (c *Conn) ReadNamedVariableListWithSpec(ctx context.Context, domain, listName string) ([]VarRef, []*Value, error) {
+	vas := asn1.Cons(asn1.ContextConstructed(1),
+		asn1.Cons(asn1.ContextConstructed(1), objectName(domain, listName)),
+	)
+	req := asn1.Cons(asn1.ContextConstructed(svcRead),
+		asn1.BoolElem(asn1.ContextPrimitive(0), true), // specificationWithResult
+		vas,
+	)
+	resp, err := c.call(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	return parseReadResponseWithSpec(resp)
+}
+
+// parseReadResponseWithSpec decodes a Read-Response, returning the echoed
+// access specification's variable references when present.
+func parseReadResponseWithSpec(resp []byte) ([]VarRef, []*Value, error) {
+	dec := asn1.NewDecoder(resp)
+	content, err := dec.Expect(asn1.ContextConstructed(svcRead))
+	if err != nil {
+		return nil, nil, err
+	}
+	inner := asn1.NewDecoder(content)
+
+	var refs []VarRef
+	if specContent, ok, err := inner.Optional(asn1.ContextConstructed(0)); err != nil {
+		return nil, nil, err
+	} else if ok {
+		sd := asn1.NewDecoder(specContent)
+		// variableAccessSpecification CHOICE: only listOfVariable [0] names
+		// the members individually.
+		if listContent, ok, _ := sd.Optional(asn1.ContextConstructed(0)); ok {
+			ld := asn1.NewDecoder(listContent)
+			for ld.More() {
+				entry, err := ld.Expect(asn1.TagSequence)
+				if err != nil {
+					break
+				}
+				ed := asn1.NewDecoder(entry)
+				nameContent, err := ed.Expect(asn1.ContextConstructed(0))
+				if err != nil {
+					break
+				}
+				ref, err := parseObjectName(nameContent)
+				if err != nil {
+					break
+				}
+				refs = append(refs, ref)
+			}
+		}
+	}
+
+	arContent, err := inner.Expect(asn1.ContextConstructed(1))
+	if err != nil {
+		return nil, nil, err
+	}
+	var values []*Value
+	ar := asn1.NewDecoder(arContent)
+	for ar.More() {
+		v, err := DecodeAccessResult(ar)
+		if err != nil {
+			return nil, nil, err
+		}
+		values = append(values, v)
+	}
+	return refs, values, nil
+}
+
 // DefineNamedVariableList creates a named variable list (dataset) from the
 // given domain variable item IDs.
 func (c *Conn) DefineNamedVariableList(ctx context.Context, domain, listName string, members []VarRef) error {

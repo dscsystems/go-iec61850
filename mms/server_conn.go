@@ -1,6 +1,7 @@
 package mms
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -11,6 +12,10 @@ import (
 	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
 	"github.com/dscsystems/go-iec61850/internal/osi/session"
 )
+
+// ErrReportQueueFull is returned by SendUnconfirmed when the outbound queue is
+// saturated and the report was dropped.
+var ErrReportQueueFull = errors.New("mms: unconfirmed queue full")
 
 // ServerConn is one accepted MMS association on the server side. It reads
 // confirmed requests and dispatches them to a Handler, sending the
@@ -42,9 +47,28 @@ type Request struct {
 	Conn     *ServerConn
 }
 
+// AcceptOptions configures the server-side association handshake.
+type AcceptOptions struct {
+	// Initiate, when non-nil, supplies the parameters to answer with instead
+	// of echoing the client's proposal. A proxy sets this to the parameters
+	// the real device advertised, so its clients see the device's
+	// capabilities rather than their own request reflected back.
+	//
+	// The values are still bounded by the client's proposal where the
+	// protocol requires it: neither side may be asked to accept a larger PDU
+	// or more outstanding services than it offered.
+	Initiate *InitiateRequest
+}
+
 // AcceptConn performs the server-side association handshake over an
 // already-accepted transport (TCP or TLS) and returns the association.
 func AcceptConn(raw net.Conn) (*ServerConn, error) {
+	return AcceptConnOpts(raw, AcceptOptions{})
+}
+
+// AcceptConnOpts is AcceptConn with explicit control over the response
+// parameters.
+func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	ct, err := cotp.Accept(raw)
 	if err != nil {
 		return nil, fmt.Errorf("mms: COTP accept: %w", err)
@@ -68,7 +92,11 @@ func AcceptConn(raw net.Conn) (*ServerConn, error) {
 	}
 
 	// Build the InitiateResponse -> AARE -> CPA -> session ACCEPT.
-	initResp := EncodeInitiateResponse(negotiated)
+	answer := negotiated
+	if opts.Initiate != nil {
+		answer = clampInitiate(*opts.Initiate, negotiated)
+	}
+	initResp := EncodeInitiateResponse(answer)
 	aare := acse.AARE(initResp)
 	cpa := presentation.BuildCPA(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aare)
 	if err := session.Reply(ct, cpa); err != nil {
@@ -82,6 +110,31 @@ func AcceptConn(raw net.Conn) (*ServerConn, error) {
 	// block on the socket while holding the model lock.
 	go sc.pumpUnconfirmed()
 	return sc, nil
+}
+
+// clampInitiate limits the parameters we answer with to what the client
+// proposed, where the protocol requires the responder not to exceed the
+// initiator's offer. The service and parameter bitmaps are ours to state and
+// pass through untouched — they describe what this end supports, not a
+// negotiated minimum.
+func clampInitiate(want, proposed InitiateRequest) InitiateRequest {
+	out := want
+	if proposed.LocalDetail > 0 && (out.LocalDetail == 0 || out.LocalDetail > proposed.LocalDetail) {
+		out.LocalDetail = proposed.LocalDetail
+	}
+	clamp := func(ours, theirs int) int {
+		if theirs > 0 && (ours == 0 || ours > theirs) {
+			return theirs
+		}
+		return ours
+	}
+	out.MaxServOutstanding = clamp(out.MaxServOutstanding, proposed.MaxServOutstanding)
+	out.MaxServOutstandingCalling = clamp(out.MaxServOutstandingCalling, proposed.MaxServOutstandingCalling)
+	out.MaxServOutstandingCalled = clamp(out.MaxServOutstandingCalled, proposed.MaxServOutstandingCalled)
+	if proposed.NestingLevel > 0 && (out.NestingLevel == 0 || out.NestingLevel > proposed.NestingLevel) {
+		out.NestingLevel = proposed.NestingLevel
+	}
+	return out
 }
 
 func (sc *ServerConn) pumpUnconfirmed() {
@@ -217,6 +270,11 @@ func (sc *ServerConn) SendUnconfirmed(service *asn1.Element) error {
 	select {
 	case sc.unconf <- pdu:
 	default:
+		// The report is dropped rather than stalling the server, which is the
+		// buffer-overflow condition the protocol already models. Reporting it
+		// lets a buffered RCB set BufOvfl so the client learns it missed
+		// entries; callers that ignore the error keep the previous behaviour.
+		return ErrReportQueueFull
 	}
 	return nil
 }

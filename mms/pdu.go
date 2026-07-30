@@ -48,15 +48,36 @@ const (
 // InitiateRequest holds the negotiable parameters of an MMS association.
 type InitiateRequest struct {
 	LocalDetail        int32
-	MaxServOutstanding int // both calling and called
+	MaxServOutstanding int // both calling and called, unless the fields below are set
 	NestingLevel       int
 	Services           ServiceSupport
+
+	// MaxServOutstandingCalling and MaxServOutstandingCalled preserve the two
+	// values separately. MaxServOutstanding collapses them to the smaller,
+	// which is the right thing for a client deciding how many requests to have
+	// in flight, but loses information a proxy needs to reproduce the peer's
+	// advertisement. When either is non-zero it is encoded in place of the
+	// collapsed value.
+	MaxServOutstandingCalling int
+	MaxServOutstandingCalled  int
+
+	// ParameterCBBRaw, when non-nil, is emitted verbatim as the
+	// proposedParameterCBB bit string, including its leading unused-bits
+	// octet. It is populated by the parsers.
+	ParameterCBBRaw []byte
 }
 
 // ServiceSupport is the negotiated service bitmap; only presence matters
 // to most peers, so it is kept as raw bits.
 type ServiceSupport struct {
 	Bits asn1.BitString
+
+	// Raw, when non-nil, is emitted verbatim as the servicesSupported bit
+	// string content, including its leading unused-bits octet, instead of
+	// re-encoding Bits. Clients gate feature use on this bitmap, so a proxy
+	// standing in for a device has to reproduce the device's octets exactly
+	// rather than a reconstruction that happens to set the same flags.
+	Raw []byte
 }
 
 // DefaultInitiate returns typical client initiate parameters.
@@ -83,32 +104,40 @@ func defaultServiceSupport() ServiceSupport {
 
 // EncodeInitiateRequest builds an MMS InitiateRequestPDU.
 func EncodeInitiateRequest(req InitiateRequest) []byte {
-	detail := asn1.Cons(asn1.ContextConstructed(4), // InitRequestDetail
-		asn1.IntElem(asn1.ContextPrimitive(0), 1), // proposedVersionNumber
-		asn1.BitStringElem(asn1.ContextPrimitive(1), parameterCBB()),
-		asn1.BitStringElem(asn1.ContextPrimitive(2), req.Services.Bits),
-	)
-	pdu := asn1.Cons(tagInitiateRequest,
-		asn1.IntElem(asn1.ContextPrimitive(0), int64(req.LocalDetail)),
-		asn1.IntElem(asn1.ContextPrimitive(1), int64(req.MaxServOutstanding)),
-		asn1.IntElem(asn1.ContextPrimitive(2), int64(req.MaxServOutstanding)),
-		asn1.IntElem(asn1.ContextPrimitive(3), int64(req.NestingLevel)),
-		detail,
-	)
-	return pdu.Encode()
+	return encodeInitiate(tagInitiateRequest, req)
 }
 
 // EncodeInitiateResponse builds an MMS InitiateResponsePDU mirroring req.
 func EncodeInitiateResponse(req InitiateRequest) []byte {
+	return encodeInitiate(tagInitiateResponse, req)
+}
+
+func encodeInitiate(tag asn1.Tag, req InitiateRequest) []byte {
+	cbb := asn1.BitStringElem(asn1.ContextPrimitive(1), parameterCBB())
+	if req.ParameterCBBRaw != nil {
+		cbb = asn1.Prim(asn1.ContextPrimitive(1), req.ParameterCBBRaw)
+	}
+	svc := asn1.BitStringElem(asn1.ContextPrimitive(2), req.Services.Bits)
+	if req.Services.Raw != nil {
+		svc = asn1.Prim(asn1.ContextPrimitive(2), req.Services.Raw)
+	}
 	detail := asn1.Cons(asn1.ContextConstructed(4),
-		asn1.IntElem(asn1.ContextPrimitive(0), 1),
-		asn1.BitStringElem(asn1.ContextPrimitive(1), parameterCBB()),
-		asn1.BitStringElem(asn1.ContextPrimitive(2), req.Services.Bits),
+		asn1.IntElem(asn1.ContextPrimitive(0), 1), // proposedVersionNumber
+		cbb,
+		svc,
 	)
-	pdu := asn1.Cons(tagInitiateResponse,
+
+	calling, called := req.MaxServOutstandingCalling, req.MaxServOutstandingCalled
+	if calling == 0 {
+		calling = req.MaxServOutstanding
+	}
+	if called == 0 {
+		called = req.MaxServOutstanding
+	}
+	pdu := asn1.Cons(tag,
 		asn1.IntElem(asn1.ContextPrimitive(0), int64(req.LocalDetail)),
-		asn1.IntElem(asn1.ContextPrimitive(1), int64(req.MaxServOutstanding)),
-		asn1.IntElem(asn1.ContextPrimitive(2), int64(req.MaxServOutstanding)),
+		asn1.IntElem(asn1.ContextPrimitive(1), int64(calling)),
+		asn1.IntElem(asn1.ContextPrimitive(2), int64(called)),
 		asn1.IntElem(asn1.ContextPrimitive(3), int64(req.NestingLevel)),
 		detail,
 	)
@@ -162,9 +191,11 @@ func parseInitiateBody(content []byte) (InitiateRequest, error) {
 	if c, ok, _ := dec.Optional(asn1.ContextPrimitive(1)); ok {
 		n, _ := asn1.DecodeInt(c)
 		req.MaxServOutstanding = int(n)
+		req.MaxServOutstandingCalling = int(n)
 	}
 	if c, ok, _ := dec.Optional(asn1.ContextPrimitive(2)); ok {
 		n, _ := asn1.DecodeInt(c)
+		req.MaxServOutstandingCalled = int(n)
 		if int(n) < req.MaxServOutstanding || req.MaxServOutstanding == 0 {
 			req.MaxServOutstanding = int(n)
 		}
@@ -180,9 +211,15 @@ func parseInitiateBody(content []byte) (InitiateRequest, error) {
 			if err != nil {
 				break
 			}
-			if tag == asn1.ContextPrimitive(2) {
+			switch tag {
+			case asn1.ContextPrimitive(1):
+				req.ParameterCBBRaw = append([]byte(nil), dc...)
+			case asn1.ContextPrimitive(2):
+				raw := append([]byte(nil), dc...)
 				if bs, err := asn1.DecodeBitString(dc); err == nil {
-					req.Services = ServiceSupport{Bits: bs}
+					req.Services = ServiceSupport{Bits: bs, Raw: raw}
+				} else {
+					req.Services = ServiceSupport{Raw: raw}
 				}
 			}
 		}

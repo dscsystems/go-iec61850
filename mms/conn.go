@@ -51,8 +51,9 @@ type Conn struct {
 	closed   bool
 	closeErr error
 
-	reportHandler func(*InformationReport)
-	readerDone    chan struct{}
+	reportHandler    func(*InformationReport)
+	rawUnconfHandler func(pdu []byte)
+	readerDone       chan struct{}
 }
 
 type result struct {
@@ -156,6 +157,22 @@ func (c *Conn) OnInformationReport(h func(*InformationReport)) {
 	c.reportHandler = h
 	c.mu.Unlock()
 }
+
+// OnRawUnconfirmed registers a handler receiving the undecoded content of
+// every unconfirmed PDU, before the decoded report handler runs. It exists for
+// proxies and diagnostics that must reproduce or record exactly what arrived.
+// Like OnInformationReport, it runs on the reader goroutine and must not block.
+func (c *Conn) OnRawUnconfirmed(h func(pdu []byte)) {
+	c.mu.Lock()
+	c.rawUnconfHandler = h
+	c.mu.Unlock()
+}
+
+// Negotiated returns the association parameters agreed during the initiate
+// exchange. A proxy replays these so its own clients see the capabilities the
+// real device advertised, in particular the servicesSupported bit-string that
+// clients gate feature use on.
+func (c *Conn) Negotiated() InitiateRequest { return c.negotiate }
 
 func (c *Conn) readLoop() {
 	defer close(c.readerDone)
