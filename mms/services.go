@@ -10,10 +10,21 @@ import (
 // ObjectClass identifies the object class for getNameList.
 type ObjectClass int
 
+// ISO 9506-2 basic object classes. Servers commonly implement only a subset;
+// getNameList for an unsupported class answers with an access error.
 const (
 	ClassNamedVariable     ObjectClass = 0
+	ClassScatteredAccess   ObjectClass = 1
 	ClassNamedVariableList ObjectClass = 2
+	ClassNamedType         ObjectClass = 3
+	ClassSemaphore         ObjectClass = 4
+	ClassEventCondition    ObjectClass = 5
+	ClassEventAction       ObjectClass = 6
+	ClassEventEnrollment   ObjectClass = 7
+	ClassJournal           ObjectClass = 8
 	ClassDomain            ObjectClass = 9
+	ClassProgramInvocation ObjectClass = 10
+	ClassOperatorStation   ObjectClass = 11
 )
 
 // objectName builds an MMS ObjectName. When domain is empty the name is
@@ -33,6 +44,15 @@ func variableEntry(domain, item string) *asn1.Element {
 	return asn1.Cons(asn1.TagSequence,
 		asn1.Cons(asn1.ContextConstructed(0), objectName(domain, item)), // variableSpecification: name [0]
 	)
+}
+
+// Call issues a confirmed request carrying the given service element and
+// returns the response's service element content. It is the escape hatch for
+// services this package does not wrap: a thorough census wants to try
+// GetCapabilityList, Status and vendor services, and a proxy may need to
+// forward whatever a client sends.
+func (c *Conn) Call(ctx context.Context, service *asn1.Element) ([]byte, error) {
+	return c.call(ctx, service)
 }
 
 // Identify issues the Identify service and returns vendor/model/revision.
@@ -139,6 +159,27 @@ func (c *Conn) Read(ctx context.Context, domain string, items ...string) ([]*Val
 	}
 	// ReadRequest.variableAccessSpecification is [1] EXPLICIT in the MMS
 	// module used by 61850 (unlike WriteRequest, where it is untagged).
+	vas := asn1.Cons(asn1.ContextConstructed(1), list)
+	req := asn1.Cons(asn1.ContextConstructed(svcRead), vas)
+	resp, err := c.call(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return parseReadResponse(resp)
+}
+
+// ReadRefs reads variables that may span several domains and VMD scope in one
+// request. Conn.Read applies a single domain to every item, which cannot
+// express a dataset whose members mix scopes — a real ICCP dataset does
+// exactly that. Per-element failures come back as DataAccessError values.
+func (c *Conn) ReadRefs(ctx context.Context, refs []VarRef) ([]*Value, error) {
+	if len(refs) == 0 {
+		return nil, fmt.Errorf("mms: ReadRefs requires at least one reference")
+	}
+	list := asn1.Cons(asn1.ContextConstructed(0)) // listOfVariable [0]
+	for _, r := range refs {
+		list.Add(variableEntry(r.Domain, r.Item))
+	}
 	vas := asn1.Cons(asn1.ContextConstructed(1), list)
 	req := asn1.Cons(asn1.ContextConstructed(svcRead), vas)
 	resp, err := c.call(ctx, req)
