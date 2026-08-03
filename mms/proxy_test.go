@@ -147,7 +147,7 @@ func buildReport(spec *asn1.Element, values ...*Value) []byte {
 // Before this change the decoder discarded every variable name, so a report's
 // values could only be attributed by position.
 func TestInformationReportKeepsVariableNames(t *testing.T) {
-	list := asn1.Cons(asn1.ContextConstructed(1)) // listOfVariable
+	list := asn1.Cons(asn1.ContextConstructed(0)) // listOfVariable [0]
 	for _, r := range []VarRef{
 		{Domain: "ICC1", Item: "Transfer_Set_Name"},
 		{Item: "VMDDiscrete1"},
@@ -184,7 +184,7 @@ func TestInformationReportKeepsVariableNames(t *testing.T) {
 }
 
 func TestInformationReportKeepsListName(t *testing.T) {
-	spec := asn1.Cons(asn1.ContextConstructed(0), objectName("LD0", "LLN0$RP$urcb01"))
+	spec := asn1.Cons(asn1.ContextConstructed(1), objectName("LD0", "LLN0$RP$urcb01")) // variableListName [1]
 	pdu := buildReport(spec, NewInt32(1))
 
 	dec := asn1.NewDecoder(pdu)
@@ -208,7 +208,7 @@ func TestInformationReportKeepsListName(t *testing.T) {
 // Entries whose specification uses an alternative other than name [0] must
 // still occupy a slot, or the values stop lining up with the names.
 func TestInformationReportPositionsSurviveUnnamedEntries(t *testing.T) {
-	list := asn1.Cons(asn1.ContextConstructed(1))
+	list := asn1.Cons(asn1.ContextConstructed(0)) // listOfVariable [0]
 	list.Add(asn1.Cons(asn1.ContextConstructed(0), objectName("", "First")))
 	list.Add(asn1.Cons(asn1.ContextConstructed(1), asn1.Prim(asn1.TagOctetString, []byte{1, 2}))) // address
 	list.Add(asn1.Cons(asn1.ContextConstructed(0), objectName("", "Third")))

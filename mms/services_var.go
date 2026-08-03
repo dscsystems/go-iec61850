@@ -58,6 +58,48 @@ func (c *Conn) ReadNamedVariableList(ctx context.Context, domain, listName strin
 	return parseReadResponse(resp)
 }
 
+// GetVariableAccessAttributesRaw retrieves a variable's TypeSpecification as
+// the raw BER octets the server sent, alongside the decoded form.
+//
+// A proxy standing in for the server replays these octets verbatim. Decoding
+// and re-encoding is close to lossless but not exactly so — a server may use a
+// non-minimal integer length, or a form this package normalises — and "close"
+// is not good enough when a client validates the type against its own
+// configuration.
+func (c *Conn) GetVariableAccessAttributesRaw(ctx context.Context, domain, item string) (*TypeSpec, []byte, error) {
+	req := asn1.Cons(asn1.ContextConstructed(svcGetVariableAccess),
+		asn1.Cons(asn1.ContextConstructed(0), objectName(domain, item)),
+	)
+	resp, err := c.call(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	dec := asn1.NewDecoder(resp)
+	content, err := dec.Expect(asn1.ContextConstructed(svcGetVariableAccess))
+	if err != nil {
+		return nil, nil, err
+	}
+	inner := asn1.NewDecoder(content)
+	if _, _, err := inner.Optional(asn1.ContextPrimitive(0)); err != nil {
+		return nil, nil, err
+	}
+	if _, _, err := inner.Optional(asn1.ContextConstructed(1)); err != nil {
+		return nil, nil, err
+	}
+	tsContent, err := inner.Expect(asn1.ContextConstructed(2))
+	if err != nil {
+		return nil, nil, err
+	}
+	// tsContent is the content of the [2] EXPLICIT wrapper, i.e. the
+	// TypeSpecification CHOICE element itself.
+	raw := append([]byte(nil), tsContent...)
+	ts, err := DecodeTypeSpec(asn1.NewDecoder(tsContent))
+	if err != nil {
+		return nil, raw, err
+	}
+	return ts, raw, nil
+}
+
 // ReadNamedVariableListWithSpec reads a named variable list and asks the
 // server to echo the access specification, so the caller learns which members
 // the values correspond to without a separate

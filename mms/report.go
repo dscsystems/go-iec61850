@@ -70,17 +70,24 @@ func parseInformationReport(body []byte) *InformationReport {
 	if err != nil {
 		return nil
 	}
+	// VariableAccessSpecification ::= CHOICE {
+	//   listOfVariable   [0] IMPLICIT SEQUENCE OF ...,
+	//   variableListName [1] ObjectName }
+	//
+	// These two were previously transposed, so a report naming a variable list
+	// — which is what every IEC 61850 RCB report does — was decoded as a list
+	// of variable specifications and its name was lost.
 	switch spec {
-	case asn1.ContextConstructed(0): // variableListName
+	case asn1.ContextConstructed(0): // listOfVariable
+		_, c, _ := dec.ReadTLV()
+		parseVarSpecList(c, rep)
+	case asn1.ContextConstructed(1): // variableListName
 		_, c, _ := dec.ReadTLV()
 		rep.IsVMDNamed = true
 		if ref, err := parseObjectName(c); err == nil {
 			rep.ListRef = ref
 			rep.ListName = ref.Item
 		}
-	case asn1.ContextConstructed(1): // listOfVariable
-		_, c, _ := dec.ReadTLV()
-		parseVarSpecList(c, rep)
 	default:
 		// Unknown spec; skip one element.
 		dec.Skip()
