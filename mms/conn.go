@@ -31,6 +31,11 @@ type Options struct {
 	ConnectTimeout time.Duration
 	// Logger receives protocol diagnostics; nil discards them.
 	Logger *slog.Logger
+	// Called and Calling, when non-empty, are the ACSE identities to address
+	// and to claim in the AARQ. Devices that check the called AP-title refuse
+	// an association that omits it.
+	Called  ACSEIdentity
+	Calling ACSEIdentity
 }
 
 // Conn is an established MMS association. It is safe for concurrent use:
@@ -42,6 +47,9 @@ type Conn struct {
 	raw       net.Conn
 	log       *slog.Logger
 	negotiate InitiateRequest
+	// responding is the identity the peer answered with, which a proxy
+	// replays to its own clients.
+	responding ACSEIdentity
 
 	writeMu sync.Mutex
 
@@ -106,7 +114,8 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 
 	// Build ACSE AARQ wrapping the MMS InitiateRequest, wrap in
 	// presentation CP, exchange via the session CONNECT.
-	aarq := acse.AARQ(EncodeInitiateRequest(init), opts.Password)
+	aarq := acse.AARQWithIdentity(EncodeInitiateRequest(init), opts.Password,
+		opts.Called.toACSE(), opts.Calling.toACSE())
 	cp := presentation.BuildCP(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aarq)
 	cpaUserData, err := session.ConnectClient(ct, nil, nil, cp)
 	if err != nil {
@@ -137,6 +146,7 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		raw:        raw,
 		log:        logger,
 		negotiate:  negotiated,
+		responding: identityFromACSE(res.Responding),
 		nextID:     1,
 		pending:    make(map[uint32]chan result),
 		readerDone: make(chan struct{}),
@@ -144,6 +154,11 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 	go c.readLoop()
 	return c, nil
 }
+
+// RespondingIdentity returns the ACSE identity the peer answered with in its
+// AARE. It is zero when the peer omitted it, which is legal — and which a
+// proxy has to reproduce faithfully rather than inventing one.
+func (c *Conn) RespondingIdentity() ACSEIdentity { return c.responding }
 
 // MaxServOutstanding returns the negotiated maximum outstanding services.
 func (c *Conn) MaxServOutstanding() int { return c.negotiate.MaxServOutstanding }

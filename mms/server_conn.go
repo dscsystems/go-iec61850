@@ -30,6 +30,55 @@ type ServerConn struct {
 
 	unconf    chan []byte // async queue for unconfirmed PDUs (reports)
 	closeOnce sync.Once
+
+	// Called and Calling are the ACSE identities from the client's AARQ: who
+	// it addressed and who it claims to be. A client that fills in Called is
+	// checking which application entity it reached and will compare the
+	// responding identity in the AARE against it.
+	Called  ACSEIdentity
+	Calling ACSEIdentity
+}
+
+// ACSEIdentity is an application-entity identity: the AP-title and
+// AE-qualifier exchanged in the association APDUs.
+type ACSEIdentity struct {
+	APTitle     []uint32 // ap-title-form2 object identifier
+	AEQualifier int32
+	HasAEQual   bool
+
+	APInvocationID  int32
+	HasAPInvocation bool
+	AEInvocationID  int32
+	HasAEInvocation bool
+}
+
+// Empty reports whether the identity carries nothing to encode.
+func (id ACSEIdentity) Empty() bool {
+	return len(id.APTitle) == 0 && !id.HasAEQual && !id.HasAPInvocation && !id.HasAEInvocation
+}
+
+func (id ACSEIdentity) toACSE() acse.Identity {
+	return acse.Identity{
+		APTitle:         asn1.OID(id.APTitle),
+		AEQualifier:     id.AEQualifier,
+		HasAEQual:       id.HasAEQual,
+		APInvocationID:  id.APInvocationID,
+		HasAPInvocation: id.HasAPInvocation,
+		AEInvocationID:  id.AEInvocationID,
+		HasAEInvocation: id.HasAEInvocation,
+	}
+}
+
+func identityFromACSE(id acse.Identity) ACSEIdentity {
+	return ACSEIdentity{
+		APTitle:         []uint32(id.APTitle),
+		AEQualifier:     id.AEQualifier,
+		HasAEQual:       id.HasAEQual,
+		APInvocationID:  id.APInvocationID,
+		HasAPInvocation: id.HasAPInvocation,
+		AEInvocationID:  id.AEInvocationID,
+		HasAEInvocation: id.HasAEInvocation,
+	}
 }
 
 // Handler processes a decoded confirmed request and returns the encoded
@@ -58,6 +107,25 @@ type AcceptOptions struct {
 	// protocol requires it: neither side may be asked to accept a larger PDU
 	// or more outstanding services than it offered.
 	Initiate *InitiateRequest
+
+	// Responding, when non-nil, is the identity to answer with in the AARE.
+	// A proxy sets it to the device's identity: a client configured with the
+	// device's AP-title checks it and refuses an association that omits it or
+	// answers with the wrong one. Nil keeps the bare acceptance, which is
+	// legal and is what a server with no identity of its own sends.
+	Responding *ACSEIdentity
+
+	// Trace, when non-nil, is called with each handshake APDU as it is read
+	// or written, before any interpretation. A peer that aborts the
+	// association gives no reason, so these bytes are the only way to see
+	// what it objected to.
+	Trace func(event string, data []byte)
+}
+
+func (o AcceptOptions) trace(event string, data []byte) {
+	if o.Trace != nil {
+		o.Trace(event, data)
+	}
 }
 
 // AcceptConn performs the server-side association handshake over an
@@ -78,14 +146,19 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mms: session accept: %w", err)
 	}
-	aarq, err := presentation.ParseCPUserData(res.UserData)
+	opts.trace("rx CP", res.UserData)
+	cp, err := presentation.ParseCP(res.UserData)
 	if err != nil {
 		return nil, fmt.Errorf("mms: presentation CP: %w", err)
 	}
-	mmsInit, password, err := acse.ParseAARQ(aarq)
+	aarq := cp.UserData
+	opts.trace("rx AARQ", aarq)
+	areq, err := acse.ParseAARQFull(aarq)
 	if err != nil {
 		return nil, fmt.Errorf("mms: ACSE AARQ: %w", err)
 	}
+	mmsInit, password := areq.UserData, areq.Password
+	opts.trace("rx InitiateRequest", mmsInit)
 	negotiated, err := ParseInitiateRequest(mmsInit)
 	if err != nil {
 		return nil, fmt.Errorf("mms: initiate request: %w", err)
@@ -97,14 +170,29 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		answer = clampInitiate(*opts.Initiate, negotiated)
 	}
 	initResp := EncodeInitiateResponse(answer)
-	aare := acse.AARE(initResp)
-	cpa := presentation.BuildCPA(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aare)
-	if err := session.Reply(ct, cpa); err != nil {
+	opts.trace("tx InitiateResponse", initResp)
+	var responding acse.Identity
+	if opts.Responding != nil {
+		responding = opts.Responding.toACSE()
+	}
+	aare := acse.AAREWithIdentity(initResp, responding)
+	opts.trace("tx AARE", aare)
+	// The responder's selector is the one the peer addressed, so it sees the
+	// entity it dialled answer rather than a stack default.
+	respondingPSel := cp.CalledPSel
+	if len(respondingPSel) == 0 {
+		respondingPSel = presentation.DefaultCalledPSel
+	}
+	cpa := presentation.BuildCPA(respondingPSel, cp.Contexts, aare)
+	opts.trace("tx CPA", cpa)
+	if err := session.Reply(ct, res.CalledSSEL, cpa); err != nil {
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}
 	sc := &ServerConn{
 		fr: &framing{cotp: ct}, raw: raw, Password: password, Peer: raw.RemoteAddr(),
-		unconf: make(chan []byte, 512),
+		unconf:  make(chan []byte, 512),
+		Called:  identityFromACSE(areq.Called),
+		Calling: identityFromACSE(areq.Calling),
 	}
 	// A dedicated writer drains unconfirmed PDUs (reports) so callers never
 	// block on the socket while holding the model lock.

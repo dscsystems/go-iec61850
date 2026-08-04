@@ -52,7 +52,7 @@ func ConnectClient(t Transport, callingSSEL, calledSSEL, userData []byte) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	si, ud, err := parseConnectLike(resp)
+	si, _, ud, err := parseConnectLike(resp)
 	if err != nil {
 		return nil, err
 	}
@@ -77,19 +77,27 @@ func AcceptServer(t Transport) (*AcceptResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	si, ud, err := parseConnectLike(spdu)
+	si, params, ud, err := parseConnectLike(spdu)
 	if err != nil {
 		return nil, err
 	}
 	if si != siConnect {
 		return nil, fmt.Errorf("session: expected CONNECT, got SI 0x%02x", si)
 	}
-	return &AcceptResult{UserData: ud}, nil
+	return &AcceptResult{
+		UserData:    ud,
+		CallingSSEL: findParam(params, piCallingSSEL),
+		CalledSSEL:  findParam(params, piCalledSSEL),
+	}, nil
 }
 
 // Reply sends the ACCEPT SPDU carrying userData (the presentation CPA PDU).
-func Reply(t Transport, userData []byte) error {
-	return t.Send(buildConnect(siAccept, nil, nil, userData))
+//
+// calledSSEL is echoed back when the peer addressed one: a responder that
+// answers a CONNECT without naming the session selector it was reached at
+// leaves a peer that checks it unable to confirm it reached the right end.
+func Reply(t Transport, calledSSEL, userData []byte) error {
+	return t.Send(buildConnect(siAccept, nil, calledSSEL, userData))
 }
 
 // SendData sends a data-phase message: the GIVE-TOKENS and DATA-TRANSFER
@@ -168,29 +176,44 @@ func buildConnect(si byte, callingSSEL, calledSSEL, userData []byte) []byte {
 
 // parseConnectLike parses a CONNECT/ACCEPT SPDU and returns its SI and
 // the user-data parameter contents.
-func parseConnectLike(spdu []byte) (si byte, userData []byte, err error) {
+func parseConnectLike(spdu []byte) (si byte, params, userData []byte, err error) {
 	if len(spdu) < 2 {
-		return 0, nil, fmt.Errorf("session: short SPDU")
+		return 0, nil, nil, fmt.Errorf("session: short SPDU")
 	}
 	si = spdu[0]
 	off := 2
 	li := int(spdu[1])
 	if spdu[1] == 0xff {
 		if len(spdu) < 4 {
-			return 0, nil, fmt.Errorf("session: short long-form LI")
+			return 0, nil, nil, fmt.Errorf("session: short long-form LI")
 		}
 		li = int(spdu[2])<<8 | int(spdu[3])
 		off = 4
 	}
 	if off+li > len(spdu) {
-		return 0, nil, fmt.Errorf("session: SPDU LI %d exceeds buffer", li)
+		return 0, nil, nil, fmt.Errorf("session: SPDU LI %d exceeds buffer", li)
 	}
-	params := spdu[off : off+li]
+	params = spdu[off : off+li]
 	ud, err := findUserData(params)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, nil, err
 	}
-	return si, ud, nil
+	return si, params, ud, nil
+}
+
+// findParam returns the value of a session parameter, or nil when absent.
+func findParam(params []byte, code byte) []byte {
+	for len(params) >= 2 {
+		plen := int(params[1])
+		if 2+plen > len(params) {
+			return nil
+		}
+		if params[0] == code {
+			return append([]byte(nil), params[2:2+plen]...)
+		}
+		params = params[2+plen:]
+	}
+	return nil
 }
 
 // findUserData walks the parameter fields looking for the user-data PGI.

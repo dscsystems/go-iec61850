@@ -52,25 +52,107 @@ func BuildCP(callingPSel, calledPSel, acseData []byte) []byte {
 	return cp.Encode()
 }
 
-// BuildCPA builds a CPA (Connect Presentation Accept) PDU accepting both
-// contexts and wrapping acseData (the ACSE AARE).
-func BuildCPA(callingPSel, calledPSel, acseData []byte) []byte {
+// BuildCPA builds a CPA (Connect Presentation Accept) PDU accepting the
+// contexts the peer proposed and wrapping acseData (the ACSE AARE).
+//
+// The CPA is not a CP with a different name: ISO 8823 gives its normal-mode
+// parameters their own tags, where the responder states one
+// responding-presentation-selector [3] and there is no place for the calling
+// [1] or called [2] selectors a CP carries. A CPA built from the CP's tags
+// decodes as a malformed CPA, and a peer that validates it drops the
+// connection before any user data is exchanged.
+//
+// contexts is the number of presentation contexts the peer proposed: the
+// result list has one entry per proposal, matched by position, so a fixed
+// pair would misreport any peer that proposes a different number.
+func BuildCPA(respondingPSel []byte, contexts int, acseData []byte) []byte {
 	normal := asn1.Cons(asn1.ContextConstructed(2))
-	if len(callingPSel) > 0 {
-		normal.Add(asn1.Prim(asn1.ContextPrimitive(1), callingPSel))
+	if len(respondingPSel) > 0 {
+		// responding-presentation-selector [3] IMPLICIT OCTET STRING
+		normal.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
 	}
-	if len(calledPSel) > 0 {
-		normal.Add(asn1.Prim(asn1.ContextPrimitive(2), calledPSel))
+	if contexts <= 0 {
+		contexts = 2 // the ACSE and MMS pair every MMS peer proposes
 	}
-	// presentation-context-definition-result-list [5]: accept both.
-	normal.Add(asn1.Cons(asn1.ContextConstructed(5),
-		contextResult(0), // acceptance
-		contextResult(0),
-	))
+	results := asn1.Cons(asn1.ContextConstructed(5))
+	for i := 0; i < contexts; i++ {
+		results.Add(contextResult(0)) // acceptance
+	}
+	normal.Add(results)
 	normal.Add(userData(ContextACSE, acseData))
 
 	cpa := asn1.Cons(asn1.TagSet, modeSelector(), normal)
 	return cpa.Encode()
+}
+
+// CP holds what a responder needs from a peer's CP: the selector it addressed
+// and how many presentation contexts it proposed.
+type CP struct {
+	CallingPSel []byte
+	CalledPSel  []byte
+	Contexts    int
+	UserData    []byte // the ACSE AARQ
+}
+
+// ParseCP decodes a CP PDU.
+func ParseCP(pdu []byte) (CP, error) {
+	var cp CP
+	dec := asn1.NewDecoder(pdu)
+	setContent, err := dec.Expect(asn1.TagSet)
+	if err != nil {
+		return cp, fmt.Errorf("presentation: CP not a SET: %w", err)
+	}
+	inner := asn1.NewDecoder(setContent)
+	for inner.More() {
+		tag, content, err := inner.ReadTLV()
+		if err != nil {
+			return cp, err
+		}
+		if tag != asn1.ContextConstructed(2) { // normal-mode-parameters
+			continue
+		}
+		nm := asn1.NewDecoder(content)
+		for nm.More() {
+			t, c, err := nm.ReadTLV()
+			if err != nil {
+				return cp, err
+			}
+			switch t {
+			case asn1.ContextPrimitive(1):
+				cp.CallingPSel = append([]byte(nil), c...)
+			case asn1.ContextPrimitive(2):
+				cp.CalledPSel = append([]byte(nil), c...)
+			case asn1.ContextConstructed(4): // context-definition-list
+				cp.Contexts = countSequences(c)
+			case asn1.ApplicationConstructed(1): // fully-encoded-data
+				_, data, err := parsePDVList(c)
+				if err != nil {
+					return cp, err
+				}
+				cp.UserData = data
+			}
+		}
+	}
+	if cp.UserData == nil {
+		return cp, fmt.Errorf("presentation: no user data in CP")
+	}
+	return cp, nil
+}
+
+// countSequences counts the SEQUENCE entries in a list.
+func countSequences(content []byte) int {
+	dec := asn1.NewDecoder(content)
+	n := 0
+	for dec.More() {
+		tag, _, err := dec.ReadTLV()
+		if err != nil {
+			return n
+		}
+		if tag == asn1.TagSequence {
+			n++
+		}
+	}
+	return n
 }
 
 // WrapData wraps an MMS PDU in fully-encoded-data for the MMS context.

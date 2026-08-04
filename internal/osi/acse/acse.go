@@ -30,10 +30,19 @@ const PresentationContextMMS = 3
 // InitiateRequestPDU) as user information. If password is non-empty an
 // ACSE authentication-value (mechanism-name password) is included.
 func AARQ(mmsInitiate []byte, password string) []byte {
+	return AARQWithIdentity(mmsInitiate, password, Identity{}, Identity{})
+}
+
+// AARQWithIdentity is AARQ addressing a called AE and claiming a calling one.
+// Empty identities produce the same APDU AARQ builds.
+func AARQWithIdentity(mmsInitiate []byte, password string, called, calling Identity) []byte {
 	seq := asn1.Cons(tagAARQ,
 		// application-context-name [1] EXPLICIT OID
 		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, oidMMSContext)),
 	)
+	// called-AP-title [2] .. [5], then calling-AP-title [6] .. [9].
+	addIdentity(seq, 2, called)
+	addIdentity(seq, 6, calling)
 	if password != "" {
 		// sender-acse-requirements [10] BIT STRING {authentication(0)}
 		bs := asn1.NewBitString(1)
@@ -51,9 +60,90 @@ func AARQ(mmsInitiate []byte, password string) []byte {
 	return seq.Encode()
 }
 
+// Identity is the application-entity identity carried in an AARQ or AARE:
+// the AP-title and AE-qualifier, plus the invocation identifiers when the
+// peer supplies them.
+//
+// Clients configured with a device's AP-title check the responding identity
+// in the AARE before they will use the association, so a server standing in
+// for a device has to answer with the device's identity rather than omit it.
+type Identity struct {
+	APTitle     asn1.OID // ap-title-form2 (OBJECT IDENTIFIER)
+	AEQualifier int32
+	HasAEQual   bool
+
+	APInvocationID  int32
+	HasAPInvocation bool
+	AEInvocationID  int32
+	HasAEInvocation bool
+}
+
+// Empty reports whether the identity carries nothing to encode.
+func (id Identity) Empty() bool {
+	return len(id.APTitle) == 0 && !id.HasAEQual && !id.HasAPInvocation && !id.HasAEInvocation
+}
+
+// addIdentity appends the identity fields to an AARQ or AARE, starting at the
+// given context tag number. The four fields are consecutive in both APDUs —
+// called-AP-title is [2] and responding-AP-title is [4] — so one encoder
+// serves both by being told where its block begins.
+func addIdentity(seq *asn1.Element, base uint32, id Identity) {
+	if len(id.APTitle) > 0 {
+		// AP-title ::= CHOICE { ap-title-form1, ap-title-form2 OBJECT IDENTIFIER }
+		seq.Add(asn1.Cons(asn1.ContextConstructed(base),
+			asn1.OIDElem(asn1.TagOID, id.APTitle)))
+	}
+	if id.HasAEQual {
+		// AE-qualifier ::= CHOICE { ..., ae-qualifier-form2 INTEGER }
+		seq.Add(asn1.Cons(asn1.ContextConstructed(base+1),
+			asn1.IntElem(asn1.TagInteger, int64(id.AEQualifier))))
+	}
+	if id.HasAPInvocation {
+		seq.Add(asn1.Cons(asn1.ContextConstructed(base+2),
+			asn1.IntElem(asn1.TagInteger, int64(id.APInvocationID))))
+	}
+	if id.HasAEInvocation {
+		seq.Add(asn1.Cons(asn1.ContextConstructed(base+3),
+			asn1.IntElem(asn1.TagInteger, int64(id.AEInvocationID))))
+	}
+}
+
+// parseIdentity reads the identity block beginning at the given context tag
+// number, ignoring tags outside it.
+func parseIdentity(tag asn1.Tag, content []byte, base uint32, id *Identity) bool {
+	switch tag {
+	case asn1.ContextConstructed(base):
+		if oid, ok := firstOID(content); ok {
+			id.APTitle = oid
+		}
+	case asn1.ContextConstructed(base + 1):
+		if n, err := asn1.DecodeInt(firstInt(content)); err == nil {
+			id.AEQualifier, id.HasAEQual = int32(n), true
+		}
+	case asn1.ContextConstructed(base + 2):
+		if n, err := asn1.DecodeInt(firstInt(content)); err == nil {
+			id.APInvocationID, id.HasAPInvocation = int32(n), true
+		}
+	case asn1.ContextConstructed(base + 3):
+		if n, err := asn1.DecodeInt(firstInt(content)); err == nil {
+			id.AEInvocationID, id.HasAEInvocation = int32(n), true
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 // AARE builds an A-ASSOCIATE response APDU accepting the association and
 // carrying mmsInitiateResp as user information.
 func AARE(mmsInitiateResp []byte) []byte {
+	return AAREWithIdentity(mmsInitiateResp, Identity{})
+}
+
+// AAREWithIdentity is AARE carrying a responding AP-title and AE-qualifier.
+// An empty identity produces the same bare acceptance AARE builds, so a
+// server that has nothing to claim is unchanged.
+func AAREWithIdentity(mmsInitiateResp []byte, responding Identity) []byte {
 	seq := asn1.Cons(tagAARE,
 		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, oidMMSContext)),
 		// result [2] EXPLICIT INTEGER accepted(0)
@@ -61,8 +151,11 @@ func AARE(mmsInitiateResp []byte) []byte {
 		// result-source-diagnostic [3] EXPLICIT CHOICE acse-service-user [1] INTEGER 0
 		asn1.Cons(asn1.ContextConstructed(3),
 			asn1.Cons(asn1.ContextConstructed(1), asn1.IntElem(asn1.TagInteger, 0))),
-		asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiateResp)),
 	)
+	// responding-AP-title [4] .. responding-AE-invocation-identifier [7],
+	// which the ASN.1 places between the diagnostic and the user information.
+	addIdentity(seq, 4, responding)
+	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiateResp)))
 	return seq.Encode()
 }
 
@@ -101,6 +194,11 @@ type Result struct {
 	Accepted   bool
 	Diagnostic int
 	UserData   []byte // the MMS InitiateResponsePDU
+
+	// Responding is the identity the peer answered with. A proxy replays it
+	// so its own clients see the device's identity; it is zero when the peer
+	// omitted the fields, which is legal.
+	Responding Identity
 }
 
 // ParseAARE parses an A-ASSOCIATE response and extracts the MMS user data.
@@ -116,6 +214,10 @@ func ParseAARE(apdu []byte) (*Result, error) {
 		tag, c, err := inner.ReadTLV()
 		if err != nil {
 			return nil, err
+		}
+		// responding-AP-title [4] .. responding-AE-invocation-identifier [7].
+		if parseIdentity(tag, c, 4, &res.Responding) {
+			continue
 		}
 		switch tag {
 		case asn1.ContextConstructed(2): // result
@@ -136,34 +238,61 @@ func ParseAARE(apdu []byte) (*Result, error) {
 	return res, nil
 }
 
+// Request is the outcome of parsing an AARQ.
+type Request struct {
+	UserData []byte // the MMS InitiateRequestPDU
+	Password string
+
+	// Called is the identity the peer addressed, and Calling the one it
+	// claims. A client that fills in Called is checking who it reached, and
+	// expects the responding identity in the AARE to match.
+	Called  Identity
+	Calling Identity
+}
+
 // ParseAARQ parses an A-ASSOCIATE request and extracts the MMS user data
 // and any calling authentication password.
 func ParseAARQ(apdu []byte) (userData []byte, password string, err error) {
+	req, err := ParseAARQFull(apdu)
+	if err != nil {
+		return nil, "", err
+	}
+	return req.UserData, req.Password, nil
+}
+
+// ParseAARQFull is ParseAARQ including the ACSE identities.
+func ParseAARQFull(apdu []byte) (Request, error) {
+	var req Request
 	dec := asn1.NewDecoder(apdu)
 	content, err := dec.Expect(tagAARQ)
 	if err != nil {
-		return nil, "", fmt.Errorf("acse: not an AARQ: %w", err)
+		return req, fmt.Errorf("acse: not an AARQ: %w", err)
 	}
 	inner := asn1.NewDecoder(content)
 	for inner.More() {
 		tag, c, err := inner.ReadTLV()
 		if err != nil {
-			return nil, "", err
+			return req, err
+		}
+		// called-AP-title [2] .. called-AE-invocation-identifier [5], then
+		// calling-AP-title [6] .. calling-AE-invocation-identifier [9].
+		if parseIdentity(tag, c, 2, &req.Called) || parseIdentity(tag, c, 6, &req.Calling) {
+			continue
 		}
 		switch tag {
 		case asn1.ContextConstructed(12): // calling-authentication-value
 			av := asn1.NewDecoder(c)
 			if pw, ok, _ := av.Optional(asn1.ContextPrimitive(0)); ok {
-				password = string(pw)
+				req.Password = string(pw)
 			}
 		case asn1.ContextConstructed(30):
-			userData, err = parseUserInfo(c)
+			req.UserData, err = parseUserInfo(c)
 			if err != nil {
-				return nil, "", err
+				return req, err
 			}
 		}
 	}
-	return userData, password, nil
+	return req, nil
 }
 
 // IsRelease reports whether apdu is an RLRQ (release request).
@@ -207,6 +336,21 @@ func parseDiagnostic(content []byte) int {
 		}
 	}
 	return 0
+}
+
+// firstOID returns the OBJECT IDENTIFIER inside an EXPLICIT wrapper, which is
+// how AP-title form2 is carried.
+func firstOID(content []byte) (asn1.OID, bool) {
+	dec := asn1.NewDecoder(content)
+	c, err := dec.Expect(asn1.TagOID)
+	if err != nil {
+		return nil, false
+	}
+	oid, err := asn1.DecodeOID(c)
+	if err != nil {
+		return nil, false
+	}
+	return oid, true
 }
 
 // firstInt returns the content of the first INTEGER within an EXPLICIT
