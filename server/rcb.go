@@ -18,6 +18,9 @@ type rcbState struct {
 	ln     *model.LogicalNode
 	do     *model.DataObject // the materialised RCB object
 	rc     *model.ReportControl
+	// maxBuffer is how many reports the buffer retains (BRCB only),
+	// resolved once from the control block and the server default.
+	maxBuffer int
 
 	mu       sync.Mutex
 	enabled  bool
@@ -38,14 +41,28 @@ type bufEntry struct {
 	elem *asn1.Element // pre-built informationReport element
 }
 
-// maxBufferedReports bounds a BRCB's buffer.
-const maxBufferedReports = 256
+// defaultBufferedReports is the buffer depth of a control block that
+// configures none, and of a server that sets no default.
+const defaultBufferedReports = 256
+
+// bufferDepth resolves how many reports one control block retains: its own
+// MaxQueueSize, else the server's default, else the library's.
+func bufferDepth(rc *model.ReportControl, serverDefault int) int {
+	switch {
+	case rc.MaxQueueSize > 0:
+		return rc.MaxQueueSize
+	case serverDefault > 0:
+		return serverDefault
+	}
+	return defaultBufferedReports
+}
 
 // materialiseRCBs expands each logical node's report control blocks into
 // browsable/writable data objects (FC RP for unbuffered, BR for buffered)
 // carrying the standard control-block attributes, and returns the runtime
-// registry keyed by "domain\x00LN$FC$name".
-func materialiseRCBs(m *model.Model) map[string]*rcbState {
+// registry keyed by "domain\x00LN$FC$name". bufDefault is the buffer depth
+// for buffered blocks that do not set their own.
+func materialiseRCBs(m *model.Model, bufDefault int) map[string]*rcbState {
 	reg := make(map[string]*rcbState)
 	for _, ld := range m.Devices {
 		for _, ln := range ld.Nodes {
@@ -67,6 +84,7 @@ func materialiseRCBs(m *model.Model) map[string]*rcbState {
 					item := ln.Name + "$" + fc.String() + "$" + instName
 					reg[ld.Name+"\x00"+item] = &rcbState{
 						domain: ld.Name, item: item, ln: ln, do: do, rc: rc,
+						maxBuffer: bufferDepth(rc, bufDefault),
 					}
 				}
 			}

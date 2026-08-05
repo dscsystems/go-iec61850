@@ -35,6 +35,10 @@ type Server struct {
 	numOfSG uint8
 	sgs     map[string]*sgManager // by logical device name
 
+	// reportBufSize is the default buffered-report depth; see
+	// WithReportBufferSize.
+	reportBufSize int
+
 	selMu      sync.Mutex
 	selections map[model.ObjectReference]*selection
 
@@ -120,6 +124,14 @@ func WithFileStore(fsys fs.FS) Option {
 // default, is unlimited.
 func WithMaxConnections(n int) Option {
 	return func(s *Server) { s.maxConns = n }
+}
+
+// WithReportBufferSize sets how many reports a buffered control block
+// retains while no subscriber is enabled. It is the default for the blocks
+// that do not set a MaxQueueSize of their own; zero keeps the library's
+// default of 256.
+func WithReportBufferSize(n int) Option {
+	return func(s *Server) { s.reportBufSize = n }
 }
 
 // WithSettingGroups enables setting-group handling with numOfSG groups for

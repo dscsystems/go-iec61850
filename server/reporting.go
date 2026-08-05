@@ -16,7 +16,7 @@ type reportManager struct {
 }
 
 func newReportManager(s *Server) *reportManager {
-	return &reportManager{s: s, reg: materialiseRCBs(s.model)}
+	return &reportManager{s: s, reg: materialiseRCBs(s.model, s.reportBufSize)}
 }
 
 // onRCBWrite reacts to a client write of an RCB attribute. It is called
@@ -323,7 +323,9 @@ func (rm *reportManager) sendReport(rs *rcbState, conn *mms.ServerConn, included
 	if buffered {
 		rs.mu.Lock()
 		rs.buffer = append(rs.buffer, bufEntry{id: entryID, elem: report})
-		if len(rs.buffer) > maxBufferedReports {
+		// The oldest entries go first, and their loss is what BufOvfl
+		// tells the next subscriber about.
+		for len(rs.buffer) > rs.maxBuffer && len(rs.buffer) > 0 {
 			rs.buffer = rs.buffer[1:]
 			rs.bufOverflow = true
 		}

@@ -82,6 +82,10 @@ type ReportControl struct {
 	OptFlds    OptFlds
 	IntgPd     uint32 // ms
 	RptEnabled int    // max enabled instances (indexed RCBs)
+	// MaxQueueSize is how many reports a buffered control block retains
+	// while no subscriber is enabled. Zero leaves it to the server's own
+	// default. It has no meaning for an unbuffered control block.
+	MaxQueueSize int
 }
 
 // GSEControl is the SCL-side configuration of a GOOSE control block.

@@ -83,7 +83,33 @@ func BuildModel(s *SCL, opts ...Option) (*model.Model, error) {
 		}
 		m.Devices = append(m.Devices, ld)
 	}
+	// Services/ConfReportControl@maxBuf is the device's report-buffer
+	// capacity: apply it to the buffered blocks as their queue depth, so
+	// the server buffers what the configuration says rather than its own
+	// default. The access point's declaration wins over the IED's.
+	if maxBuf := reportMaxBuf(ied, ap); maxBuf > 0 {
+		for _, ld := range m.Devices {
+			for _, ln := range ld.Nodes {
+				for _, rc := range ln.ReportControls {
+					if rc.Buffered && rc.MaxQueueSize == 0 {
+						rc.MaxQueueSize = maxBuf
+					}
+				}
+			}
+		}
+	}
 	return m, nil
+}
+
+// reportMaxBuf returns the configured report-buffer capacity, zero if the
+// document declares none.
+func reportMaxBuf(ied *IED, ap *AccessPoint) int {
+	for _, svc := range []*Services{ap.Services, ied.Services} {
+		if svc != nil && svc.ConfReportControl != nil && svc.ConfReportControl.MaxBuf > 0 {
+			return svc.ConfReportControl.MaxBuf
+		}
+	}
+	return 0
 }
 
 func findIED(s *SCL, name string) (*IED, error) {

@@ -97,13 +97,15 @@ type IED struct {
 	Type          string        `xml:"type,attr"`
 	Manufacturer  string        `xml:"manufacturer,attr"`
 	ConfigVersion string        `xml:"configVersion,attr"`
+	Services      *Services     `xml:"Services"`
 	AccessPoints  []AccessPoint `xml:"AccessPoint"`
 }
 
 // AccessPoint is one communication access point of an IED.
 type AccessPoint struct {
-	Name   string  `xml:"name,attr"`
-	Server *Server `xml:"Server"`
+	Name     string    `xml:"name,attr"`
+	Services *Services `xml:"Services"`
+	Server   *Server   `xml:"Server"`
 }
 
 // Server holds the logical devices visible through an access point.
@@ -179,6 +181,20 @@ type FCDA struct {
 	DOName  string `xml:"doName,attr"`
 	DAName  string `xml:"daName,attr"`
 	FC      string `xml:"fc,attr"`
+}
+
+// Services declares an IED's or access point's service capabilities. Only
+// the report-buffer capacity is read from it.
+type Services struct {
+	ConfReportControl *ConfReportControl `xml:"ConfReportControl"`
+}
+
+// ConfReportControl is the report-control capability. MaxBuf is how many
+// reports a buffered control block can retain, which the server applies to
+// the blocks that do not configure a depth of their own.
+type ConfReportControl struct {
+	Max    int `xml:"max,attr"`
+	MaxBuf int `xml:"maxBuf,attr"`
 }
 
 // ReportControl configures a (buffered or unbuffered) report control block.
