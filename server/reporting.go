@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/asn1"
@@ -186,7 +187,7 @@ func (rm *reportManager) onUpdate(changed map[model.ObjectReference]bool) {
 		var included []int
 		for i, m := range members {
 			ref, _ := model.FromMMS(m.domain, m.item)
-			if changed[ref] || changed[ref.Parent()] || changed[ref.Parent().Parent()] {
+			if memberChanged(changed, ref) {
 				included = append(included, i)
 			}
 		}
@@ -194,6 +195,32 @@ func (rm *reportManager) onUpdate(changed map[model.ObjectReference]bool) {
 			rm.sendReport(rs, conn, included, model.ReasonDataChange)
 		}
 	}
+}
+
+// memberChanged reports whether an update touched a dataset member.
+//
+// A member may name any level of the tree, so the change has to be matched
+// in both directions. A member naming a leaf is touched by a change to
+// that leaf or, if a whole object is ever marked changed, to something it
+// sits under. A member naming a data object — the FCDA form that omits the
+// daName — is touched by a change to any attribute below it, which is how
+// updates normally arrive: Update records the leaves it wrote.
+func memberChanged(changed map[model.ObjectReference]bool, member model.ObjectReference) bool {
+	// The member itself and every level above it.
+	for ref := member; ref != ""; ref = ref.Parent() {
+		if changed[ref] {
+			return true
+		}
+	}
+	// Anything below it. The trailing separator keeps "Pos" from matching
+	// a sibling called "PosSomething".
+	prefix := string(member) + "."
+	for ref := range changed {
+		if strings.HasPrefix(string(ref), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // supportedOptFlds are the report fields this server can actually produce.
