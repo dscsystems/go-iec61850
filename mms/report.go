@@ -30,14 +30,14 @@ type InformationReport struct {
 }
 
 func (c *Conn) handleUnconfirmed(content []byte) {
-	// The raw handler runs first and sees every unconfirmed PDU, including
+	// The raw handlers run first and see every unconfirmed PDU, including
 	// services this package does not decode. A proxy that must reproduce what
 	// arrived needs the octets, not an interpretation of them.
 	c.mu.Lock()
-	raw := c.rawUnconfHandler
+	raw := c.rawUnconfHandlers
 	c.mu.Unlock()
-	if raw != nil {
-		raw(content)
+	for _, e := range raw {
+		e.fn(content)
 	}
 
 	dec := asn1.NewDecoder(content)
@@ -53,10 +53,10 @@ func (c *Conn) handleUnconfirmed(content []byte) {
 		return
 	}
 	c.mu.Lock()
-	h := c.reportHandler
+	handlers := c.reportHandlers
 	c.mu.Unlock()
-	if h != nil {
-		h(rep)
+	for _, e := range handlers {
+		e.fn(rep)
 	}
 }
 

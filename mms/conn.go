@@ -41,7 +41,7 @@ type Options struct {
 // Conn is an established MMS association. It is safe for concurrent use:
 // multiple goroutines may issue confirmed requests, which are matched to
 // responses by invoke ID. Unconfirmed PDUs (information reports) are
-// delivered to the handler registered with OnInformationReport.
+// delivered to every handler registered with OnInformationReport.
 type Conn struct {
 	fr        *framing
 	raw       net.Conn
@@ -59,9 +59,24 @@ type Conn struct {
 	closed   bool
 	closeErr error
 
-	reportHandler    func(*InformationReport)
-	rawUnconfHandler func(pdu []byte)
-	readerDone       chan struct{}
+	// Unconfirmed-PDU handlers are additive: several independent
+	// subscriptions may share one association, so registering a handler
+	// must not displace the ones already there. Each entry carries the id
+	// its remove func closes over.
+	nextHandlerID     uint64
+	reportHandlers    []reportHandler
+	rawUnconfHandlers []rawUnconfHandler
+	readerDone        chan struct{}
+}
+
+type reportHandler struct {
+	id uint64
+	fn func(*InformationReport)
+}
+
+type rawUnconfHandler struct {
+	id uint64
+	fn func(pdu []byte)
 }
 
 type result struct {
@@ -163,24 +178,63 @@ func (c *Conn) RespondingIdentity() ACSEIdentity { return c.responding }
 // MaxServOutstanding returns the negotiated maximum outstanding services.
 func (c *Conn) MaxServOutstanding() int { return c.negotiate.MaxServOutstanding }
 
-// OnInformationReport registers the handler for unconfirmed information
-// reports (used by ACSI reporting). It must be set before enabling any
-// report; the handler runs on the connection's reader goroutine and must
-// not block.
-func (c *Conn) OnInformationReport(h func(*InformationReport)) {
+// OnInformationReport registers a handler for unconfirmed information
+// reports (used by ACSI reporting) and returns a function that removes it
+// again. Handlers are additive and are called in registration order: an
+// association carrying several report subscriptions delivers every report
+// to all of them, so a later registration never silences an earlier one.
+//
+// Handlers must be registered before enabling any report; they run on the
+// connection's reader goroutine and must not block. The returned remove
+// func is idempotent and safe to call from any goroutine, including from
+// within a handler.
+func (c *Conn) OnInformationReport(h func(*InformationReport)) (remove func()) {
+	if h == nil {
+		return func() {}
+	}
 	c.mu.Lock()
-	c.reportHandler = h
+	c.nextHandlerID++
+	id := c.nextHandlerID
+	c.reportHandlers = append(c.reportHandlers, reportHandler{id: id, fn: h})
 	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for i, e := range c.reportHandlers {
+			if e.id == id {
+				// Copy rather than shift in place: the reader goroutine may
+				// be iterating a snapshot backed by this array.
+				c.reportHandlers = append(c.reportHandlers[:i:i], c.reportHandlers[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 // OnRawUnconfirmed registers a handler receiving the undecoded content of
-// every unconfirmed PDU, before the decoded report handler runs. It exists for
-// proxies and diagnostics that must reproduce or record exactly what arrived.
-// Like OnInformationReport, it runs on the reader goroutine and must not block.
-func (c *Conn) OnRawUnconfirmed(h func(pdu []byte)) {
+// every unconfirmed PDU, before the decoded report handlers run, and returns a
+// function that removes it again. It exists for proxies and diagnostics that
+// must reproduce or record exactly what arrived. Like OnInformationReport,
+// handlers are additive, run on the reader goroutine and must not block.
+func (c *Conn) OnRawUnconfirmed(h func(pdu []byte)) (remove func()) {
+	if h == nil {
+		return func() {}
+	}
 	c.mu.Lock()
-	c.rawUnconfHandler = h
+	c.nextHandlerID++
+	id := c.nextHandlerID
+	c.rawUnconfHandlers = append(c.rawUnconfHandlers, rawUnconfHandler{id: id, fn: h})
 	c.mu.Unlock()
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for i, e := range c.rawUnconfHandlers {
+			if e.id == id {
+				c.rawUnconfHandlers = append(c.rawUnconfHandlers[:i:i], c.rawUnconfHandlers[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 // Negotiated returns the association parameters agreed during the initiate

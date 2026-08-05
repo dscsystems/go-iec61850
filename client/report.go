@@ -104,10 +104,13 @@ type ReportEntry struct {
 	Value  *mms.Value
 }
 
-// ReportSubscription is an active report subscription.
+// ReportSubscription is an active report subscription. Several may be live
+// on one connection at a time; each holds its own report handler, released
+// by Disable.
 type ReportSubscription struct {
 	c      *Client
 	rcb    *RCB
+	remove func() // unregisters this subscription's report handler
 	once   sync.Once
 	closed bool
 }
@@ -115,6 +118,13 @@ type ReportSubscription struct {
 // EnableReporting configures and enables the report control block, then
 // delivers decoded reports to cb until the subscription is disabled. The
 // RCB's OptFlds, TrgOps and IntgPd are written to the server if non-zero.
+//
+// Several report control blocks may be enabled concurrently on one
+// connection; each subscription keeps its own callback and receives only
+// the reports whose RptID matches its RCB. A report carries no other
+// identification, so RCBs configured with the same RptID — which the
+// standard permits — cannot be told apart, and both callbacks see both
+// streams. Populate the RCB with GetRCB so its RptID is known.
 //
 // The callback runs on the connection's reader goroutine and must not
 // block; hand heavy work to another goroutine.
@@ -147,8 +157,10 @@ func (c *Client) EnableReporting(ctx context.Context, rcb *RCB, cb func(*Report)
 		}
 	}
 
-	// Register the report handler before enabling.
-	c.mc.OnInformationReport(func(ir *mms.InformationReport) {
+	// Register the report handler before enabling. The registration is
+	// additive, so other subscriptions on this connection keep theirs; each
+	// handler filters on its own RptID and drops reports for the others.
+	remove := c.mc.OnInformationReport(func(ir *mms.InformationReport) {
 		rep := decodeReport(ir, rcb, members)
 		if rep != nil && rep.RptID == rcb.RptID {
 			cb(rep)
@@ -156,9 +168,10 @@ func (c *Client) EnableReporting(ctx context.Context, rcb *RCB, cb func(*Report)
 	})
 
 	if err := c.writeRCB(ctx, rcb, "RptEna", mms.NewBool(true)); err != nil {
+		remove()
 		return nil, err
 	}
-	return &ReportSubscription{c: c, rcb: rcb}, nil
+	return &ReportSubscription{c: c, rcb: rcb, remove: remove}, nil
 }
 
 // TriggerGI requests a general interrogation: the server sends a report
@@ -167,10 +180,15 @@ func (c *Client) TriggerGI(ctx context.Context, rcb *RCB) error {
 	return c.writeRCB(ctx, rcb, "GI", mms.NewBool(true))
 }
 
-// Disable turns the report control block off.
+// Disable turns the report control block off and unregisters the
+// subscription's callback, which stops receiving reports even if the write
+// to the server fails.
 func (s *ReportSubscription) Disable(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
+		if s.remove != nil {
+			s.remove()
+		}
 		err = s.c.writeRCB(ctx, s.rcb, "RptEna", mms.NewBool(false))
 		s.closed = true
 	})
