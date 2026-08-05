@@ -41,12 +41,9 @@ func (p *datasetsPanel) load(a *app) tea.Cmd {
 		}
 		var refs []model.ObjectReference
 		for _, ld := range lds {
-			names, _ := c.MMS().GetNameList(ctx, 2, ld) // named variable lists
-			for _, n := range names {
-				ln, ds, ok := strings.Cut(n, "$")
-				if ok {
-					refs = append(refs, model.ObjectReference(ld+"/"+ln+"."+ds))
-				}
+			found, _ := c.Browse(ctx, ld, client.ACSIDataSet)
+			for _, e := range found {
+				refs = append(refs, e.Ref)
 			}
 		}
 		return datasetsLoadedMsg{refs}

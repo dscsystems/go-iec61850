@@ -42,12 +42,9 @@ func (p *logsPanel) load(a *app) tea.Cmd {
 		}
 		var refs []model.ObjectReference
 		for _, ld := range lds {
-			names, _ := c.MMS().GetNameList(ctx, 0, ld)
-			for _, n := range names {
-				parts := strings.Split(n, "$")
-				if len(parts) == 3 && parts[1] == "LG" {
-					refs = append(refs, model.ObjectReference(ld+"/"+parts[0]+".LG."+parts[2]))
-				}
+			found, _ := c.Browse(ctx, ld, client.ACSILCB)
+			for _, e := range found {
+				refs = append(refs, e.Ref)
 			}
 		}
 		return logsLoadedMsg{refs}

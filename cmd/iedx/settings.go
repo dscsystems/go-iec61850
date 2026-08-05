@@ -41,12 +41,9 @@ func (p *settingsPanel) load(a *app) tea.Cmd {
 		}
 		var refs []model.ObjectReference
 		for _, ld := range lds {
-			names, _ := c.MMS().GetNameList(ctx, 0, ld)
-			for _, n := range names {
-				if strings.HasSuffix(n, "$SP$SGCB") {
-					ln := strings.Split(n, "$")[0]
-					refs = append(refs, model.ObjectReference(ld+"/"+ln+".SP.SGCB"))
-				}
+			found, _ := c.Browse(ctx, ld, client.ACSISGCB)
+			for _, e := range found {
+				refs = append(refs, e.Ref)
 			}
 		}
 		return sgcbsLoadedMsg{refs}

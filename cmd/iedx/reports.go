@@ -51,13 +51,9 @@ func (p *reportsPanel) load(a *app) tea.Cmd {
 		}
 		var rcbs []rcbItem
 		for _, ld := range lds {
-			names, _ := c.MMS().GetNameList(ctx, 0, ld)
-			for _, n := range names {
-				parts := strings.Split(n, "$")
-				if len(parts) == 3 && (parts[1] == "RP" || parts[1] == "BR") {
-					ref := model.ObjectReference(ld + "/" + parts[0] + "." + parts[1] + "." + parts[2])
-					rcbs = append(rcbs, rcbItem{ref: ref, buffered: parts[1] == "BR"})
-				}
+			found, _ := c.Browse(ctx, ld, client.ACSIURCB, client.ACSIBRCB)
+			for _, e := range found {
+				rcbs = append(rcbs, rcbItem{ref: e.Ref, buffered: e.Class == client.ACSIBRCB})
 			}
 		}
 		return rcbsLoadedMsg{rcbs}
