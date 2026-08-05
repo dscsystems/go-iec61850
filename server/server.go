@@ -6,6 +6,7 @@ package server
 
 import (
 	"crypto/tls"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -40,8 +41,50 @@ type Server struct {
 	lnMu sync.Mutex
 	lns  net.Listener
 
-	connMu sync.Mutex
-	conns  map[*mms.ServerConn]struct{}
+	connMu   sync.Mutex
+	conns    map[*mms.ServerConn]struct{}
+	open     int // slots taken: established associations and those setting up
+	maxConns int
+	connH    func(ConnectionEvent)
+}
+
+// ConnectionState is what happened to a client connection.
+type ConnectionState uint8
+
+const (
+	// ConnectionOpened is an association that completed its handshake.
+	ConnectionOpened ConnectionState = iota
+	// ConnectionClosed is an association that has ended, by either side.
+	ConnectionClosed
+	// ConnectionRefused is a connection dropped without an association
+	// because the server was already at its maximum.
+	ConnectionRefused
+)
+
+func (c ConnectionState) String() string {
+	switch c {
+	case ConnectionOpened:
+		return "opened"
+	case ConnectionClosed:
+		return "closed"
+	case ConnectionRefused:
+		return "refused"
+	}
+	return fmt.Sprintf("ConnectionState(%d)", uint8(c))
+}
+
+// ConnectionEvent describes a change in the server's client connections.
+type ConnectionEvent struct {
+	// Peer is the client's transport address.
+	Peer string
+	// State says what happened to it.
+	State ConnectionState
+	// Open is the number of connections held just after the event,
+	// counting associations still setting up.
+	Open int
+	// Conn is the association. It is nil for a refused connection, which
+	// never became one. Closing it disconnects the client.
+	Conn *mms.ServerConn
 }
 
 // Identity is returned by the Identify service.
@@ -65,6 +108,14 @@ func WithIdentity(id Identity) Option { return func(s *Server) { s.identity = id
 // os.DirFS("/var/comtrade")).
 func WithFileStore(fsys fs.FS) Option {
 	return func(s *Server) { s.files = newFileStore(fsys) }
+}
+
+// WithMaxConnections caps the number of client connections served at once.
+// A client arriving at the cap is dropped at the transport, before any
+// association is set up, and reported as ConnectionRefused. Zero, the
+// default, is unlimited.
+func WithMaxConnections(n int) Option {
+	return func(s *Server) { s.maxConns = n }
 }
 
 // WithSettingGroups enables setting-group handling with numOfSG groups for
@@ -140,27 +191,102 @@ func (s *Server) Serve(ln net.Listener) error {
 
 func (s *Server) serveConn(raw net.Conn) {
 	defer raw.Close()
+	peer := raw.RemoteAddr().String()
+
+	// The slot is taken before the handshake, so a flood of half-open
+	// connections cannot outrun the limit.
+	open, ok := s.takeSlot()
+	if !ok {
+		s.log.Warn("server: connection refused", "peer", peer, "max", s.maxConns)
+		s.notifyConn(ConnectionEvent{Peer: peer, State: ConnectionRefused, Open: open})
+		return
+	}
+
 	sc, err := mms.AcceptConn(raw)
 	if err != nil {
-		s.log.Warn("server: association setup failed", "peer", raw.RemoteAddr(), "err", err)
+		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
+		s.releaseSlot()
 		return
 	}
 	s.connMu.Lock()
 	s.conns[sc] = struct{}{}
+	open = s.open
 	s.connMu.Unlock()
 	defer func() {
 		s.connMu.Lock()
 		delete(s.conns, sc)
 		s.connMu.Unlock()
+		open := s.releaseSlot()
 		s.reports.disableConn(sc)
 		s.releaseSelections(sc)
 		sc.Close() // closes the transport and the unconfirmed writer
+		s.notifyConn(ConnectionEvent{Peer: peer, State: ConnectionClosed, Open: open, Conn: sc})
 	}()
 
 	s.log.Info("server: association established", "peer", sc.Peer)
+	s.notifyConn(ConnectionEvent{Peer: peer, State: ConnectionOpened, Open: open, Conn: sc})
 	if err := sc.Serve(&handler{s: s}); err != nil && err != net.ErrClosed {
 		s.log.Debug("server: association ended", "peer", sc.Peer, "err", err)
 	}
+}
+
+// OnConnection registers a handler called when a client connection opens,
+// closes, or is refused for exceeding the maximum. It runs on the
+// connection's own goroutine — the close event before that goroutine
+// finishes — so it must not block, and it must not call back into the
+// server's Update.
+//
+// Registering a second handler replaces the first. Register before Serve,
+// or the first clients may connect unobserved.
+func (s *Server) OnConnection(h func(ConnectionEvent)) {
+	s.connMu.Lock()
+	s.connH = h
+	s.connMu.Unlock()
+}
+
+func (s *Server) notifyConn(ev ConnectionEvent) {
+	s.connMu.Lock()
+	h := s.connH
+	s.connMu.Unlock()
+	if h != nil {
+		h(ev)
+	}
+}
+
+// OpenConnections returns how many client connections the server is
+// holding, counting associations still setting up.
+func (s *Server) OpenConnections() int {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.open
+}
+
+// MaxConnections returns the configured limit, or 0 when unlimited.
+func (s *Server) MaxConnections() int {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.maxConns
+}
+
+// takeSlot reserves one connection slot, reporting the resulting count and
+// whether the limit allowed it.
+func (s *Server) takeSlot() (int, bool) {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.maxConns > 0 && s.open >= s.maxConns {
+		return s.open, false
+	}
+	s.open++
+	return s.open, true
+}
+
+func (s *Server) releaseSlot() int {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.open > 0 {
+		s.open--
+	}
+	return s.open
 }
 
 // Close stops accepting and closes open associations.
