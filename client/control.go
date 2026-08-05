@@ -25,9 +25,10 @@ type ControlObject struct {
 	domain string
 	do     string // "LN$CO$DO"
 
-	mu     sync.Mutex
-	ctlNum uint8 // control number of the current or last sequence
-	inSeq  bool  // a sequence is open, so ctlNum must be reused
+	mu         sync.Mutex
+	ctlNum     uint8 // control number of the current or last sequence
+	inSeq      bool  // a sequence is open, so ctlNum must be reused
+	ctlValSpec *mms.TypeSpec
 }
 
 // ControlOption configures a control operation.
@@ -229,6 +230,77 @@ func (co *ControlObject) CtlNum() uint8 {
 	co.mu.Lock()
 	defer co.mu.Unlock()
 	return co.ctlNum
+}
+
+// CtlValSpec returns the type specification of the object's control value,
+// read from the type of its Oper structure with GetVariableAccessAttributes.
+// It is what a caller needs to build a ctlVal the server will accept:
+// an SPC takes a boolean, a DPC a two-bit bit-string, an INC an integer,
+// and an APC the AnalogueValue structure, whose components say whether the
+// server expects an integer ("i") or a float ("f").
+//
+// Sizes follow the TypeSpec convention: a bit-string or string width is
+// negative when the server declares it as a maximum rather than a fixed
+// length, so compare on its magnitude.
+//
+// The type of a control object is static, so the answer is cached and
+// later calls cost no round trip.
+func (co *ControlObject) CtlValSpec(ctx context.Context) (*mms.TypeSpec, error) {
+	co.mu.Lock()
+	cached := co.ctlValSpec
+	co.mu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
+	// Oper carries ctlVal under every control model. SBOw is the fallback
+	// for SBO objects whose Oper the server will not describe.
+	items := []string{co.do + "$Oper"}
+	if co.model.HasSelect() {
+		items = append(items, co.do+"$SBOw")
+	}
+	var err error
+	for _, item := range items {
+		var ts *mms.TypeSpec
+		ts, err = co.c.mc.GetVariableAccessAttributes(ctx, co.domain, item)
+		if err != nil {
+			continue
+		}
+		spec := componentSpec(ts, "ctlVal")
+		if spec == nil {
+			err = fmt.Errorf("client: %s: %s has no ctlVal component", co.ref, item)
+			continue
+		}
+		co.mu.Lock()
+		co.ctlValSpec = spec
+		co.mu.Unlock()
+		return spec, nil
+	}
+	return nil, fmt.Errorf("client: control value type of %s: %w", co.ref, err)
+}
+
+// CtlValType returns the MMS type of the object's control value. It is
+// mms.TypeStructure for an APC, whose value is an AnalogueValue; use
+// CtlValSpec to see inside it.
+func (co *ControlObject) CtlValType(ctx context.Context) (mms.Type, error) {
+	spec, err := co.CtlValSpec(ctx)
+	if err != nil {
+		return mms.TypeNone, err
+	}
+	return spec.Kind, nil
+}
+
+// componentSpec returns the type of a named member of a structure type.
+func componentSpec(ts *mms.TypeSpec, name string) *mms.TypeSpec {
+	if ts == nil || ts.Kind != mms.TypeStructure {
+		return nil
+	}
+	for _, c := range ts.Components {
+		if c.Name == name {
+			return c.Spec
+		}
+	}
+	return nil
 }
 
 // buildOper constructs the operate structure:
