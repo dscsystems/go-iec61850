@@ -14,6 +14,11 @@ const selectTimeout = 30 * time.Second
 type selection struct {
 	conn   *mms.ServerConn
 	expiry time.Time
+	// ctlNum is the control number the select carried, and hasCtlNum says
+	// whether it carried one at all: the SBOw form does, the SBO read form
+	// has no parameters to carry it in.
+	ctlNum    uint8
+	hasCtlNum bool
 }
 
 // selectSBO reserves a control object for the connection (SBO with normal
@@ -21,24 +26,72 @@ type selection struct {
 // object is already selected by another client. Not applicable to
 // direct-control objects, which have no SBO attribute.
 func (s *Server) selectSBO(ref model.ObjectReference, conn *mms.ServerConn) string {
+	if !s.reserve(ref, conn, 0, false) {
+		return "" // reserved by another client
+	}
+	return string(ref)
+}
+
+// selectWithValue reserves a control object for an SBOw select, recording
+// the control number the operate has to repeat.
+func (s *Server) selectWithValue(ref model.ObjectReference, conn *mms.ServerConn, ctlNum uint8) bool {
+	return s.reserve(ref, conn, ctlNum, true)
+}
+
+func (s *Server) reserve(ref model.ObjectReference, conn *mms.ServerConn, ctlNum uint8, hasCtlNum bool) bool {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
 	if s.selections == nil {
 		s.selections = make(map[model.ObjectReference]*selection)
 	}
 	if sel, ok := s.selections[ref]; ok && sel.conn != conn && time.Now().Before(sel.expiry) {
-		return "" // reserved by another client
+		return false
 	}
-	s.selections[ref] = &selection{conn: conn, expiry: time.Now().Add(selectTimeout)}
-	return string(ref)
+	s.selections[ref] = &selection{
+		conn:      conn,
+		expiry:    time.Now().Add(selectTimeout),
+		ctlNum:    ctlNum,
+		hasCtlNum: hasCtlNum,
+	}
+	return true
 }
 
-// isSelectedBy reports whether ref is currently selected by conn.
-func (s *Server) isSelectedBy(ref model.ObjectReference, conn *mms.ServerConn) bool {
+// checkSelection validates an operate against the reservation held for ref.
+// IEC 61850-7-2 has one control sequence carry one control number: the
+// operate must come from the connection that selected the object and must
+// repeat the select's ctlNum, or it belongs to some other sequence and the
+// server must not execute it.
+func (s *Server) checkSelection(ref model.ObjectReference, conn *mms.ServerConn, ctlNum uint8) model.AddCause {
 	s.selMu.Lock()
 	defer s.selMu.Unlock()
 	sel, ok := s.selections[ref]
-	return ok && sel.conn == conn && time.Now().Before(sel.expiry)
+	if !ok || sel.conn != conn || !time.Now().Before(sel.expiry) {
+		return model.AddCauseObjectNotSelected
+	}
+	if sel.hasCtlNum && sel.ctlNum != ctlNum {
+		return model.AddCauseInconsistentParameters
+	}
+	return model.AddCauseNone
+}
+
+// checkCancel validates a cancel the same way, except that cancelling when
+// nothing is reserved is allowed: a direct control has no reservation to
+// name, and there is nothing to protect.
+func (s *Server) checkCancel(ref model.ObjectReference, conn *mms.ServerConn, ctlNum uint8) model.AddCause {
+	s.selMu.Lock()
+	defer s.selMu.Unlock()
+	sel, ok := s.selections[ref]
+	if !ok || !time.Now().Before(sel.expiry) {
+		return model.AddCauseNone
+	}
+	if sel.conn != conn {
+		// Another client holds it; its sequence is not this one's to end.
+		return model.AddCauseObjectNotSelected
+	}
+	if sel.hasCtlNum && sel.ctlNum != ctlNum {
+		return model.AddCauseInconsistentParameters
+	}
+	return model.AddCauseNone
 }
 
 // clearSelection releases any reservation of ref (after operate/cancel).

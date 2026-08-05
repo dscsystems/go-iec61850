@@ -56,19 +56,26 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	ref := controlRef(domain, base)
 
 	if phase == "Cancel" {
+		cc := decodeOper(ref, v)
+		if cause := h.s.checkCancel(ref, conn, cc.CtlNum); cause != model.AddCauseNone {
+			h.setLastApplError(ld, ref, cc, cause)
+			return true, byte(mms.AccessObjectAccessDenied)
+		}
 		h.s.clearSelection(ref)
-		return true, 0xff // accept cancel silently
+		return true, 0xff
 	}
 
 	ctx := decodeOper(ref, v)
 	ctx.Select = phase == "SBOw"
 
-	// For SBO-with-normal-security, the operate must be preceded by a
-	// successful select (an SBO read) from the same connection.
+	// An SBO operate must belong to a live selection: made by this
+	// connection, and carrying that select's control number. Both
+	// security levels are checked — normal security selects with an SBO
+	// read, which carries no ctlNum, so only the reservation is verified
+	// there.
 	if phase == "Oper" && h.s.requiresSelection(ref) {
-		cm := h.s.model.Attribute(ref.Child("ctlModel"), model.CF)
-		enhanced := cm != nil && cm.Value != nil && model.CtlModel(cm.Value.Int64()).Enhanced()
-		if !enhanced && !h.s.isSelectedBy(ref, conn) {
+		if cause := h.s.checkSelection(ref, conn, ctx.CtlNum); cause != model.AddCauseNone {
+			h.setLastApplError(ld, ref, ctx, cause)
 			return true, byte(mms.AccessObjectAccessDenied)
 		}
 	}
@@ -87,8 +94,13 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	}
 
 	if ctx.Select {
-		// SBOw (enhanced select) reserves the object for this connection.
-		h.s.selectSBO(ref, conn)
+		// SBOw reserves the object for this connection, under the control
+		// number the operate will have to repeat. A reservation another
+		// client is holding is not ours to take.
+		if !h.s.selectWithValue(ref, conn, ctx.CtlNum) {
+			h.setLastApplError(ld, ref, ctx, model.AddCauseObjectAlreadySelected)
+			return true, byte(mms.AccessObjectAccessDenied)
+		}
 	} else {
 		// Apply the operate: set the sibling stVal under FC ST.
 		h.applyControl(ref, ctx.Value)

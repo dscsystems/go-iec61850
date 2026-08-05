@@ -90,12 +90,24 @@ const (
 	AddCauseObjectNotSelected           AddCause = 18
 	AddCauseObjectAlreadySelected       AddCause = 19
 	AddCauseNoAccessAuthority           AddCause = 20
-	AddCauseEnded                       AddCause = 21
-	AddCauseLockedByOtherClient         AddCause = 22
-	AddCauseAlreadyOn                   AddCause = 23
-	AddCauseAlreadyOff                  AddCause = 24
-	AddCauseParameterChangeInProgress   AddCause = 25
-	AddCauseNone                        AddCause = 255 // library-internal: success
+	AddCauseEndedWithOvershoot          AddCause = 21
+	AddCauseAbortionDueToDeviation      AddCause = 22
+	AddCauseAbortionByCommunicationLoss AddCause = 23
+	AddCauseBlockedByCommand            AddCause = 24
+	// AddCauseNoneReported is the standard's "None": the peer answered
+	// negatively without naming a cause. It is a value seen on the wire,
+	// unlike the AddCauseNone sentinel below.
+	AddCauseNoneReported AddCause = 25
+	// AddCauseInconsistentParameters is the diagnosis for an operate whose
+	// parameters do not match the select that reserved the object — a
+	// different ctlNum above all.
+	AddCauseInconsistentParameters AddCause = 26
+	AddCauseLockedByOtherClient    AddCause = 27
+
+	// AddCauseNone is not an IEC 61850 value: it is this library's "no
+	// error", returned by a ControlHandler to accept a command. Every
+	// value a peer can send is 0..27, so 255 cannot collide with one.
+	AddCauseNone AddCause = 255
 )
 
 func (a AddCause) String() string {
@@ -108,9 +120,11 @@ func (a AddCause) String() string {
 		12: "command-already-in-execution", 13: "blocked-by-health",
 		14: "1-of-n-control", 15: "abortion-by-cancel", 16: "time-limit-over",
 		17: "abortion-by-trip", 18: "object-not-selected",
-		19: "object-already-selected", 20: "no-access-authority", 21: "ended",
-		22: "locked-by-other-client", 23: "already-on", 24: "already-off",
-		25: "parameter-change-in-progress", 255: "none",
+		19: "object-already-selected", 20: "no-access-authority",
+		21: "ended-with-overshoot", 22: "abortion-due-to-deviation",
+		23: "abortion-by-communication-loss", 24: "blocked-by-command",
+		25: "none-reported", 26: "inconsistent-parameters",
+		27: "locked-by-other-client", 255: "none",
 	}
 	if s, ok := names[a]; ok {
 		return s
