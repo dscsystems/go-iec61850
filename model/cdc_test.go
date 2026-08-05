@@ -65,6 +65,26 @@ func TestNewDataObjectStatusClasses(t *testing.T) {
 		t.Errorf("DPS stVal = %s of %d bits, want a 2-bit string", v.Kind, v.Value.BitLen())
 	}
 
+	// A visible string status carries text, and its substitution value is
+	// text as well.
+	vss := NewDataObject("StrSt", CDCVSS, WithOptional("subVal", "subEna"))
+	if got := len(vss.Attributes); got != 5 {
+		t.Errorf("VSS attributes = %v, want stVal, q, t and the two asked for", attrNames(vss))
+	}
+	sv := findAttr(t, vss, "stVal")
+	if sv.Kind != mms.TypeVisibleString || sv.FC != ST {
+		t.Errorf("VSS stVal = %s [%s], want a visible string [ST]", sv.Kind, sv.FC)
+	}
+	if sv.Value == nil || sv.Value.Text() != "" {
+		t.Errorf("VSS stVal value = %v, want an empty string", sv.Value)
+	}
+	if sub := findAttr(t, vss, "subVal"); sub.Kind != mms.TypeVisibleString || sub.FC != SV {
+		t.Errorf("VSS subVal = %s [%s], want a visible string [SV]", sub.Kind, sub.FC)
+	}
+	if q := findAttr(t, vss, "q"); q.Value.BitLen() != 13 {
+		t.Errorf("VSS q = %d bits, want 13", q.Value.BitLen())
+	}
+
 	// Optional attributes appear only when named.
 	if hasAttr(sps, "subVal") || hasAttr(sps, "d") {
 		t.Errorf("SPS built optional attributes unasked: %v", attrNames(sps))

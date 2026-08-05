@@ -18,6 +18,7 @@ const (
 	CDCDPS CDC = "DPS" // double point status
 	CDCINS CDC = "INS" // integer status
 	CDCENS CDC = "ENS" // enumerated status
+	CDCVSS CDC = "VSS" // visible string status
 	CDCACT CDC = "ACT" // protection activation information
 	CDCACD CDC = "ACD" // directional protection activation information
 	CDCBCR CDC = "BCR" // binary counter reading
@@ -452,6 +453,9 @@ var cdcTable = map[CDC]cdcSpec{
 		with(optional(daUnits(CF)), optional(daString("d", DC))),
 	CDCENS: spec(daInt("stVal", ST), daQuality(ST), daTime(ST)).
 		with(substitution(daInt("", ST))...).
+		with(optional(daString("d", DC))),
+	CDCVSS: spec(daString("stVal", ST), daQuality(ST), daTime(ST)).
+		with(substitution(daString("", ST))...).
 		with(optional(daString("d", DC))),
 	CDCACT: spec(
 		daBool("general", ST),
