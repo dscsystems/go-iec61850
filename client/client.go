@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -18,6 +19,14 @@ import (
 type Client struct {
 	mc *mms.Conn
 }
+
+// closedChan stands in for the connection's Done channel when there is no
+// connection to wait on.
+var closedChan = func() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
 
 // Option configures a Client.
 type Option func(*mms.Options)
@@ -52,6 +61,52 @@ func (c *Client) MMS() *mms.Conn { return c.mc }
 
 // Close releases the association.
 func (c *Client) Close() error { return c.mc.Close() }
+
+// State reports the connection state: the equivalent of libiec61850's
+// IedConnection_getState. Dial returns a Client only once the association
+// is up, so a fresh Client is StateConnected; it turns StateClosed when
+// the peer or the transport drops the association, without a request
+// having to fail first, and StateClosing while Close is in progress.
+//
+// Polling State is a way to observe a connection loss, not to guard a
+// request: a request may still fail with the association dropping between
+// the check and the call. Handle the request error as well.
+func (c *Client) State() mms.State {
+	if c == nil || c.mc == nil {
+		return mms.StateClosed
+	}
+	return c.mc.State()
+}
+
+// Done returns a channel closed when the connection ends, whether from
+// Close, a peer disconnect or a transport error. It replaces polling State
+// with a wait, so a supervisor can sit in a select and reconnect the moment
+// the IED drops the association:
+//
+//	select {
+//	case <-c.Done():
+//		log.Printf("connection lost: %v", c.Err())
+//	case <-ctx.Done():
+//	}
+//
+// By the time it fires, State reports mms.StateClosed and Err reports the
+// cause. A nil or already-closed Client returns a closed channel.
+func (c *Client) Done() <-chan struct{} {
+	if c == nil || c.mc == nil {
+		return closedChan
+	}
+	return c.mc.Done()
+}
+
+// Err returns the error that ended the association, or nil while it is
+// still up. It tells a StateClosed connection that was closed locally
+// (net.ErrClosed) apart from one the peer or the network dropped.
+func (c *Client) Err() error {
+	if c == nil || c.mc == nil {
+		return net.ErrClosed
+	}
+	return c.mc.Err()
+}
 
 // LogicalDevices returns the logical device (MMS domain) names.
 func (c *Client) LogicalDevices(ctx context.Context) ([]string, error) {

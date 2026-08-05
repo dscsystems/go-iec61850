@@ -56,7 +56,7 @@ type Conn struct {
 	mu       sync.Mutex
 	nextID   uint32
 	pending  map[uint32]chan result
-	closed   bool
+	state    State
 	closeErr error
 
 	// Unconfirmed-PDU handlers are additive: several independent
@@ -82,6 +82,39 @@ type rawUnconfHandler struct {
 type result struct {
 	pdu []byte
 	err error
+}
+
+// State is the lifecycle state of an association.
+type State uint8
+
+const (
+	// StateClosed is a connection that is not established: never dialled,
+	// concluded, or dropped by the peer or the transport.
+	StateClosed State = iota
+	// StateConnecting is a handshake in progress. Dial is synchronous and
+	// returns nothing until the association is up, so a *Conn is never
+	// observed in this state; it exists for parity and for callers that
+	// track their own connect attempt.
+	StateConnecting
+	// StateConnected is an established association that can carry requests.
+	StateConnected
+	// StateClosing is a Close that has begun: the conclude has been sent
+	// and the transport is being torn down.
+	StateClosing
+)
+
+func (s State) String() string {
+	switch s {
+	case StateClosed:
+		return "closed"
+	case StateConnecting:
+		return "connecting"
+	case StateConnected:
+		return "connected"
+	case StateClosing:
+		return "closing"
+	}
+	return fmt.Sprintf("State(%d)", uint8(s))
 }
 
 // Dial establishes an MMS association to a "host:port" address.
@@ -162,6 +195,7 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		log:        logger,
 		negotiate:  negotiated,
 		responding: identityFromACSE(res.Responding),
+		state:      StateConnected,
 		nextID:     1,
 		pending:    make(map[uint32]chan result),
 		readerDone: make(chan struct{}),
@@ -177,6 +211,50 @@ func (c *Conn) RespondingIdentity() ACSEIdentity { return c.responding }
 
 // MaxServOutstanding returns the negotiated maximum outstanding services.
 func (c *Conn) MaxServOutstanding() int { return c.negotiate.MaxServOutstanding }
+
+// State reports the lifecycle state of the association.
+// It becomes StateClosed as soon as
+// the reader goroutine sees the transport end, so a peer that drops the
+// association is visible without issuing a request first.
+func (c *Conn) State() State {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.state
+}
+
+// closedChan is already closed, and stands in for the reader's channel on a
+// connection that was never dialled: such a connection is closed, and a
+// caller waiting on it must not block forever.
+var closedChan = func() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}()
+
+// Done returns a channel closed when the association ends, whether from
+// Close, a peer disconnect or a transport error — the push counterpart to
+// polling State.
+// By the time it fires, State reports StateClosed and Err reports
+// the cause. The channel is never reopened; a Conn is not redialled.
+func (c *Conn) Done() <-chan struct{} {
+	// readerDone is fixed at construction, so no lock is needed.
+	if c.readerDone == nil {
+		return closedChan
+	}
+	return c.readerDone
+}
+
+// Err returns the error that ended the association, or nil while it is
+// still up. A conclude issued by Close reports net.ErrClosed; a peer
+// disconnect reports the transport error (io.EOF for a clean close).
+func (c *Conn) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.state == StateConnected || c.state == StateConnecting {
+		return nil
+	}
+	return c.closeErr
+}
 
 // OnInformationReport registers a handler for unconfirmed information
 // reports (used by ACSI reporting) and returns a function that removes it
@@ -370,12 +448,12 @@ func (c *Conn) deliver(id uint32, r result) {
 
 func (c *Conn) failAll(err error) {
 	c.mu.Lock()
-	if c.closed {
-		err = c.closeErr
+	if c.state == StateConnected {
+		c.closeErr = err // first cause wins; Close records its own
 	} else {
-		c.closed = true
-		c.closeErr = err
+		err = c.closeErr
 	}
+	c.state = StateClosed
 	pending := c.pending
 	c.pending = make(map[uint32]chan result)
 	c.mu.Unlock()
@@ -388,7 +466,7 @@ func (c *Conn) failAll(err error) {
 // element and waits for the matching response.
 func (c *Conn) call(ctx context.Context, service *asn1.Element) ([]byte, error) {
 	c.mu.Lock()
-	if c.closed {
+	if c.state != StateConnected {
 		err := c.closeErr
 		c.mu.Unlock()
 		return nil, err
@@ -431,11 +509,12 @@ func (c *Conn) call(ctx context.Context, service *asn1.Element) ([]byte, error) 
 // the transport.
 func (c *Conn) Close() error {
 	c.mu.Lock()
-	if c.closed {
+	if c.state != StateConnected {
 		c.mu.Unlock()
 		return nil
 	}
-	c.closed = true
+	// Concurrent callers see StateClosing until the reader has drained.
+	c.state = StateClosing
 	c.closeErr = net.ErrClosed
 	c.mu.Unlock()
 
@@ -446,7 +525,10 @@ func (c *Conn) Close() error {
 	c.writeMu.Unlock()
 
 	err := c.raw.Close()
-	<-c.readerDone
+	<-c.readerDone // the reader's failAll moves the state to StateClosed
+	c.mu.Lock()
+	c.state = StateClosed
+	c.mu.Unlock()
 	return err
 }
 
