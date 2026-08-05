@@ -196,6 +196,27 @@ func (rm *reportManager) onUpdate(changed map[model.ObjectReference]bool) {
 	}
 }
 
+// supportedOptFlds are the report fields this server can actually produce.
+// Segmentation is absent: reports are sent whole, so SubSeqNum and
+// MoreFollows are never emitted.
+const supportedOptFlds = model.OptSeqNum | model.OptTimeOfEntry |
+	model.OptReasonCode | model.OptDataSetName | model.OptDataRef |
+	model.OptBufOvfl | model.OptEntryID | model.OptConfRev
+
+// effectiveOptFlds reduces a client's requested OptFlds to what the report
+// will really carry. The value is echoed as the report's second field and
+// is what tells a client which optional fields follow, so a bit set there
+// without its field shifts every value after it: the flags have to
+// describe the report as built, not as asked for. BufOvfl and EntryID
+// belong to buffered reports only.
+func effectiveOptFlds(opt model.OptFlds, buffered bool) model.OptFlds {
+	opt &= supportedOptFlds
+	if !buffered {
+		opt &^= model.OptBufOvfl | model.OptEntryID
+	}
+	return opt
+}
+
 func (rm *reportManager) allIndices(rs *rcbState) []int {
 	n := len(rm.members(rs))
 	out := make([]int, n)
@@ -214,8 +235,8 @@ func (rm *reportManager) sendReport(rs *rcbState, conn *mms.ServerConn, included
 		return
 	}
 	members := rm.members(rs)
-	opt := model.OptFldsFromValue(rm.attrValue(rs, "OptFlds"))
 	buffered := rs.rc.Buffered
+	opt := effectiveOptFlds(model.OptFldsFromValue(rm.attrValue(rs, "OptFlds")), buffered)
 
 	rs.mu.Lock()
 	seq := rs.seqNum
@@ -244,10 +265,10 @@ func (rm *reportManager) sendReport(rs *rcbState, conn *mms.ServerConn, included
 	if opt&model.OptDataSetName != 0 {
 		add(rm.attrValue(rs, "DatSet"))
 	}
-	if buffered && opt&model.OptBufOvfl != 0 {
+	if opt&model.OptBufOvfl != 0 {
 		add(mms.NewBool(bufOvfl))
 	}
-	if buffered && opt&model.OptEntryID != 0 {
+	if opt&model.OptEntryID != 0 {
 		add(mms.NewOctetString(entryID))
 	}
 	if opt&model.OptConfRev != 0 {
@@ -262,6 +283,18 @@ func (rm *reportManager) sendReport(rs *rcbState, conn *mms.ServerConn, included
 		}
 	}
 	add(inclusion)
+
+	// Data references, one per included member, precede the values
+	// (IEC 61850-8-1): "LDName/LNName$FC$DataName", the MMS form of the
+	// member's reference.
+	if opt&model.OptDataRef != 0 {
+		for _, idx := range included {
+			if idx >= len(members) {
+				continue
+			}
+			add(mms.NewVisibleString(members[idx].domain + "/" + members[idx].item))
+		}
+	}
 
 	// Member values, in dataset order, only for included members.
 	for _, idx := range included {
