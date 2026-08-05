@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/mms"
@@ -18,6 +19,11 @@ import (
 // Client is a connection to an IEC 61850 server (IED).
 type Client struct {
 	mc *mms.Conn
+
+	// sem holds one token per request the association allows outstanding;
+	// see ReadAsync.
+	semOnce sync.Once
+	sem     chan struct{}
 }
 
 // closedChan stands in for the connection's Done channel when there is no
