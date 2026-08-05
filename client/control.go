@@ -13,6 +13,10 @@ import (
 // ControlObject is a handle to a controllable data object (an SPC, DPC,
 // INC, APC, ...). Its control model is read from the server unless set
 // explicitly with WithModel.
+//
+// A ControlObject runs one control sequence at a time; do not drive the
+// same handle from several goroutines concurrently, or their sequences
+// interleave and share a control number.
 type ControlObject struct {
 	c     *Client
 	ref   model.ObjectReference
@@ -22,7 +26,8 @@ type ControlObject struct {
 	do     string // "LN$CO$DO"
 
 	mu     sync.Mutex
-	ctlNum uint8
+	ctlNum uint8 // control number of the current or last sequence
+	inSeq  bool  // a sequence is open, so ctlNum must be reused
 }
 
 // ControlOption configures a control operation.
@@ -116,13 +121,18 @@ func (co *ControlObject) Operate(ctx context.Context, value *mms.Value, opts ...
 
 // Select performs the select step for SBO-with-normal-security controls.
 func (co *ControlObject) Select(ctx context.Context, opts ...ControlOption) error {
+	// The SBO read carries no ctlNum, but it still opens the sequence whose
+	// number the following operate must use.
+	co.beginSequence()
 	// SBO select reads the SBO attribute; success returns a non-empty
 	// object name.
 	vals, err := co.c.mc.Read(ctx, co.domain, co.do+"$SBO")
 	if err != nil {
+		co.endSequence()
 		return &ControlError{Stage: "select", Err: err}
 	}
 	if len(vals) == 0 || vals[0].Text() == "" {
+		co.endSequence()
 		return &ControlError{Stage: "select", AddCause: model.AddCauseSelectFailed}
 	}
 	return nil
@@ -137,20 +147,26 @@ func (co *ControlObject) doSelect(ctx context.Context, value *mms.Value, p *cont
 	if co.model == model.CtlSBONormal {
 		return co.Select(ctx)
 	}
-	// SBOw: write the operate structure to SBOw.
-	oper := co.buildOper(value, p)
+	// SBOw: write the operate structure to SBOw. This opens the sequence;
+	// the operate that follows repeats this control number.
+	oper := co.buildOper(value, p, co.beginSequence())
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$SBOw"}, []*mms.Value{oper})
 	if err != nil {
+		co.endSequence()
 		return &ControlError{Stage: "select", Err: err}
 	}
 	if len(results) > 0 && results[0] != nil {
+		co.endSequence()
 		return &ControlError{Stage: "select", Err: results[0], AddCause: co.lastApplError(ctx)}
 	}
 	return nil
 }
 
 func (co *ControlObject) doOperate(ctx context.Context, value *mms.Value, p *controlParams) error {
-	oper := co.buildOper(value, p)
+	// Reuses the select's control number when a sequence is open, and the
+	// sequence ends here either way.
+	oper := co.buildOper(value, p, co.beginSequence())
+	defer co.endSequence()
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$Oper"}, []*mms.Value{oper})
 	if err != nil {
 		return &ControlError{Stage: "operate", Err: err}
@@ -165,9 +181,11 @@ func (co *ControlObject) doOperate(ctx context.Context, value *mms.Value, p *con
 	return nil
 }
 
-// Cancel aborts a selection or operation.
+// Cancel aborts a selection or operation. It carries the control number of
+// the sequence being cancelled, which is how the server identifies it.
 func (co *ControlObject) Cancel(ctx context.Context, opts ...ControlOption) error {
-	oper := co.buildOper(mms.NewBool(false), co.params(opts))
+	oper := co.buildOper(mms.NewBool(false), co.params(opts), co.beginSequence())
+	defer co.endSequence()
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$Cancel"}, []*mms.Value{oper})
 	if err != nil {
 		return &ControlError{Stage: "cancel", Err: err}
@@ -178,14 +196,44 @@ func (co *ControlObject) Cancel(ctx context.Context, opts ...ControlOption) erro
 	return nil
 }
 
+// beginSequence returns the control number to use for the next request. A
+// control sequence (select, operate, cancel) carries one control number
+// throughout: IEC 61850-7-2 has the client increment ctlNum once per new
+// sequence, and a server that compares the operate's ctlNum against the
+// selected one rejects the operate as inconsistent-parameters otherwise.
+// The number is therefore allocated by the first request of a sequence and
+// reused until endSequence. It wraps at 255 by design.
+func (co *ControlObject) beginSequence() uint8 {
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	if !co.inSeq {
+		co.ctlNum++
+		co.inSeq = true
+	}
+	return co.ctlNum
+}
+
+// endSequence closes the current control sequence, so the next one takes a
+// fresh control number. A sequence ends with its operate or cancel —
+// whether that succeeded or failed, since a retry is a new sequence.
+func (co *ControlObject) endSequence() {
+	co.mu.Lock()
+	co.inSeq = false
+	co.mu.Unlock()
+}
+
+// CtlNum returns the control number of the current or most recent control
+// sequence. It is the ctlNum carried by that sequence's select and
+// operate, which identifies the matching CommandTermination.
+func (co *ControlObject) CtlNum() uint8 {
+	co.mu.Lock()
+	defer co.mu.Unlock()
+	return co.ctlNum
+}
+
 // buildOper constructs the operate structure:
 // { ctlVal, origin{orCat, orIdent}, ctlNum, T, Test, Check }.
-func (co *ControlObject) buildOper(value *mms.Value, p *controlParams) *mms.Value {
-	co.mu.Lock()
-	co.ctlNum++
-	ctlNum := co.ctlNum
-	co.mu.Unlock()
-
+func (co *ControlObject) buildOper(value *mms.Value, p *controlParams, ctlNum uint8) *mms.Value {
 	origin := mms.NewStructure(
 		mms.NewInt8(int8(p.orCat)),
 		mms.NewOctetString(p.orIdent),
