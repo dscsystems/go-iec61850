@@ -102,6 +102,7 @@ func TestConnectionIndicationAndCount(t *testing.T) {
 	if evs[0].Peer == "" {
 		t.Error("the open indication carries no peer address")
 	}
+	checkAddr(t, "open", evs[0])
 	if evs[0].Conn == nil {
 		t.Error("the open indication carries no association")
 	}
@@ -146,10 +147,32 @@ func TestConnectionIndicationAndCount(t *testing.T) {
 	if closed.Conn == nil {
 		t.Error("the close indication carries no association")
 	}
+	checkAddr(t, "close", closed)
 	waitOpen(t, srv, 1)
 
 	b.Close()
 	waitOpen(t, srv, 0)
+}
+
+// checkAddr asserts an event carries a usable address: the text form and
+// the net.Addr agree, and the IP can be taken on its own.
+func checkAddr(t *testing.T, what string, ev server.ConnectionEvent) {
+	t.Helper()
+	if ev.Addr == nil {
+		t.Errorf("%s indication carries no net.Addr", what)
+		return
+	}
+	if ev.Addr.String() != ev.Peer {
+		t.Errorf("%s indication: Addr %v does not match Peer %q", what, ev.Addr, ev.Peer)
+	}
+	tcp, ok := ev.Addr.(*net.TCPAddr)
+	if !ok {
+		t.Errorf("%s indication: Addr = %T, want a *net.TCPAddr", what, ev.Addr)
+		return
+	}
+	if tcp.IP == nil || tcp.Port == 0 {
+		t.Errorf("%s indication: address %v has no IP or port", what, tcp)
+	}
 }
 
 func waitOpen(t *testing.T, srv *server.Server, want int) {
@@ -203,6 +226,10 @@ func TestMaxConnectionsRefusesTheExcess(t *testing.T) {
 				if e.Peer == "" {
 					t.Error("the refused indication carries no peer address")
 				}
+				// A refusal has no association to read the address from,
+				// so the event has to carry it itself — that is what a
+				// security log needs about a client turned away.
+				checkAddr(t, "refused", e)
 				if e.Open != 2 {
 					t.Errorf("open count in the refusal = %d, want 2", e.Open)
 				}

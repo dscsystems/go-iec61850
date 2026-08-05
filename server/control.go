@@ -19,6 +19,16 @@ type ControlCtx struct {
 	Interlock bool
 	Synchro   bool
 	Select    bool // true for the select phase (SBOw), false for operate
+
+	// Conn is the association the command arrived on, nil only for a
+	// command with no association behind it. Origin and OrIdent are what
+	// the client claims about itself; this is what the server observed,
+	// which is what an audit trail — the originator's IP address — has to
+	// be built from. Conn.Peer is the address as a net.Addr, so a
+	// *net.TCPAddr yields the IP on its own.
+	Conn *mms.ServerConn
+	// Peer is Conn's address in text, empty when there is no association.
+	Peer string
 }
 
 // ControlHandler decides whether a control is allowed and applies its
@@ -56,7 +66,7 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	ref := controlRef(domain, base)
 
 	if phase == "Cancel" {
-		cc := decodeOper(ref, v)
+		cc := decodeOper(ref, v, conn)
 		if cause := h.s.checkCancel(ref, conn, cc.CtlNum); cause != model.AddCauseNone {
 			h.setLastApplError(ld, ref, cc, cause)
 			return true, byte(mms.AccessObjectAccessDenied)
@@ -65,7 +75,7 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 		return true, 0xff
 	}
 
-	ctx := decodeOper(ref, v)
+	ctx := decodeOper(ref, v, conn)
 	ctx.Select = phase == "SBOw"
 
 	// An SBO operate must belong to a live selection: made by this
@@ -160,8 +170,13 @@ func (h *handler) setLastApplError(ld *model.LogicalDevice, ref model.ObjectRefe
 
 // decodeOper extracts the fields of an operate/SBOw structure:
 // { ctlVal, origin{orCat, orIdent}, ctlNum, T, Test, Check }.
-func decodeOper(ref model.ObjectReference, v *mms.Value) *ControlCtx {
-	ctx := &ControlCtx{Ref: ref}
+// conn is recorded alongside them so a handler can tell who sent the
+// command rather than who it says it is.
+func decodeOper(ref model.ObjectReference, v *mms.Value, conn *mms.ServerConn) *ControlCtx {
+	ctx := &ControlCtx{Ref: ref, Conn: conn}
+	if conn != nil && conn.Peer != nil {
+		ctx.Peer = conn.Peer.String()
+	}
 	if v == nil || v.Type() != mms.TypeStructure {
 		return ctx
 	}

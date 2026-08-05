@@ -75,8 +75,12 @@ func (c ConnectionState) String() string {
 
 // ConnectionEvent describes a change in the server's client connections.
 type ConnectionEvent struct {
-	// Peer is the client's transport address.
+	// Peer is the client's transport address in text.
 	Peer string
+	// Addr is the same address as a net.Addr, so a *net.TCPAddr yields the
+	// client's IP on its own. It is set for every event, a refused
+	// connection included — that one has no association to read it from.
+	Addr net.Addr
 	// State says what happened to it.
 	State ConnectionState
 	// Open is the number of connections held just after the event,
@@ -191,14 +195,15 @@ func (s *Server) Serve(ln net.Listener) error {
 
 func (s *Server) serveConn(raw net.Conn) {
 	defer raw.Close()
-	peer := raw.RemoteAddr().String()
+	addr := raw.RemoteAddr()
+	peer := addr.String()
 
 	// The slot is taken before the handshake, so a flood of half-open
 	// connections cannot outrun the limit.
 	open, ok := s.takeSlot()
 	if !ok {
 		s.log.Warn("server: connection refused", "peer", peer, "max", s.maxConns)
-		s.notifyConn(ConnectionEvent{Peer: peer, State: ConnectionRefused, Open: open})
+		s.notifyConn(ConnectionEvent{Peer: peer, Addr: addr, State: ConnectionRefused, Open: open})
 		return
 	}
 
@@ -220,11 +225,11 @@ func (s *Server) serveConn(raw net.Conn) {
 		s.reports.disableConn(sc)
 		s.releaseSelections(sc)
 		sc.Close() // closes the transport and the unconfirmed writer
-		s.notifyConn(ConnectionEvent{Peer: peer, State: ConnectionClosed, Open: open, Conn: sc})
+		s.notifyConn(ConnectionEvent{Peer: peer, Addr: addr, State: ConnectionClosed, Open: open, Conn: sc})
 	}()
 
 	s.log.Info("server: association established", "peer", sc.Peer)
-	s.notifyConn(ConnectionEvent{Peer: peer, State: ConnectionOpened, Open: open, Conn: sc})
+	s.notifyConn(ConnectionEvent{Peer: peer, Addr: addr, State: ConnectionOpened, Open: open, Conn: sc})
 	if err := sc.Serve(&handler{s: s}); err != nil && err != net.ErrClosed {
 		s.log.Debug("server: association ended", "peer", sc.Peer, "err", err)
 	}
