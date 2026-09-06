@@ -76,9 +76,60 @@ func (ts *TypeSpec) BER() *asn1.Element {
 	return nil
 }
 
+// Bounds on a decoded TypeSpecification. A type specification comes from
+// a peer and DefaultValue materialises it, so every declared size is an
+// allocation request from an untrusted source. Reject the absurd ones at
+// the decode boundary: make() cannot fail gracefully, and an oversized
+// bit string aborts the process outright rather than panicking.
+const (
+	maxArrayElements = 1 << 16 // one declared array dimension
+	maxBitStringBits = 1 << 16 // declared bit-string width
+	maxDefaultValues = 1 << 20 // total Values DefaultValue may create
+)
+
 // DecodeTypeSpec decodes one TypeSpecification element from dec.
 func DecodeTypeSpec(dec *asn1.Decoder) (*TypeSpec, error) {
-	return decodeTypeSpec(dec, 0)
+	ts, err := decodeTypeSpec(dec, 0)
+	if err != nil {
+		return nil, err
+	}
+	// Per-field caps bound each dimension; nested arrays still multiply,
+	// so the whole tree is costed once here.
+	if n := ts.valueCount(); n > maxDefaultValues {
+		return nil, fmt.Errorf("mms: type specification materialises %d values, over the %d limit: %w",
+			n, maxDefaultValues, asn1.ErrBadLength)
+	}
+	return ts, nil
+}
+
+// valueCount is how many Values DefaultValue would allocate for ts. It
+// saturates just past maxDefaultValues so that a deeply nested array
+// cannot overflow the very count it is being checked against.
+func (ts *TypeSpec) valueCount() int {
+	if ts == nil {
+		return 0
+	}
+	const ceiling = maxDefaultValues + 1
+	switch ts.Kind {
+	case TypeArray:
+		per := ts.Element.valueCount()
+		if per == 0 || ts.Elements <= 0 {
+			return 1
+		}
+		if ts.Elements >= ceiling/per {
+			return ceiling
+		}
+		return 1 + ts.Elements*per
+	case TypeStructure:
+		total := 1
+		for _, c := range ts.Components {
+			if total += c.Spec.valueCount(); total >= ceiling {
+				return ceiling
+			}
+		}
+		return total
+	}
+	return 1
 }
 
 func decodeTypeSpec(dec *asn1.Decoder, depth int) (*TypeSpec, error) {
@@ -108,6 +159,10 @@ func decodeTypeSpec(dec *asn1.Decoder, depth int) (*TypeSpec, error) {
 		n, err := asn1.DecodeUint(nc)
 		if err != nil {
 			return nil, err
+		}
+		if n > maxArrayElements {
+			return nil, fmt.Errorf("mms: array of %d elements, over the %d limit: %w",
+				n, maxArrayElements, asn1.ErrBadLength)
 		}
 		ts.Elements = int(n)
 		ec, err := inner.Expect(asn1.ContextConstructed(2))
@@ -159,6 +214,10 @@ func decodeTypeSpec(dec *asn1.Decoder, depth int) (*TypeSpec, error) {
 		n, err := asn1.DecodeInt(content)
 		if err != nil {
 			return nil, err
+		}
+		if n > maxBitStringBits || n < -maxBitStringBits {
+			return nil, fmt.Errorf("mms: bit string of %d bits, over the %d limit: %w",
+				n, maxBitStringBits, asn1.ErrBadLength)
 		}
 		return &TypeSpec{Kind: TypeBitString, Size: int(n)}, nil
 	case tagDataInteger:

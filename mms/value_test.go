@@ -165,6 +165,11 @@ func FuzzDecodeTypeSpec(f *testing.F) {
 	f.Add((&TypeSpec{Kind: TypeStructure, Components: []Component{
 		{Name: "f", Spec: &TypeSpec{Kind: TypeFloat32}},
 	}}).BER().Encode())
+	// Declared sizes that once allocated on trust; see
+	// TestDecodeTypeSpecRejectsHostileSizes.
+	for _, ts := range hostileSpecs() {
+		f.Add(ts.BER().Encode())
+	}
 	f.Fuzz(func(t *testing.T, data []byte) {
 		ts, err := DecodeTypeSpec(asn1.NewDecoder(data))
 		if err != nil {
