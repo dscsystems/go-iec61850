@@ -35,6 +35,16 @@ type Message struct {
 	Anomalies Anomalies
 }
 
+// optString returns a context-primitive string element, or nil when s is
+// empty so Cons omits the field. goID [3] is OPTIONAL in 8-1: an unset
+// identifier is absent, not a zero-length VisibleString.
+func optString(tag uint32, s string) *asn1.Element {
+	if s == "" {
+		return nil
+	}
+	return asn1.Prim(asn1.ContextPrimitive(tag), []byte(s))
+}
+
 // Marshal encodes the full APDU: APPID, Length, two reserved words, then
 // the [APPLICATION 1] goosePdu.
 func (m *Message) Marshal() []byte {
@@ -46,7 +56,7 @@ func (m *Message) Marshal() []byte {
 		asn1.Prim(asn1.ContextPrimitive(0), []byte(m.GoCbRef)),
 		asn1.UintElem(asn1.ContextPrimitive(1), uint64(m.TimeAllowedToLive)),
 		asn1.Prim(asn1.ContextPrimitive(2), []byte(m.DatSet)),
-		asn1.Prim(asn1.ContextPrimitive(3), []byte(m.GoID)),
+		optString(3, m.GoID),
 		asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(m.T, mms.TimeAccuracy(10)).Bytes()),
 		asn1.UintElem(asn1.ContextPrimitive(5), uint64(m.StNum)),
 		asn1.UintElem(asn1.ContextPrimitive(6), uint64(m.SqNum)),

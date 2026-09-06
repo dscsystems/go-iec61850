@@ -14,9 +14,12 @@ type Quality uint16
 type Validity uint8
 
 const (
+	// The encoding is (bit 0, bit 1) as transmitted: good 00, invalid
+	// 01, reserved 10, questionable 11. Since bit i of a Quality maps to
+	// bit-string position i, "invalid" is the value with bit 1 set.
 	ValidityGood         Validity = 0
-	ValidityInvalid      Validity = 1
-	ValidityReserved     Validity = 2
+	ValidityReserved     Validity = 1
+	ValidityInvalid      Validity = 2
 	ValidityQuestionable Validity = 3
 )
 

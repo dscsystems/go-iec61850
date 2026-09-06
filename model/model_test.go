@@ -78,6 +78,40 @@ func TestQuality(t *testing.T) {
 	}
 }
 
+// TestQualityValidityWireBits pins each validity to the bits it puts on
+// the wire, per IEC 61850-7-3: good 00, invalid 01, reserved 10,
+// questionable 11, read as (bit 0, bit 1) in transmission order. A
+// round-trip test cannot catch a transposition of invalid and reserved,
+// so assert the encoding directly.
+func TestQualityValidityWireBits(t *testing.T) {
+	for _, tc := range []struct {
+		v          Validity
+		bit0, bit1 bool
+		lead       byte // leading octet of the 13-bit string
+		name       string
+	}{
+		{ValidityGood, false, false, 0x00, "good"},
+		{ValidityInvalid, false, true, 0x40, "invalid"},
+		{ValidityReserved, true, false, 0x80, "reserved"},
+		{ValidityQuestionable, true, true, 0xc0, "questionable"},
+	} {
+		v := QualityGood.WithValidity(tc.v).Value()
+		if v.Bit(0) != tc.bit0 || v.Bit(1) != tc.bit1 {
+			t.Errorf("%s: bits = (%v,%v), want (%v,%v)",
+				tc.name, v.Bit(0), v.Bit(1), tc.bit0, tc.bit1)
+		}
+		if got := v.Bytes()[0]; got != tc.lead {
+			t.Errorf("%s: leading octet = %#02x, want %#02x", tc.name, got, tc.lead)
+		}
+		if got := QualityFromValue(v).Validity(); got != tc.v {
+			t.Errorf("%s: decoded validity = %v", tc.name, got)
+		}
+		if got := tc.v.String(); got != tc.name {
+			t.Errorf("%s: String() = %q", tc.name, got)
+		}
+	}
+}
+
 func TestDbpos(t *testing.T) {
 	for _, d := range []Dbpos{DbposIntermediate, DbposOff, DbposOn, DbposBad} {
 		if got := DbposFromValue(d.Value()); got != d {

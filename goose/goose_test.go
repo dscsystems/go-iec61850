@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/asn1"
 	"github.com/dscsystems/go-iec61850/ethernet"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
@@ -57,6 +58,62 @@ func TestMessageRoundTrip(t *testing.T) {
 	}
 	if d := got.T.Sub(m.T); d > time.Millisecond || d < -time.Millisecond {
 		t.Fatalf("timestamp drift %v", d)
+	}
+}
+
+// pduTags returns the top-level tag numbers of the goosePdu in apdu.
+func pduTags(t *testing.T, apdu []byte) []uint32 {
+	t.Helper()
+	content, err := asn1.NewDecoder(apdu[headerLen:]).Expect(pduTag)
+	if err != nil {
+		t.Fatalf("decoding goosePdu: %v", err)
+	}
+	var tags []uint32
+	for d := asn1.NewDecoder(content); d.More(); {
+		tag, _, err := d.ReadTLV()
+		if err != nil {
+			t.Fatalf("reading goosePdu field: %v", err)
+		}
+		tags = append(tags, tag.Number)
+	}
+	return tags
+}
+
+// TestGoIDOptional checks that goID [3] is omitted rather than sent as an
+// empty VisibleString when unset: 8-1 declares it OPTIONAL, and a
+// subscriber filtering on goID must see it absent, not blank.
+func TestGoIDOptional(t *testing.T) {
+	m := sampleMessage()
+	m.GoID = ""
+	apdu := m.Marshal()
+
+	for _, tag := range pduTags(t, apdu) {
+		if tag == 3 {
+			t.Fatal("empty GoID encoded as [3], want the field omitted")
+		}
+	}
+	got, err := Parse(apdu)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got.GoID != "" {
+		t.Fatalf("GoID = %q, want empty", got.GoID)
+	}
+	// Every other field still decodes with the optional one absent.
+	if got.GoCbRef != m.GoCbRef || got.DatSet != m.DatSet || got.StNum != m.StNum ||
+		got.SqNum != m.SqNum || got.ConfRev != m.ConfRev ||
+		got.NumDatSetEntries != m.NumDatSetEntries || len(got.Values) != 2 {
+		t.Fatalf("field mismatch without goID: %+v", got)
+	}
+
+	// A set GoID is still present.
+	m.GoID = "events"
+	var found bool
+	for _, tag := range pduTags(t, m.Marshal()) {
+		found = found || tag == 3
+	}
+	if !found {
+		t.Fatal("non-empty GoID not encoded as [3]")
 	}
 }
 
