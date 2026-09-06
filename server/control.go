@@ -192,8 +192,9 @@ func decodeOper(ref model.ObjectReference, v *mms.Value, conn *mms.ServerConn) *
 		ctx.Test = t.Bool()
 	}
 	if ck := v.Index(5); ck != nil {
-		ctx.Interlock = ck.Bit(0)
-		ctx.Synchro = ck.Bit(1)
+		// Check per IEC 61850-7-2 Table 51: synchrocheck is bit 0.
+		ctx.Synchro = ck.Bit(0)
+		ctx.Interlock = ck.Bit(1)
 	}
 	return ctx
 }

@@ -310,9 +310,11 @@ func (co *ControlObject) buildOper(value *mms.Value, p *controlParams, ctlNum ui
 		mms.NewInt8(int8(p.orCat)),
 		mms.NewOctetString(p.orIdent),
 	)
+	// Check is the ordered packed list of IEC 61850-7-2 Table 51:
+	// synchrocheck first, interlock-check second, so bit 0 is synchro.
 	check := mms.NewBitString(2)
-	check.SetBit(0, p.interlock) // interlock-check
-	check.SetBit(1, p.synchro)   // synchro-check
+	check.SetBit(0, p.synchro)   // synchrocheck
+	check.SetBit(1, p.interlock) // interlock-check
 
 	return mms.NewStructure(
 		value,
