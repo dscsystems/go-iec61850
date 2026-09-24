@@ -48,8 +48,7 @@ type Conn struct {
 // Options configures a COTP connection.
 type Options struct {
 	// SrcTSAP and DstTSAP are the calling/called transport selectors. For
-	// MMS these are conventionally 2 octets {0,1} / {0,1}; libiec61850
-	// uses {0,1}.
+	// MMS these are conventionally 2 octets, {0,1} on both sides.
 	SrcTSAP []byte
 	DstTSAP []byte
 	// TPDUSize is the negotiated maximum TPDU size as the power-of-two

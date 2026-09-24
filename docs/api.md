@@ -113,8 +113,12 @@ vs, _ := c.ReadValues(ctx, model.MX,            // batch read, one LD
 ### Writing
 
 ```go
-err := c.Write(ctx, "ied1LD0/GGIO1.SPCSO1.ctlModel", model.CF, mms.NewInt32(1))
+err := c.Write(ctx, "ied1LD0/PTOC1.StrVal.setMag.f", model.SP, mms.NewFloat32(1.5))
 ```
+
+Servers refuse writes to status and measurements (`ST`, `MX`) outright, and
+usually to configuration (`CF`) too, with `mms.AccessObjectAccessDenied`. A
+value of the wrong type is refused with `mms.AccessTypeInconsistent`.
 
 ### Datasets
 
@@ -175,8 +179,15 @@ if errors.As(err, &ce) {
 }
 ```
 
+The `AddCause` of a refusal comes from the `LastApplError` the server reports
+ahead of its negative response. For an enhanced-security model, `Operate`
+also waits for the CommandTermination: a CommandTermination- fails with
+`Stage == "termination"` and its cause. The wait ends with `ctx`, or after
+`client.TerminationTimeout` when `ctx` has no deadline.
+
 Lower-level steps are also exposed: `Select`, `SelectWithValue`, `Cancel`,
-and `WithModel(...)` to override the model.
+and `WithModel(...)` to override the model. After writing a control
+structure directly, `c.LastApplError()` returns the server's diagnosis.
 
 ### Setting groups
 
@@ -253,6 +264,19 @@ v := srv.Read("IED1LD0/GGIO1.AnIn1.mag.f", model.MX)   // server-local snapshot
 
 ### Write access control
 
+Clients may write settings and substitution values (`SP`, `SV`, `SE`) by
+default. `SE` is only writable while a setting group is being edited.
+Configuration, descriptions and blocking are writable only if you opt in:
+
+```go
+srv := server.New(m, server.WithWritableFCs(model.SP, model.SV, model.SE, model.CF))
+```
+
+`ST`, `MX`, `OR`, `EX` and `SG` are never writable (IEC 61850-7-2), even if
+listed. A value whose type, bit-string width or integer range doesn't match
+the attribute is refused as type-inconsistent. Within that policy, `OnWrite`
+decides each write:
+
 ```go
 srv.OnWrite(func(da *model.DataAttribute, v *mms.Value) error {
     if da.Name == "ctlModel" {
@@ -261,6 +285,8 @@ srv.OnWrite(func(da *model.DataAttribute, v *mms.Value) error {
     return nil                            // allow (value is then applied)
 })
 ```
+
+Written values raise reports like process updates do.
 
 ### Control handlers
 
@@ -275,8 +301,36 @@ srv.OnControl("IED1LD0/GGIO1.SPCSO1", func(cc *server.ControlCtx) model.AddCause
 })
 ```
 
-Reporting (URCB/BRCB, materialised from the model), SBO select reservation,
-and CommandTermination for enhanced control models are handled internally.
+A refused control is answered negatively, preceded by a `LastApplError` report
+that carries the cause. A `status-only` object refuses every control, and a
+selection lasts the object's `sboTimeout` (30 s if it doesn't declare one).
+
+For an enhanced-security object the server sends CommandTermination+ as soon
+as the handler accepts. A handler that acts asynchronously takes the
+termination over instead:
+
+```go
+srv.OnControl("IED1LD0/XCBR1.Pos", func(cc *server.ControlCtx) model.AddCause {
+    finish := cc.DeferTermination()
+    go func() {
+        if err := drive(cc.Value); err != nil {
+            finish(model.AddCauseBlockedByProcess) // CommandTermination-
+            return
+        }
+        finish(model.AddCauseNone)                 // CommandTermination+
+    }()
+    return model.AddCauseNone
+})
+```
+
+If `finish` hasn't been called by the object's `operTimeout`, the server
+terminates the operate with `time-limit-over`.
+
+Reporting is handled internally for URCBs and BRCBs, which are materialised
+from the model. The first client to write a control block reserves it. Only
+the triggers in its `TrgOps` (and the attribute's own dchg/qchg/dupd) raise
+reports. `BufTm` groups events into one report, and a report longer than the
+association's PDU size is sent in segments.
 
 ---
 
@@ -358,9 +412,19 @@ defer pub.Close()
 // Subscriber.
 sub := goose.NewSubscriber(eth)
 stop, _ := sub.Subscribe(goose.Filter{AppID: 0x1000}, func(m *goose.Message) {
-    // m.StNum, m.SqNum, m.Values, m.Anomalies (StNumRegressed, SqNumGap, Stale)
+    // m.StNum, m.SqNum, m.Values, m.Anomalies
+    // (StNumRegressed, SqNumGap, Stale, EntriesMismatch)
 })
 defer stop()
+```
+
+To notice a publisher that goes silent, which is what `timeAllowedToLive` is
+for, use `SubscribeSupervised`. Its callback fires once per silence, when the
+time allowed to live passes with no new message:
+
+```go
+stop, _ := sub.SubscribeSupervised(goose.Filter{AppID: 0x1000}, onMessage,
+    func(goCbRef string) { markInvalid(goCbRef) })
 ```
 
 Use `ethernet.Pipe()` for an in-memory interface in tests.

@@ -90,16 +90,66 @@ func DefaultInitiate() InitiateRequest {
 	}
 }
 
-func defaultServiceSupport() ServiceSupport {
-	// 85-bit CBB bit string; enable the services a client uses. We set a
-	// broad set matching libiec61850 clients: status, getNameList,
-	// identify, read, write, getVariableAccessAttributes, definN/deleteVL,
-	// getNVL, fileServices, informationReport.
-	bs := asn1.NewBitString(85)
-	for _, bit := range []int{0, 1, 2, 4, 5, 6, 11, 12, 13, 14, 15, 16, 18, 19, 72, 73, 74, 76, 77, 79} {
+// ServiceSupportOptions bit positions (ISO 9506-2), for building the
+// servicesSupported bit string of an Initiate.
+const (
+	ServiceStatus                         = 0
+	ServiceGetNameList                    = 1
+	ServiceIdentify                       = 2
+	ServiceRead                           = 4
+	ServiceWrite                          = 5
+	ServiceGetVariableAccessAttributes    = 6
+	ServiceDefineNamedVariableList        = 11
+	ServiceGetNamedVariableListAttributes = 12
+	ServiceDeleteNamedVariableList        = 13
+	ServiceReadJournal                    = 65
+	ServiceFileOpen                       = 72
+	ServiceFileRead                       = 73
+	ServiceFileClose                      = 74
+	ServiceFileDelete                     = 76
+	ServiceFileDirectory                  = 77
+	ServiceInformationReport              = 79
+	ServiceConclude                       = 83
+	ServiceCancel                         = 84
+
+	serviceSupportBits = 85
+)
+
+// NewServiceSupport returns a servicesSupported bitmap with the given
+// ServiceSupportOptions bits set.
+func NewServiceSupport(services ...int) ServiceSupport {
+	bs := asn1.NewBitString(serviceSupportBits)
+	for _, bit := range services {
 		bs.SetBit(bit, true)
 	}
 	return ServiceSupport{Bits: bs}
+}
+
+// Has reports whether the bitmap advertises service (a
+// ServiceSupportOptions bit position).
+func (s ServiceSupport) Has(service int) bool {
+	if s.Bits.Length == 0 && s.Raw != nil {
+		if bs, err := asn1.DecodeBitString(s.Raw); err == nil {
+			return bs.Bit(service)
+		}
+		return false
+	}
+	return s.Bits.Bit(service)
+}
+
+// defaultServiceSupport is what this client issues or receives: it is an
+// honest statement, not a wish list, so a server gating on it sees the
+// services the client can actually take part in.
+func defaultServiceSupport() ServiceSupport {
+	return NewServiceSupport(
+		ServiceGetNameList, ServiceIdentify, ServiceRead, ServiceWrite,
+		ServiceGetVariableAccessAttributes,
+		ServiceDefineNamedVariableList, ServiceGetNamedVariableListAttributes,
+		ServiceDeleteNamedVariableList,
+		ServiceReadJournal,
+		ServiceFileOpen, ServiceFileRead, ServiceFileClose, ServiceFileDirectory,
+		ServiceInformationReport, ServiceConclude,
+	)
 }
 
 // EncodeInitiateRequest builds an MMS InitiateRequestPDU.
@@ -144,16 +194,48 @@ func encodeInitiate(tag asn1.Tag, req InitiateRequest) []byte {
 	return pdu.Encode()
 }
 
-// parameterCBB is the parameter-support bit string (proposed): indexed
-// bits str1(0) str2(1) vnam(2) valt(3) vadr(4) vsca(7) tpy(8) vlis(9)...
+// ParameterSupportOptions bit positions (ISO 9506-2).
+const (
+	cbbStr1 = 0 // arrays
+	cbbStr2 = 1 // structures
+	cbbVnam = 2 // named variables
+	cbbValt = 3 // alternate access
+	cbbVadr = 4 // unnamed (addressed) variables
+	cbbVsca = 5 // scattered access
+	cbbTpy  = 6 // third-party operations
+	cbbVlis = 7 // named variable lists
+	cbbReal = 8 // floating point
+	cbbCei  = 10
+
+	parameterCBBBits = 11
+)
+
+// parameterCBB is the parameter-support bit string this end proposes:
+// str1, str2, vnam, valt and vlis, the set IEC 61850-8-1 makes mandatory.
+// Arrays and structures carry the data model, and named variable lists
+// carry datasets; without them a peer that honours the negotiated CBB
+// refuses exactly the accesses IEC 61850 is built on.
 func parameterCBB() asn1.BitString {
-	bs := asn1.NewBitString(11)
-	bs.SetBit(2, true) // vnam
-	bs.SetBit(3, true) // valt
-	bs.SetBit(4, true) // vadr
-	bs.SetBit(5, true) // valt/tpy per stack; keep broad
-	bs.SetBit(6, true)
+	bs := asn1.NewBitString(parameterCBBBits)
+	for _, bit := range []int{cbbStr1, cbbStr2, cbbVnam, cbbValt, cbbVlis} {
+		bs.SetBit(bit, true)
+	}
 	return bs
+}
+
+// intersectParameterCBB returns the raw content octets of ours AND the
+// proposed CBB (raw content, unused-bits octet first). The negotiated
+// parameter CBB is what both ends support; a malformed proposal yields
+// ours unchanged.
+func intersectParameterCBB(ours asn1.BitString, proposedRaw []byte) []byte {
+	out := asn1.NewBitString(ours.Length)
+	copy(out.Bits, ours.Bits)
+	if proposed, err := asn1.DecodeBitString(proposedRaw); err == nil {
+		for i := 0; i < out.Length; i++ {
+			out.SetBit(i, ours.Bit(i) && proposed.Bit(i))
+		}
+	}
+	return asn1.AppendBitString(nil, out)
 }
 
 // ParseInitiateResponse decodes an InitiateResponsePDU, returning the

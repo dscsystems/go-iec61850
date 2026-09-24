@@ -78,6 +78,11 @@ func cmdTest(c *client.Client) bool {
 				return "", fmt.Errorf("pre-read: %w", err)
 			}
 			if err := c.Write(ctx, d.writeRef, d.writeFC, cur); err != nil {
+				// Refusing a write is the server's policy to state, and
+				// conformant servers refuse CF unless configured to allow it.
+				if errors.Is(err, mms.AccessObjectAccessDenied) {
+					return "", errSkip{reason: fmt.Sprintf("server refuses writes to %s (%s)", d.writeRef, d.writeFC)}
+				}
 				return "", err
 			}
 			back, err := c.Read(ctx, d.writeRef, d.writeFC)
@@ -289,15 +294,20 @@ func (t *tester) discover() discovery {
 	d.domain = lds[0]
 
 	names, _ := t.c.MMS().GetNameList(ctx, mms.ClassNamedVariable, d.domain)
+	// Settings and substitution values are what clients are meant to
+	// write; ctlModel is the fallback when a server has neither.
+	var cfRef model.ObjectReference
 	for _, n := range names {
 		parts := strings.Split(n, "$")
 		switch {
 		case d.readRef == "" && len(parts) >= 4 && parts[1] == "MX" && parts[len(parts)-1] == "f":
 			d.readRef = mmsToRef(d.domain, parts)
 			d.readFC = model.MX
-		case d.writeRef == "" && len(parts) >= 4 && parts[1] == "CF" && parts[len(parts)-1] == "ctlModel":
+		case d.writeRef == "" && len(parts) >= 4 && (parts[1] == "SP" || parts[1] == "SV") && parts[2] != "SGCB":
 			d.writeRef = mmsToRef(d.domain, parts)
-			d.writeFC = model.CF
+			d.writeFC, _ = model.ParseFC(parts[1])
+		case cfRef == "" && len(parts) >= 4 && parts[1] == "CF" && parts[len(parts)-1] == "ctlModel":
+			cfRef = mmsToRef(d.domain, parts)
 		case d.controlRef == "" && len(parts) >= 4 && parts[1] == "CO" && parts[len(parts)-1] == "Oper":
 			d.controlRef = coRef(d.domain, parts)
 		case d.rcbRef == "" && len(parts) == 3 && parts[1] == "RP":
@@ -307,6 +317,9 @@ func (t *tester) discover() discovery {
 		case d.logRef == "" && len(parts) == 3 && parts[1] == "LG":
 			d.logRef = model.ObjectReference(d.domain + "/" + parts[0] + ".LG." + parts[2])
 		}
+	}
+	if d.writeRef == "" && cfRef != "" {
+		d.writeRef, d.writeFC = cfRef, model.CF
 	}
 	// If no MX float, fall back to any leaf under ST.
 	if d.readRef == "" {

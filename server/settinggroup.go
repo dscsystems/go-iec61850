@@ -116,6 +116,40 @@ func isSGCBWrite(item string) (attr string, ok bool) {
 	return "", false
 }
 
+// editing reports whether a setting group is open for editing, the only
+// time its SE values may be written.
+func (m *sgManager) editing() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.editSG >= 1 && m.editSG <= m.numOfSG
+}
+
+// checkWrite validates an SGCB write before it is stored (IEC 61850-7-2
+// setting group services). Only ActSG, EditSG and CnfEdit are writable;
+// a group number outside 1..NumOfSG (0 also allowed for EditSG, which
+// ends editing) is invalid, and confirming an edit needs one open.
+func (m *sgManager) checkWrite(attr string, v *mms.Value) byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch attr {
+	case "ActSG":
+		if g := v.Int64(); g < 1 || g > int64(m.numOfSG) {
+			return byte(mms.AccessObjectValueInvalid)
+		}
+	case "EditSG":
+		if g := v.Int64(); g < 0 || g > int64(m.numOfSG) {
+			return byte(mms.AccessObjectValueInvalid)
+		}
+	case "CnfEdit":
+		if v.Bool() && (m.editSG < 1 || m.editSG > m.numOfSG) {
+			return byte(mms.AccessTemporarilyUnavailable)
+		}
+	default:
+		return byte(mms.AccessObjectAccessDenied)
+	}
+	return 0xff
+}
+
 // onSGCBWrite handles ActSG/EditSG/CnfEdit writes. Called with the model
 // write lock held.
 func (m *sgManager) onSGCBWrite(attr string, v *mms.Value) {

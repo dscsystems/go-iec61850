@@ -71,7 +71,11 @@ func (a *ASDU) element() *asn1.Element {
 	}
 	// smpCnt [2] OCTET STRING (2 octets, big-endian) per 9-2LE.
 	el.Add(asn1.Prim(asn1.ContextPrimitive(2), []byte{byte(a.SmpCnt >> 8), byte(a.SmpCnt)}))
-	el.Add(asn1.UintElem(asn1.ContextPrimitive(3), uint64(a.ConfRev))) // confRev [3]
+	// confRev [3] is OCTET STRING (SIZE(4)) in IEC 61850-9-2, not an INTEGER:
+	// a minimal encoding is a different length, and subscribers that check
+	// the size drop the whole ASDU.
+	el.Add(asn1.Prim(asn1.ContextPrimitive(3), []byte{
+		byte(a.ConfRev >> 24), byte(a.ConfRev >> 16), byte(a.ConfRev >> 8), byte(a.ConfRev)}))
 	if !a.RefrTm.IsZero() {
 		el.Add(asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(a.RefrTm, mms.TimeAccuracy(10)).Bytes()))
 	}

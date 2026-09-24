@@ -34,9 +34,13 @@ const (
 	svcFileDirectory       = 77
 )
 
+// handler serves one association; its requests arrive one at a time.
 type handler struct {
 	s        *Server
 	readConn *mms.ServerConn // set for the duration of a read request
+	// changes collects what a write request changed in the process image,
+	// reported once the request's writes are all applied.
+	changes changeSet
 }
 
 func (h *handler) Handle(req *mms.Request) (*asn1.Element, error) {
@@ -45,7 +49,7 @@ func (h *handler) Handle(req *mms.Request) (*asn1.Element, error) {
 	case svcIdentify:
 		return h.identity(), nil
 	case svcGetNameList:
-		return h.getNameList(req.Content)
+		return h.getNameList(req.Content, req.Conn.MaxPDU)
 	case svcRead:
 		return h.read(req.Content, req.Conn)
 	case svcWrite:
@@ -75,7 +79,10 @@ func (h *handler) identity() *asn1.Element {
 	)
 }
 
-func (h *handler) getNameList(content []byte) (*asn1.Element, error) {
+// getNameList answers GetNameList one page at a time. A page holds as many
+// names as fit in the association's maximum PDU (maxPDU octets, 0 for no
+// limit); moreFollows tells the client to continue after the last one.
+func (h *handler) getNameList(content []byte, maxPDU int) (*asn1.Element, error) {
 	dec := asn1.NewDecoder(content)
 	// objectClass [0] { basicObjectClass [0] INTEGER }
 	classContent, err := dec.Expect(asn1.ContextConstructed(0))
@@ -114,24 +121,25 @@ func (h *handler) getNameList(content []byte) (*asn1.Element, error) {
 			}
 		}
 	}
-	// Cap the page; signal moreFollows if truncated.
-	const pageMax = 100
-	more := false
-	if len(names) > pageMax {
-		names = names[:pageMax]
-		more = true
-	}
-
+	// Fill the page up to the PDU size. The envelope is what surrounds
+	// the names: the confirmed response's tag, length and invokeID, the
+	// service and list tags and lengths, and moreFollows.
+	const envelope = 24
+	budget := maxPDU - envelope
 	list := asn1.Cons(asn1.ContextConstructed(0))
-	for _, n := range names {
-		list.Add(asn1.Prim(asn1.TagVisibleString, []byte(n)))
+	more, used := false, 0
+	for i, n := range names {
+		el := asn1.Prim(asn1.TagVisibleString, []byte(n))
+		// Always at least one name, or a client could never progress.
+		if maxPDU > 0 && i > 0 && used+el.Size() > budget {
+			more = true
+			break
+		}
+		used += el.Size()
+		list.Add(el)
 	}
-	resp := asn1.Cons(asn1.ContextConstructed(svcGetNameList), list)
-	if more {
-		resp.Add(asn1.BoolElem(asn1.ContextPrimitive(1), true))
-	} else {
-		resp.Add(asn1.BoolElem(asn1.ContextPrimitive(1), false))
-	}
+	resp := asn1.Cons(asn1.ContextConstructed(svcGetNameList), list,
+		asn1.BoolElem(asn1.ContextPrimitive(1), more))
 	return resp, nil
 }
 
@@ -169,7 +177,7 @@ func (h *handler) read(content []byte, conn *mms.ServerConn) (*asn1.Element, err
 	h.readConn = conn
 	dec := asn1.NewDecoder(content)
 	// Optional specificationWithResult [0] BOOLEAN precedes the access
-	// specification; libiec61850 sets it when reading datasets.
+	// specification; clients commonly set it when reading datasets.
 	if _, _, err := dec.Optional(asn1.ContextPrimitive(0)); err != nil {
 		return nil, err
 	}
@@ -269,6 +277,13 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 	dd := asn1.NewDecoder(dataContent)
 	h.s.mu.Lock()
 	defer h.s.mu.Unlock()
+	// Written data and operated controls report like any other change
+	// once the request is applied.
+	h.changes = make(changeSet)
+	defer func() {
+		h.s.reports.onUpdate(h.changes)
+		h.changes = nil
+	}()
 	for i := 0; dd.More(); i++ {
 		v, err := mms.DecodeData(dd)
 		if err != nil {
@@ -287,28 +302,48 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 			}
 			continue
 		}
-		if code := h.writeOne(targets[i].domain, targets[i].item, v); code != 0xff {
+		t := targets[i]
+		// Control blocks are validated by their own rules before anything
+		// is stored: a refused write must leave the block as it was.
+		rcbAttr, isRCB := "", false
+		if _, attr, ok := rcbKey(t.domain, t.item); ok {
+			rcbAttr, isRCB = attr, true
+		}
+		mgr := h.s.sgs[t.domain]
+		sgAttr, isSG := "", false
+		if mgr != nil {
+			sgAttr, isSG = isSGCBWrite(t.item)
+		}
+		code := byte(0xff)
+		switch {
+		case isRCB:
+			code = h.s.reports.checkRCBWrite(t.domain, t.item, rcbAttr, v, conn)
+		case isSG:
+			code = mgr.checkWrite(sgAttr, v)
+		}
+		if code == 0xff {
+			code = h.writeOne(t.domain, t.item, v, isRCB || isSG)
+		}
+		if code != 0xff {
 			resp.Add(accessFailureWrite(mms.DataAccessError(code)))
 			continue
 		}
 		resp.Add(asn1.Prim(asn1.ContextPrimitive(1), nil)) // success [1] NULL
-		// Report control block side effects (RptEna, GI).
-		if _, attr, ok := rcbKey(targets[i].domain, targets[i].item); ok {
-			h.s.reports.onRCBWrite(targets[i].domain, targets[i].item, attr, v, conn)
-		}
-		// Setting group control block side effects (ActSG, EditSG, CnfEdit).
-		if mgr := h.s.sgs[targets[i].domain]; mgr != nil {
-			if attr, ok := isSGCBWrite(targets[i].item); ok {
-				mgr.onSGCBWrite(attr, v)
-			}
+		switch {
+		case isRCB: // RptEna, GI, PurgeBuf, EntryID, DatSet
+			h.s.reports.onRCBWrite(t.domain, t.item, rcbAttr, v, conn)
+		case isSG: // ActSG, EditSG, CnfEdit
+			mgr.onSGCBWrite(sgAttr, v)
 		}
 	}
 	return resp, nil
 }
 
 // writeOne applies a write and returns 0xff on success or a
-// DataAccessError code on failure.
-func (h *handler) writeOne(domain, item string, v *mms.Value) byte {
+// DataAccessError code on failure. controlBlock is set for report and
+// setting group control block attributes, which their own rules have
+// already admitted and the FC write policy does not govern.
+func (h *handler) writeOne(domain, item string, v *mms.Value, controlBlock bool) byte {
 	ld := h.s.model.Device(domain)
 	if ld == nil {
 		return byte(mms.AccessObjectNonExistent)
@@ -321,6 +356,14 @@ func (h *handler) writeOne(domain, item string, v *mms.Value) byte {
 	if !ok {
 		return byte(mms.AccessObjectAccessUnsupported)
 	}
+	if !controlBlock {
+		if code := h.writePermitted(domain, da); code != 0xff {
+			return code
+		}
+	}
+	if !valueFits(da, v) {
+		return byte(mms.AccessTypeInconsistent)
+	}
 	if h.s.writeH != nil {
 		if err := h.s.writeH(da, v); err != nil {
 			var dae mms.DataAccessError
@@ -330,8 +373,78 @@ func (h *handler) writeOne(domain, item string, v *mms.Value) byte {
 			return byte(mms.AccessObjectAccessDenied)
 		}
 	}
+	old := da.Value
 	da.Value = v
+	if !controlBlock && h.changes != nil {
+		ref, _ := model.FromMMS(domain, item)
+		h.changes.record(ref, da, old, v)
+	}
 	return 0xff
+}
+
+// writePermitted applies the functional-constraint write policy
+// (IEC 61850-7-2): only FCs the server made writable are, and an SE
+// setting is writable only while a setting group is being edited.
+func (h *handler) writePermitted(domain string, da *model.DataAttribute) byte {
+	if !h.s.writable[da.FC] {
+		return byte(mms.AccessObjectAccessDenied)
+	}
+	if da.FC == model.SE {
+		if mgr := h.s.sgs[domain]; mgr == nil || !mgr.editing() {
+			return byte(mms.AccessTemporarilyUnavailable)
+		}
+	}
+	return 0xff
+}
+
+// valueFits reports whether v may replace da's value: the same MMS type,
+// the same width for a bit string, and within range for a sized integer.
+// Storing anything else would corrupt every later read and report of the
+// attribute, so it is refused as type-inconsistent.
+func valueFits(da *model.DataAttribute, v *mms.Value) bool {
+	if v == nil {
+		return false
+	}
+	want := da.Kind
+	if da.Value != nil {
+		want = da.Value.Type()
+	}
+	if want == mms.TypeNone {
+		return true
+	}
+	if v.Type() != want {
+		return false
+	}
+	switch want {
+	case mms.TypeBitString:
+		return da.Value == nil || v.BitLen() == da.Value.BitLen()
+	case mms.TypeInteger:
+		lo, hi, ok := intRange(da.BType)
+		return !ok || (v.Int64() >= lo && v.Int64() <= hi)
+	case mms.TypeUnsigned:
+		_, hi, ok := intRange(da.BType)
+		return !ok || v.Uint64() <= uint64(hi)
+	}
+	return true
+}
+
+// intRange returns the value range of a sized SCL integer bType.
+func intRange(bType string) (lo, hi int64, ok bool) {
+	switch bType {
+	case "INT8":
+		return -1 << 7, 1<<7 - 1, true
+	case "INT16":
+		return -1 << 15, 1<<15 - 1, true
+	case "INT32":
+		return -1 << 31, 1<<31 - 1, true
+	case "INT8U":
+		return 0, 1<<8 - 1, true
+	case "INT16U":
+		return 0, 1<<16 - 1, true
+	case "INT32U":
+		return 0, 1<<32 - 1, true
+	}
+	return 0, 0, false
 }
 
 func (h *handler) getVariableAccess(content []byte) (*asn1.Element, error) {

@@ -18,7 +18,8 @@ import (
 
 // Client is a connection to an IEC 61850 server (IED).
 type Client struct {
-	mc *mms.Conn
+	mc  *mms.Conn
+	ctl *controlReports
 
 	// sem holds one token per request the association allows outstanding;
 	// see ReadAsync.
@@ -59,7 +60,9 @@ func Dial(ctx context.Context, addr string, opts ...Option) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{mc: mc}, nil
+	c := &Client{mc: mc, ctl: newControlReports()}
+	mc.OnInformationReport(c.ctl.handle)
+	return c, nil
 }
 
 // MMS returns the underlying MMS connection for advanced use.
@@ -68,8 +71,7 @@ func (c *Client) MMS() *mms.Conn { return c.mc }
 // Close releases the association.
 func (c *Client) Close() error { return c.mc.Close() }
 
-// State reports the connection state: the equivalent of libiec61850's
-// IedConnection_getState. Dial returns a Client only once the association
+// State reports the connection state. Dial returns a Client only once the association
 // is up, so a fresh Client is StateConnected; it turns StateClosed when
 // the peer or the transport drops the association, without a request
 // having to fail first, and StateClosing while Close is in progress.

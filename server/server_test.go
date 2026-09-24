@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -83,13 +84,15 @@ func TestServerClientLoopback(t *testing.T) {
 			t.Fatalf("read back %v, want 123.5", v.Float32())
 		}
 
-		// Client write to a config attribute, then confirm server-side.
+		// Configuration is not writable unless the server opts in
+		// (WithWritableFCs); the value must be left as it was.
 		ctlRef := model.ObjectReference(ld + "/GGIO1.SPCSO1.ctlModel")
-		if err := c.Write(ctx, ctlRef, model.CF, mms.NewInt32(4)); err != nil {
-			t.Fatalf("Write: %v", err)
+		before := srv.Read(ctlRef, model.CF)
+		if err := c.Write(ctx, ctlRef, model.CF, mms.NewInt32(4)); !errors.Is(err, mms.AccessObjectAccessDenied) {
+			t.Fatalf("Write CF: err = %v, want object-access-denied", err)
 		}
-		if got := srv.Read(ctlRef, model.CF); got == nil || got.Int64() != 4 {
-			t.Fatalf("server-side ctlModel = %v, want 4", got)
+		if got := srv.Read(ctlRef, model.CF); !got.Equal(before) {
+			t.Fatalf("refused write changed ctlModel to %v", got)
 		}
 	})
 

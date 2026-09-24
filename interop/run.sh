@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the bidirectional interop suite against libiec61850:
-#   1. our client against the C server_example_basic_io
+#   1. our client against the C server_example_basic_io, and its control
+#      services against server_example_control
 #   2. the C client_example1 / control example against our server
 #
 # It builds libiec61850 from source (cached under $WORK) and drives the
@@ -28,8 +29,10 @@ if [ ! -x "$LIB/examples/server_example_basic_io/server_example_basic_io" ]; the
 fi
 
 C_SERVER="$LIB/examples/server_example_basic_io/server_example_basic_io"
+C_CTL_SERVER="$LIB/examples/server_example_control/server_example_control"
 C_CLIENT="$LIB/examples/iec61850_client_example1/client_example1"
 PORT="${PORT:-10102}"
+CTL_PORT="${CTL_PORT:-10103}"
 
 cleanup() { [ -n "${SRV_PID:-}" ] && kill "$SRV_PID" 2>/dev/null || true; }
 trap cleanup EXIT
@@ -40,6 +43,15 @@ echo "== direction 1: our client -> C server =="
 SRV_PID=$!
 sleep 1
 IEC61850_TEST_SERVER="127.0.0.1:$PORT" go test "$REPO_ROOT/client/..." "$REPO_ROOT/mms/..." -run 'Interop' -v
+kill "$SRV_PID" 2>/dev/null || true
+SRV_PID=""
+
+echo
+echo "== direction 1b: our client -> C control server =="
+"$C_CTL_SERVER" "$CTL_PORT" >"$WORK/cctlserver.log" 2>&1 &
+SRV_PID=$!
+sleep 1
+IEC61850_TEST_CONTROL_SERVER="127.0.0.1:$CTL_PORT" go test "$REPO_ROOT/client/..." -run 'ControlInterop' -v
 kill "$SRV_PID" 2>/dev/null || true
 SRV_PID=""
 

@@ -31,6 +31,22 @@ type ServerConn struct {
 	unconf    chan []byte // async queue for unconfirmed PDUs (reports)
 	closeOnce sync.Once
 
+	// MaxPDU is the negotiated maximum MMS PDU size in octets (the
+	// localDetail of the Initiate exchange). Nothing this end sends may
+	// exceed it: longer responses become a resource error, and longer
+	// reports are segmented by the caller.
+	MaxPDU int
+
+	// While a confirmed request is being handled, unconfirmed PDUs are
+	// held so they reach the wire in the order the protocol requires
+	// relative to its response: before holds what must precede it (a
+	// LastApplError), after what must follow it (CommandTermination, the
+	// reports a write provokes). See SendUnconfirmed.
+	reqMu  sync.Mutex
+	inReq  bool
+	before [][]byte
+	after  [][]byte
+
 	// Called and Calling are the ACSE identities from the client's AARQ: who
 	// it addressed and who it claims to be. A client that fills in Called is
 	// checking which application entity it reached and will compare the
@@ -98,10 +114,11 @@ type Request struct {
 
 // AcceptOptions configures the server-side association handshake.
 type AcceptOptions struct {
-	// Initiate, when non-nil, supplies the parameters to answer with instead
-	// of echoing the client's proposal. A proxy sets this to the parameters
-	// the real device advertised, so its clients see the device's
-	// capabilities rather than their own request reflected back.
+	// Initiate, when non-nil, supplies the parameters to answer with; nil
+	// answers with DefaultServerInitiate. The servicesSupported bitmap
+	// states what this end implements and is never the client's own
+	// reflected back. A proxy sets it to the parameters the real device
+	// advertised, raw bitmaps included, so its clients see the device.
 	//
 	// The values are still bounded by the client's proposal where the
 	// protocol requires it: neither side may be asked to accept a larger PDU
@@ -165,10 +182,11 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	}
 
 	// Build the InitiateResponse -> AARE -> CPA -> session ACCEPT.
-	answer := negotiated
+	want := DefaultServerInitiate()
 	if opts.Initiate != nil {
-		answer = clampInitiate(*opts.Initiate, negotiated)
+		want = *opts.Initiate
 	}
+	answer := clampInitiate(want, negotiated)
 	initResp := EncodeInitiateResponse(answer)
 	opts.trace("tx InitiateResponse", initResp)
 	var responding acse.Identity
@@ -190,6 +208,7 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	}
 	sc := &ServerConn{
 		fr: &framing{cotp: ct}, raw: raw, Password: password, Peer: raw.RemoteAddr(),
+		MaxPDU:  int(answer.LocalDetail),
 		unconf:  make(chan []byte, 512),
 		Called:  identityFromACSE(areq.Called),
 		Calling: identityFromACSE(areq.Calling),
@@ -200,15 +219,44 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	return sc, nil
 }
 
+// DefaultServerInitiate is the answer of a server that names no
+// parameters: the services every IEC 61850 MMS server provides, and the
+// mandatory parameter CBB. A server offering more (datasets defined by
+// clients, files, journals) passes its own InitiateRequest.
+func DefaultServerInitiate() InitiateRequest {
+	return InitiateRequest{
+		LocalDetail:        65000,
+		MaxServOutstanding: 10,
+		NestingLevel:       10,
+		Services: NewServiceSupport(
+			ServiceGetNameList, ServiceIdentify, ServiceRead, ServiceWrite,
+			ServiceGetVariableAccessAttributes, ServiceGetNamedVariableListAttributes,
+			ServiceInformationReport, ServiceConclude,
+		),
+	}
+}
+
 // clampInitiate limits the parameters we answer with to what the client
 // proposed, where the protocol requires the responder not to exceed the
-// initiator's offer. The service and parameter bitmaps are ours to state and
-// pass through untouched — they describe what this end supports, not a
-// negotiated minimum.
+// initiator's offer. The servicesSupported bitmap is ours to state and
+// passes through untouched: it describes what this end implements. The
+// parameter CBB is negotiated (ISO 9506-2): the answer is what both ends
+// support, unless want carries raw octets to reproduce verbatim.
 func clampInitiate(want, proposed InitiateRequest) InitiateRequest {
 	out := want
+	if want.ParameterCBBRaw == nil && proposed.ParameterCBBRaw != nil {
+		out.ParameterCBBRaw = intersectParameterCBB(parameterCBB(), proposed.ParameterCBBRaw)
+	}
 	if proposed.LocalDetail > 0 && (out.LocalDetail == 0 || out.LocalDetail > proposed.LocalDetail) {
 		out.LocalDetail = proposed.LocalDetail
+	}
+	// Calling and called default to the single value, so a caller naming
+	// only MaxServOutstanding is not overruled by a larger proposal.
+	if out.MaxServOutstandingCalling == 0 {
+		out.MaxServOutstandingCalling = out.MaxServOutstanding
+	}
+	if out.MaxServOutstandingCalled == 0 {
+		out.MaxServOutstandingCalled = out.MaxServOutstanding
 	}
 	clamp := func(ours, theirs int) int {
 		if theirs > 0 && (ours == 0 || ours > theirs) {
@@ -289,16 +337,74 @@ func (sc *ServerConn) handleConfirmed(content []byte, h Handler) error {
 		Content:  serviceContent,
 		Conn:     sc,
 	}
+	sc.beginRequest()
 	resp, herr := h.Handle(req)
-	if herr != nil {
-		return sc.sendError(invokeID, herr)
+	before, after := sc.endRequest()
+	for _, pdu := range before {
+		if err := sc.send(pdu); err != nil {
+			return err
+		}
 	}
-	// ConfirmedResponsePDU ::= [1] SEQUENCE { invokeID, service }
-	out := asn1.Cons(tagConfirmedResponse,
-		asn1.UintElem(asn1.TagInteger, uint64(invokeID)),
-		resp,
-	).Encode()
-	return sc.send(out)
+	err = nil
+	if herr != nil {
+		err = sc.sendError(invokeID, herr)
+	} else {
+		// ConfirmedResponsePDU ::= [1] SEQUENCE { invokeID, service }
+		out := asn1.Cons(tagConfirmedResponse,
+			asn1.UintElem(asn1.TagInteger, uint64(invokeID)),
+			resp,
+		).Encode()
+		if sc.MaxPDU > 0 && len(out) > sc.MaxPDU {
+			// The peer cannot accept a PDU this long; ISO 9506 answers
+			// with a resource error rather than sending it anyway.
+			err = sc.sendError(invokeID, &ServiceError{Class: errClassResource, Code: 0})
+		} else {
+			err = sc.send(out)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	// Queued behind the response, in order with any earlier reports.
+	for _, pdu := range after {
+		sc.enqueue(pdu)
+	}
+	return nil
+}
+
+// errClassResource is the resource errorClass of an MMS ServiceError
+// (ISO 9506-2); code 0 within it is "other".
+const errClassResource = 3
+
+func (sc *ServerConn) beginRequest() {
+	sc.reqMu.Lock()
+	sc.inReq = true
+	sc.reqMu.Unlock()
+}
+
+func (sc *ServerConn) endRequest() (before, after [][]byte) {
+	sc.reqMu.Lock()
+	defer sc.reqMu.Unlock()
+	sc.inReq = false
+	before, after = sc.before, sc.after
+	sc.before, sc.after = nil, nil
+	return before, after
+}
+
+// hold keeps pdu for the request in progress, reporting false when there
+// is none. first selects the list sent ahead of the response.
+func (sc *ServerConn) hold(pdu []byte, first bool) bool {
+	sc.reqMu.Lock()
+	defer sc.reqMu.Unlock()
+	if !sc.inReq {
+		return false
+	}
+	if first {
+		sc.before = append(sc.before, pdu)
+	} else {
+		sc.after = append(sc.after, pdu)
+	}
+	return true
 }
 
 func (sc *ServerConn) sendError(invokeID uint32, herr error) error {
@@ -353,8 +459,33 @@ func errorClassChoice(err error) (tagNum uint32, value int64) {
 // queue is full (a slow or stalled client), the report is dropped rather
 // than stalling the server, which is the buffer-overflow condition the
 // protocol already models for reporting.
+//
+// While a confirmed request is being handled the PDU is held and sent
+// after that request's response: a CommandTermination follows the operate
+// it terminates (IEC 61850-8-1), and reports provoked by a write follow the
+// write's response. Reports from other activity are delayed only by the
+// time the request takes.
 func (sc *ServerConn) SendUnconfirmed(service *asn1.Element) error {
 	pdu := asn1.Cons(tagUnconfirmed, service).Encode()
+	if sc.hold(pdu, false) {
+		return nil
+	}
+	return sc.enqueue(pdu)
+}
+
+// SendUnconfirmedFirst is SendUnconfirmed for a PDU that must precede the
+// response of the request being handled, as a LastApplError precedes the
+// negative response to the control it explains (IEC 61850-8-1). Outside a
+// request it behaves as SendUnconfirmed.
+func (sc *ServerConn) SendUnconfirmedFirst(service *asn1.Element) error {
+	pdu := asn1.Cons(tagUnconfirmed, service).Encode()
+	if sc.hold(pdu, true) {
+		return nil
+	}
+	return sc.enqueue(pdu)
+}
+
+func (sc *ServerConn) enqueue(pdu []byte) error {
 	select {
 	case sc.unconf <- pdu:
 	default:

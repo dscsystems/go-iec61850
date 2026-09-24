@@ -12,7 +12,32 @@ import (
 // drive any reports whose dataset includes the changed attributes.
 type Tx struct {
 	s       *Server
-	changed map[model.ObjectReference]bool
+	changed changeSet
+}
+
+// change identifies a written leaf. The same reference can exist under
+// several functional constraints, and a change under CF is no change to a
+// dataset member under ST.
+type change struct {
+	ref model.ObjectReference
+	fc  model.FC
+}
+
+// changeSet records the leaves an update wrote and the trigger reasons
+// each write raised.
+type changeSet map[change]model.TrgOps
+
+// record notes a write of v over old to the leaf da at ref. It raises the
+// attribute's dchg or qchg when the value changed and its dupd whenever it
+// was written (IEC 61850-7-2); an attribute without trigger options, a
+// timestamp for one, raises nothing.
+func (cs changeSet) record(ref model.ObjectReference, da *model.DataAttribute, old, v *mms.Value) {
+	var r model.TrgOps
+	if old == nil || !old.Equal(v) {
+		r |= da.TrgOps & (model.TrgDataChange | model.TrgQualityChange)
+	}
+	r |= da.TrgOps & model.TrgDataUpdate
+	cs[change{ref, da.FC}] |= r
 }
 
 // Get returns the current value of the leaf attribute at ref under FC fc,
@@ -45,8 +70,9 @@ func (tx *Tx) Set(ref model.ObjectReference, fc model.FC, v *mms.Value) {
 		tx.s.log.Warn("server: Update to unknown/structured attribute", "ref", ref, "fc", fc.String())
 		return
 	}
+	old := da.Value
 	da.Value = v
-	tx.changed[ref] = true
+	tx.changed.record(ref, da, old, v)
 }
 
 // SetFloat32 sets a float measurand (FC MX by convention).

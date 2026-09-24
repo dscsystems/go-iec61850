@@ -34,6 +34,16 @@ type RCB struct {
 	item   string // "LN$RP$name"
 }
 
+// reportID is the RptID the block's reports carry: its RptID attribute,
+// or when that is empty the block's own reference in MMS form, which a
+// server substitutes (IEC 61850-7-2).
+func (rcb *RCB) reportID() string {
+	if rcb.RptID != "" {
+		return rcb.RptID
+	}
+	return rcb.domain + "/" + rcb.item
+}
+
 // rcbRefToMMS converts "LD/LN.RP.name" to domain "LD" and item
 // "LN$RP$name".
 func rcbRefToMMS(ref model.ObjectReference) (domain, item string) {
@@ -160,9 +170,10 @@ func (c *Client) EnableReporting(ctx context.Context, rcb *RCB, cb func(*Report)
 	// Register the report handler before enabling. The registration is
 	// additive, so other subscriptions on this connection keep theirs; each
 	// handler filters on its own RptID and drops reports for the others.
+	rptID := rcb.reportID()
 	remove := c.mc.OnInformationReport(func(ir *mms.InformationReport) {
 		rep := decodeReport(ir, rcb, members)
-		if rep != nil && rep.RptID == rcb.RptID {
+		if rep != nil && rep.RptID == rptID {
 			cb(rep)
 		}
 	})

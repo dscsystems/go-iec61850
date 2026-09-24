@@ -42,6 +42,7 @@ pull request.
 | Datasets | ✓ | ✓ |
 | Reporting (URCB, GI/dchg/integrity) | ✓ | ✓ |
 | Control (direct-normal, direct-enhanced) | ✓ | ✓ |
+| Control: SBO-enhanced, CommandTermination±, LastApplError | ✓ | |
 
-SBO-with-normal-security select reservation is not yet implemented on the
-server side.
+SBO with normal security is implemented on the server (`server/select.go`)
+and covered by the unit tests; it has no interop assertion yet.

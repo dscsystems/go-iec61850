@@ -431,3 +431,37 @@ func TestEveryCDCBuilds(t *testing.T) {
 		}
 	}
 }
+
+// Built data objects carry the trigger options of IEC 61850-7-3, down to
+// the leaves an update writes.
+func TestNewDataObjectTriggerOptions(t *testing.T) {
+	mv := NewDataObject("AnIn1", CDCMV)
+	want := map[string]TrgOps{
+		"mag": TrgDataChange | TrgDataUpdate,
+		"q":   TrgQualityChange,
+		"t":   0,
+	}
+	for _, a := range mv.Attributes {
+		w, ok := want[a.Name]
+		if !ok {
+			continue
+		}
+		if a.TrgOps != w {
+			t.Errorf("%s: TrgOps %v, want %v", a.Name, a.TrgOps, w)
+		}
+		for _, c := range a.Children {
+			if c.TrgOps != w {
+				t.Errorf("%s.%s: TrgOps %v, want %v inherited", a.Name, c.Name, c.TrgOps, w)
+			}
+		}
+	}
+	spc := NewDataObject("SPCSO1", CDCSPC, WithControlModel(CtlDirectNormal))
+	for _, a := range spc.Attributes {
+		if a.FC == CO && a.TrgOps != 0 {
+			t.Errorf("control structure %s has trigger options %v", a.Name, a.TrgOps)
+		}
+		if a.Name == "stVal" && a.TrgOps != TrgDataChange {
+			t.Errorf("stVal: TrgOps %v, want dchg", a.TrgOps)
+		}
+	}
+}

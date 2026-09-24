@@ -7,8 +7,31 @@ import (
 	"github.com/dscsystems/go-iec61850/model"
 )
 
-// selectTimeout is how long an SBO reservation is held without an operate.
-const selectTimeout = 30 * time.Second
+// defaultSelectTimeout is how long an SBO reservation is held without an
+// operate when the object declares no sboTimeout.
+const defaultSelectTimeout = 30 * time.Second
+
+// sboTimeout is the object's sboTimeout (FC CF, milliseconds), the time a
+// selection stays valid (IEC 61850-7-2).
+func (s *Server) sboTimeout(ref model.ObjectReference) time.Duration {
+	if d := s.cfMillis(ref, "sboTimeout"); d > 0 {
+		return d
+	}
+	return defaultSelectTimeout
+}
+
+// operTimeout is the object's operTimeout (FC CF, milliseconds): how long
+// an enhanced-security operate may take to terminate. Zero when absent.
+func (s *Server) operTimeout(ref model.ObjectReference) time.Duration {
+	return s.cfMillis(ref, "operTimeout")
+}
+
+func (s *Server) cfMillis(ref model.ObjectReference, name string) time.Duration {
+	if a := s.model.Attribute(ref.Child(name), model.CF); a != nil && a.Value != nil {
+		return time.Duration(a.Value.Uint64()) * time.Millisecond
+	}
+	return 0
+}
 
 // selection is an active SBO reservation of a control object.
 type selection struct {
@@ -26,6 +49,11 @@ type selection struct {
 // object is already selected by another client. Not applicable to
 // direct-control objects, which have no SBO attribute.
 func (s *Server) selectSBO(ref model.ObjectReference, conn *mms.ServerConn) string {
+	// Only an SBO-with-normal-security object is selected by reading SBO.
+	if cm := s.model.Attribute(ref.Child("ctlModel"), model.CF); cm != nil && cm.Value != nil &&
+		model.CtlModel(cm.Value.Int64()) != model.CtlSBONormal {
+		return ""
+	}
 	if !s.reserve(ref, conn, 0, false) {
 		return "" // reserved by another client
 	}
@@ -49,7 +77,7 @@ func (s *Server) reserve(ref model.ObjectReference, conn *mms.ServerConn, ctlNum
 	}
 	s.selections[ref] = &selection{
 		conn:      conn,
-		expiry:    time.Now().Add(selectTimeout),
+		expiry:    time.Now().Add(s.sboTimeout(ref)),
 		ctlNum:    ctlNum,
 		hasCtlNum: hasCtlNum,
 	}

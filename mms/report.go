@@ -111,12 +111,21 @@ func parseInformationReport(body []byte) *InformationReport {
 // Each entry is a CHOICE whose name [0] alternative carries an ObjectName;
 // other alternatives (address, variableDescription, scatteredAccess) leave an
 // empty entry so the positions still line up with listOfAccessResult.
+// parseVarSpecList decodes listOfVariable, a SEQUENCE OF SEQUENCE {
+// variableSpecification, alternateAccess [5] OPTIONAL } (ISO 9506-2). The
+// name is inside each entry's SEQUENCE; an entry sent without it is
+// accepted too.
 func parseVarSpecList(content []byte, rep *InformationReport) {
 	dec := asn1.NewDecoder(content)
 	for dec.More() {
 		tag, vs, err := dec.ReadTLV()
 		if err != nil {
 			return
+		}
+		if tag == asn1.TagSequence {
+			if tag, vs, err = asn1.NewDecoder(vs).ReadTLV(); err != nil {
+				return
+			}
 		}
 		var ref VarRef
 		if tag == asn1.ContextConstructed(0) { // name [0] ObjectName

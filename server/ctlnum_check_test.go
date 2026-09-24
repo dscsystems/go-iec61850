@@ -87,13 +87,15 @@ func writeCtl(t *testing.T, ctx context.Context, c *client.Client, phase string,
 	return nil
 }
 
+// lastAddCause is the AddCause of the LastApplError the server reported
+// ahead of its most recent negative control response (IEC 61850-8-1).
 func lastAddCause(t *testing.T, ctx context.Context, c *client.Client) model.AddCause {
 	t.Helper()
-	v, err := c.Read(ctx, "SELIED/LLN0.LastApplError.AddCause", model.ST)
-	if err != nil {
-		t.Fatalf("read LastApplError: %v", err)
+	e, ok := c.LastApplError()
+	if !ok {
+		t.Fatal("no LastApplError was reported")
 	}
-	return model.AddCause(v.Int64())
+	return e.AddCause
 }
 
 // An operate carrying a different ctlNum from the select belongs to another

@@ -39,6 +39,10 @@ type Server struct {
 	// WithReportBufferSize.
 	reportBufSize int
 
+	// writable is the set of functional constraints clients may write
+	// with SetDataValues; see WithWritableFCs.
+	writable map[model.FC]bool
+
 	selMu      sync.Mutex
 	selections map[model.ObjectReference]*selection
 
@@ -118,6 +122,31 @@ func WithFileStore(fsys fs.FS) Option {
 	return func(s *Server) { s.files = newFileStore(fsys) }
 }
 
+// WithWritableFCs sets the functional constraints whose data attributes
+// clients may write, replacing the default of SP, SV and SE. CF, DC and BL
+// are writable in IEC 61850-7-2 but change configuration, descriptions
+// and blocking, so a server opts in to them.
+//
+// ST, MX, OR, EX and SG are never writable: IEC 61850-7-2 makes status,
+// measurements, originators, extensions and active settings read-only,
+// and a listed one is ignored. Control (CO), report (RP, BR) and setting
+// group control block attributes have their own services and rules.
+func WithWritableFCs(fcs ...model.FC) Option {
+	return func(s *Server) { s.writable = fcSet(fcs...) }
+}
+
+func fcSet(fcs ...model.FC) map[model.FC]bool {
+	set := make(map[model.FC]bool, len(fcs))
+	for _, fc := range fcs {
+		switch fc {
+		case model.ST, model.MX, model.OR, model.EX, model.SG:
+			continue
+		}
+		set[fc] = true
+	}
+	return set
+}
+
 // WithMaxConnections caps the number of client connections served at once.
 // A client arriving at the cap is dropped at the transport, before any
 // association is set up, and reported as ConnectionRefused. Zero, the
@@ -148,6 +177,7 @@ func New(m *model.Model, opts ...Option) *Server {
 		log:      slog.New(slog.DiscardHandler),
 		identity: Identity{Vendor: "go-iec61850", Model: m.Name, Revision: "0.1"},
 		conns:    make(map[*mms.ServerConn]struct{}),
+		writable: fcSet(model.SP, model.SV, model.SE),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -205,6 +235,27 @@ func (s *Server) Serve(ln net.Listener) error {
 	}
 }
 
+// initiate is the MMS Initiate this server answers with. Its
+// servicesSupported bitmap lists exactly the services the handler
+// implements: clients gate features on it, so an unimplemented service
+// must not appear and an implemented one must not be missing.
+func (s *Server) initiate() mms.InitiateRequest {
+	init := mms.DefaultServerInitiate()
+	services := []int{
+		mms.ServiceGetNameList, mms.ServiceIdentify, mms.ServiceRead, mms.ServiceWrite,
+		mms.ServiceGetVariableAccessAttributes,
+		mms.ServiceDefineNamedVariableList, mms.ServiceGetNamedVariableListAttributes,
+		mms.ServiceDeleteNamedVariableList,
+		mms.ServiceInformationReport, mms.ServiceConclude,
+	}
+	if s.files != nil {
+		services = append(services, mms.ServiceFileOpen, mms.ServiceFileRead,
+			mms.ServiceFileClose, mms.ServiceFileDirectory)
+	}
+	init.Services = mms.NewServiceSupport(services...)
+	return init
+}
+
 func (s *Server) serveConn(raw net.Conn) {
 	defer raw.Close()
 	addr := raw.RemoteAddr()
@@ -219,7 +270,8 @@ func (s *Server) serveConn(raw net.Conn) {
 		return
 	}
 
-	sc, err := mms.AcceptConn(raw)
+	init := s.initiate()
+	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init})
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()
@@ -326,7 +378,7 @@ func (s *Server) Close() error {
 // pushing new measurement and status values.
 func (s *Server) Update(fn func(tx *Tx)) {
 	s.mu.Lock()
-	tx := &Tx{s: s, changed: make(map[model.ObjectReference]bool)}
+	tx := &Tx{s: s, changed: make(changeSet)}
 	fn(tx)
 	s.reports.onUpdate(tx.changed)
 	s.mu.Unlock()

@@ -304,7 +304,9 @@ func (b *builder) buildDA(name string, fc model.FC, bType, typeID, count string,
 		da.Kind = mms.TypeStructure
 		for i := range dat.BDAs {
 			bda := &dat.BDAs[i]
-			child, err := b.buildDA(bda.Name, fc, bda.BType, bda.Type, bda.Count, 0, bda.Vals, depth+1)
+			// A DA's trigger options cover all its components: a change
+			// to mag.f is a change of mag (IEC 61850-7-2).
+			child, err := b.buildDA(bda.Name, fc, bda.BType, bda.Type, bda.Count, trg, bda.Vals, depth+1)
 			if err != nil {
 				return nil, fmt.Errorf("BDA %s: %w", bda.Name, err)
 			}
@@ -614,6 +616,12 @@ func buildReportControl(r *ReportControl) *model.ReportControl {
 	rc.RptEnabled = 1
 	if r.RptEnab != nil && r.RptEnab.Max > 0 {
 		rc.RptEnabled = r.RptEnab.Max
+	}
+	// IEC 61850-6: an unindexed block is a single instance under its own
+	// name, whatever RptEnabled says.
+	if ix := strings.TrimSpace(r.Indexed); ix == "false" || ix == "0" {
+		rc.NotIndexed = true
+		rc.RptEnabled = 1
 	}
 	if of := r.OptFields; of != nil {
 		set := func(on bool, f model.OptFlds) {

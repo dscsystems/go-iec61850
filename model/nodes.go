@@ -82,6 +82,10 @@ type ReportControl struct {
 	OptFlds    OptFlds
 	IntgPd     uint32 // ms
 	RptEnabled int    // max enabled instances (indexed RCBs)
+	// NotIndexed is SCL indexed="false": the block has exactly one
+	// instance, named Name with no "01".."99" suffix. The zero value is
+	// the schema default, indexed.
+	NotIndexed bool
 	// MaxQueueSize is how many reports a buffered control block retains
 	// while no subscriber is enabled. Zero leaves it to the server's own
 	// default. It has no meaning for an unbuffered control block.

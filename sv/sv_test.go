@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/asn1"
 	"github.com/dscsystems/go-iec61850/ethernet"
 )
 
@@ -26,6 +27,41 @@ func TestPDURoundTrip(t *testing.T) {
 	}
 	if got.ASDUs[1].SmpCnt != 43 || got.ASDUs[0].SvID != "MU01" {
 		t.Fatalf("asdu fields: %+v", got.ASDUs)
+	}
+}
+
+// TestASDUFixedSizeFields pins the fixed-size OCTET STRING fields of the
+// 9-2 ASDU. smpCnt is 2 octets and confRev 4, whatever their values: a
+// subscriber that checks the sizes rejects an ASDU with a minimal encoding.
+func TestASDUFixedSizeFields(t *testing.T) {
+	for _, rev := range []uint32{0, 1, 0x80, 0x01020304, 0xffffffff} {
+		a := &ASDU{SvID: "MU01", SmpCnt: 7, ConfRev: rev, Sample: make([]byte, leSampleLen)}
+		fields := map[uint32][]byte{}
+		d := asn1.NewDecoder(a.element().Encode())
+		content, err := d.Expect(asn1.TagSequence)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for fd := asn1.NewDecoder(content); fd.More(); {
+			tag, v, err := fd.ReadTLV()
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields[tag.Number] = v
+		}
+		if got := fields[2]; len(got) != 2 {
+			t.Errorf("confRev=%#x: smpCnt is %d octets, want 2", rev, len(got))
+		}
+		if got := fields[3]; len(got) != 4 {
+			t.Errorf("confRev=%#x: confRev is %d octets, want 4", rev, len(got))
+		}
+		back, err := parseASDU(content)
+		if err != nil {
+			t.Fatalf("confRev=%#x: parse: %v", rev, err)
+		}
+		if back.ConfRev != rev {
+			t.Errorf("confRev=%#x: decoded %#x", rev, back.ConfRev)
+		}
 	}
 }
 

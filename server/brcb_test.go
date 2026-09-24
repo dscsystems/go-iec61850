@@ -47,6 +47,12 @@ func TestBufferedReporting(t *testing.T) {
 	}
 
 	// Change a dataset member BEFORE enabling: the BRCB must buffer it.
+	// The block is configured with period only, so a data change is a
+	// trigger only once dchg is set; it is set first, as a client would.
+	trgRef := model.ObjectReference(ld + "/LLN0." + brcb + ".TrgOps")
+	if err := c.Write(ctx, trgRef, model.BR, (model.TrgDataChange | model.TrgGI).Value()); err != nil {
+		t.Fatalf("write TrgOps: %v", err)
+	}
 	member := firstDatasetMember(t, ctx, c, rcb)
 	srv.Update(func(tx *server.Tx) { tx.SetBool(member, true) })
 	srv.Update(func(tx *server.Tx) { tx.SetBool(member, false) })

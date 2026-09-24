@@ -105,7 +105,9 @@ func (e *ControlError) Unwrap() error { return e.Err }
 
 // Operate performs a complete control operation appropriate to the model:
 // for SBO models it selects first; for enhanced models it awaits the
-// CommandTermination. value is the ctlVal (bool for SPC/DPC, numeric for
+// CommandTermination, and a CommandTermination- fails the operation with
+// its AddCause. The wait ends with ctx, or after TerminationTimeout when
+// ctx has no deadline. value is the ctlVal (bool for SPC/DPC, numeric for
 // INC/APC).
 func (co *ControlObject) Operate(ctx context.Context, value *mms.Value, opts ...ControlOption) error {
 	p := co.params(opts)
@@ -150,7 +152,8 @@ func (co *ControlObject) doSelect(ctx context.Context, value *mms.Value, p *cont
 	}
 	// SBOw: write the operate structure to SBOw. This opens the sequence;
 	// the operate that follows repeats this control number.
-	oper := co.buildOper(value, p, co.beginSequence())
+	num := co.beginSequence()
+	oper := co.buildOper(value, p, num)
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$SBOw"}, []*mms.Value{oper})
 	if err != nil {
 		co.endSequence()
@@ -158,41 +161,70 @@ func (co *ControlObject) doSelect(ctx context.Context, value *mms.Value, p *cont
 	}
 	if len(results) > 0 && results[0] != nil {
 		co.endSequence()
-		return &ControlError{Stage: "select", Err: results[0], AddCause: co.lastApplError(ctx)}
+		return &ControlError{Stage: "select", Err: results[0], AddCause: co.lastApplError("SBOw", num)}
 	}
 	return nil
 }
 
+// TerminationTimeout bounds the wait for the CommandTermination of an
+// enhanced-security operate when the caller's context has no deadline.
+const TerminationTimeout = 30 * time.Second
+
 func (co *ControlObject) doOperate(ctx context.Context, value *mms.Value, p *controlParams) error {
 	// Reuses the select's control number when a sequence is open, and the
 	// sequence ends here either way.
-	oper := co.buildOper(value, p, co.beginSequence())
+	num := co.beginSequence()
+	oper := co.buildOper(value, p, num)
 	defer co.endSequence()
+
+	// An enhanced-security operate is concluded by a CommandTermination
+	// (IEC 61850-7-2); the interest is registered before the operate so
+	// the termination cannot arrive unobserved.
+	var term <-chan model.AddCause
+	if co.model.Enhanced() {
+		ch, release := co.c.ctl.await(co.domain+"/"+co.do+"$Oper", num)
+		defer release()
+		term = ch
+	}
+
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$Oper"}, []*mms.Value{oper})
 	if err != nil {
 		return &ControlError{Stage: "operate", Err: err}
 	}
 	if len(results) > 0 && results[0] != nil {
-		return &ControlError{Stage: "operate", Err: results[0], AddCause: co.lastApplError(ctx)}
+		return &ControlError{Stage: "operate", Err: results[0], AddCause: co.lastApplError("Oper", num)}
 	}
-	// Enhanced models confirm asynchronously via CommandTermination; the
-	// positive write already indicates the operate was accepted. Awaiting
-	// the termination is left to the caller via the information-report
-	// stream for now.
-	return nil
+	if term == nil {
+		return nil
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, TerminationTimeout)
+		defer cancel()
+	}
+	select {
+	case cause := <-term:
+		if cause != model.AddCauseNone {
+			return &ControlError{Stage: "termination", AddCause: cause}
+		}
+		return nil
+	case <-ctx.Done():
+		return &ControlError{Stage: "termination", Err: ctx.Err()}
+	}
 }
 
 // Cancel aborts a selection or operation. It carries the control number of
 // the sequence being cancelled, which is how the server identifies it.
 func (co *ControlObject) Cancel(ctx context.Context, opts ...ControlOption) error {
-	oper := co.buildOper(mms.NewBool(false), co.params(opts), co.beginSequence())
+	num := co.beginSequence()
+	oper := co.buildOper(mms.NewBool(false), co.params(opts), num)
 	defer co.endSequence()
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$Cancel"}, []*mms.Value{oper})
 	if err != nil {
 		return &ControlError{Stage: "cancel", Err: err}
 	}
 	if len(results) > 0 && results[0] != nil {
-		return &ControlError{Stage: "cancel", Err: results[0]}
+		return &ControlError{Stage: "cancel", Err: results[0], AddCause: co.lastApplError("Cancel", num)}
 	}
 	return nil
 }
@@ -326,14 +358,14 @@ func (co *ControlObject) buildOper(value *mms.Value, p *controlParams, ctlNum ui
 	)
 }
 
-// lastApplError reads the LastApplError to recover the additional cause of
-// a rejected control (best effort).
-func (co *ControlObject) lastApplError(ctx context.Context) model.AddCause {
-	vals, err := co.c.mc.Read(ctx, co.domain, "LLN0$ST$LastApplError$AddCause")
-	if err != nil || len(vals) == 0 {
+// lastApplError returns the additional cause the server gave for refusing
+// the phase ("SBOw", "Oper", "Cancel") with control number num: the
+// LastApplError it reports ahead of a negative response (IEC 61850-8-1).
+func (co *ControlObject) lastApplError(phase string, num uint8) model.AddCause {
+	if co.c.ctl == nil {
 		return model.AddCauseUnknown
 	}
-	return model.AddCause(vals[0].Int64())
+	return co.c.ctl.lastApplErrorFor(co.domain+"/"+co.do+"$"+phase, num)
 }
 
 func (co *ControlObject) params(opts []ControlOption) *controlParams {

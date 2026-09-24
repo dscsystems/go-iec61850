@@ -177,6 +177,7 @@ func NewDataObject(name string, cdc CDC, opts ...CDCOption) *DataObject {
 	do := &DataObject{Name: name, CDC: string(cdc)}
 	for _, a := range spec.attrs {
 		if da := b.attribute(a); da != nil {
+			inheritTrgOps(da)
 			do.Attributes = append(do.Attributes, da)
 		}
 	}
@@ -202,7 +203,7 @@ func (b *cdcBuild) attribute(a CDCAttribute) *DataAttribute {
 	if fc == SP {
 		fc = b.settingFC
 	}
-	da := &DataAttribute{Name: a.Name, FC: fc, Kind: a.Kind}
+	da := &DataAttribute{Name: a.Name, FC: fc, Kind: a.Kind, TrgOps: cdcTrgOps(a.Name, fc)}
 	if a.Kind == mms.TypeStructure {
 		for _, c := range a.Children {
 			// AnalogueValue carries i or f; exactly one is built.
@@ -226,7 +227,7 @@ func (b *cdcBuild) attribute(a CDCAttribute) *DataAttribute {
 }
 
 // attributeFC materialises a member of a structure, which inherits its
-// parent's functional constraint.
+// parent's functional constraint and trigger options.
 func (b *cdcBuild) attributeFC(a CDCAttribute, fc FC) *DataAttribute {
 	if a.Optional && !b.optional[a.Name] {
 		return nil
@@ -236,8 +237,41 @@ func (b *cdcBuild) attributeFC(a CDCAttribute, fc FC) *DataAttribute {
 	da := b.attribute(child)
 	if da != nil {
 		da.FC = fc
+		da.TrgOps = 0 // inherited from the enclosing attribute below
 	}
 	return da
+}
+
+// inheritTrgOps gives every component of a structured attribute the
+// attribute's own trigger options, which cover all of it.
+func inheritTrgOps(da *DataAttribute) {
+	for _, c := range da.Children {
+		c.TrgOps = da.TrgOps
+		inheritTrgOps(c)
+	}
+}
+
+// cdcTrgOps is the trigger option of a common data class attribute,
+// following the tables of IEC 61850-7-3: q is qchg; the timestamp and the
+// deadbanded-away instantaneous values trigger nothing; the analogue and
+// counter values also trigger on update; every other status, measurand,
+// setting and configuration attribute is dchg. Control structures and
+// extensions trigger nothing.
+func cdcTrgOps(name string, fc FC) TrgOps {
+	switch fc {
+	case ST, MX, SP, SG, SE, SV, CF, DC, BL:
+	default:
+		return 0
+	}
+	switch name {
+	case "q":
+		return TrgQualityChange
+	case "t", "instMag", "instCVal", "frTm", "subVal", "subMag", "subCVal", "subQ", "subID", "subEna":
+		return 0
+	case "mag", "cVal", "actVal", "frVal":
+		return TrgDataChange | TrgDataUpdate
+	}
+	return TrgDataChange
 }
 
 // isAnalogue reports whether a structure is an AnalogueValue, whose i and

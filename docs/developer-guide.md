@@ -64,8 +64,8 @@ Context tags: `ContextPrimitive(n)`, `ContextConstructed(n)`,
 
 ## MMS specifics that bite
 
-These were all found by interop testing against libiec61850 and are the
-things most likely to trip up a new service:
+These were all found by interop testing against a reference C stack and
+are the things most likely to trip up a new service:
 
 - **`variableAccessSpecification` tagging is asymmetric.** In `ReadRequest`
   it is `[1] EXPLICIT`; in `WriteRequest` it is untagged (the CHOICE tags
@@ -85,9 +85,9 @@ things most likely to trip up a new service:
   `internal/osi/session`.
 
 When adding a service, the reliable method is: read the observable wire
-behaviour of a reference stack (libiec61850's asn1c-generated member tables
-under `src/mms/iso_mms/asn1c/*.c` show exact tag numbers and implicit/
-explicit modes), encode to match, then verify against a live server. Never
+behaviour of a reference stack (ASN.1-compiler-generated member tables, where
+a stack ships them, show exact tag numbers and implicit/explicit modes),
+encode to match, then verify against a live server. Never
 copy code — see [licensing](#licensing).
 
 ## Reporting engine (`server`)
@@ -97,27 +97,59 @@ Report control blocks are **materialised into the model** at `New` time
 `RP`/`BR` with the standard attributes, so they read/write through the
 normal path. Indexed instances (`Name01…NameNN`) match IEC 61850-6.
 
-The engine (`server/reporting.go`) reacts to writes of `RptEna`/`GI`/
-`EntryID`/`PurgeBuf` and to `Update` transactions. `Update` records the set
-of changed references; after the transaction the engine emits data-change
-reports for enabled RCBs whose dataset intersects the change set. BRCBs also
-buffer every event (ring buffer, monotonic EntryID) so they can be flushed
-on a later enable, honouring a resync EntryID.
+The engine (`server/reporting.go`) follows IEC 61850-7-2 clause 17. RCB writes
+go through two steps:
 
-The report wire format is the IEC 61850-8-1 layout: a `variableListName`
-of `"RPT"` plus a flat `listOfAccessResult` whose fields are driven by the
-`OptFlds` bit string (RptID, OptFlds, [SqNum], [TimeOfEntry], [DatSet],
-[BufOvfl], [EntryID], [ConfRev], inclusion-bitstring, values, [reasons]).
-The decoder (`client/report.go`) walks the same layout driven by the
-OptFlds present in the report itself.
+- `checkRCBWrite` runs **before** anything is stored. It enforces the
+  reservation: the first client to write a block owns it, and anyone else gets
+  temporarily-unavailable. It also locks the settings while the block is
+  enabled, and validates `DatSet` and `EntryID`.
+- `onRCBWrite` applies the effect afterwards: enable/disable, GI, PurgeBuf,
+  resync point, and the `ConfRev` increment when `DatSet` changes.
+
+Changes arrive as a `changeSet` from `Update`, from client writes and from
+operated controls. The changeSet records, per leaf and FC, the trigger reasons
+the write raised: the attribute's dchg or qchg when its value changed, and its
+dupd on any write. The attribute's trigger options come from the SCL DA (or
+the 7-3 conventions in `model/cdc.go`), and its components inherit them. A
+dataset member is included for those reasons ANDed with the block's `TrgOps`.
+Events then wait in a `BufTm` window before becoming a `reportEntry`.
+
+Everything about the moment of sending is added at transmission: SqNum
+(INT8U for URCB, INT16U for BRCB, wrapping), BufOvfl and segmentation. A BRCB
+keeps its entries in a buffer with a `next` index, so re-enabling resumes
+where delivery stopped instead of replaying the buffer.
+
+The report wire format is the IEC 61850-8-1 layout: a `variableListName` of
+`"RPT"` plus a flat `listOfAccessResult`. The `OptFlds` bit string drives which
+fields it holds: RptID, OptFlds, [SqNum], [TimeOfEntry], [DatSet], [BufOvfl],
+[EntryID], [ConfRev], [SubSeqNum, MoreSegmentsFollow], the inclusion
+bitstring, [data references], values, and [reasons]. A report longer than the
+association's `MaxPDU` is split into segments. The decoder
+(`client/report.go`) walks the same layout, driven by the OptFlds present in
+the report itself.
 
 ## Control (`server`)
 
 Writes to `…$CO$…$Oper`/`$SBOw`/`$Cancel` and reads of `…$SBO` are
-intercepted in the handler and routed to `server/control.go` /
-`server/select.go`. SBO models require a select reservation (per connection,
-30 s timeout); enhanced models send a positive CommandTermination as an
-unconfirmed InformationReport after the operate.
+intercepted in the handler and routed to `server/control.go` and
+`server/select.go`. The rules:
+
+- A refusal sends a VMD-specific `LastApplError` InformationReport through
+  `SendUnconfirmedFirst`, so it precedes the negative response.
+- `status-only` objects refuse all controls.
+- SBO models require a select reservation, per connection, lasting the
+  object's `sboTimeout`.
+- Enhanced models owe a CommandTermination (`termination`). The server sends
+  it when the handler accepts, unless the handler called `DeferTermination`.
+  In that case the handler's callback sends it, positive or negative. If the
+  callback never comes, `operTimeout` sends CommandTermination- with
+  time-limit-over.
+
+`mms.ServerConn` holds the unconfirmed PDUs produced while a request is being
+handled. The ones that must precede the request's response go out first, then
+the response, then the rest. That's how a CommandTermination, or a report a
+write provokes, follows the response it belongs to.
 
 ## Adding a new MMS service
 
@@ -142,9 +174,10 @@ unconfirmed InformationReport after the operate.
   `goose`, `sv`). Run one with
   `go test -run=NONE -fuzz=FuzzParse -fuzztime=30s ./goose`.
 - **Interop** is the primary correctness oracle. `interop/run.sh` builds
-  libiec61850 and runs the two-direction suite (our client ↔ C server, C
-  client ↔ our server). The Go interop tests are guarded by env vars
-  (`IEC61850_TEST_SERVER`, `IEC61850_C_CLIENT`) and skipped otherwise, so
+  the reference C stack and runs the two-direction suite (our client ↔ C
+  server, C client ↔ our server). The Go interop tests are guarded by env
+  vars (`IEC61850_TEST_SERVER`, `IEC61850_TEST_CONTROL_SERVER`,
+  `IEC61850_C_CLIENT`) and skipped otherwise, so
   `go test ./...` stays green without a C toolchain. See [interop](../interop).
 
 Golden byte vectors live inline in the `*_test.go` files; layer-2 codecs are
@@ -180,10 +213,11 @@ exported symbol in complete sentences. Match the surrounding package.
 
 ## Licensing
 
-Apache-2.0. **Never copy or mechanically translate code** from GPL projects
-(libiec61850, wendy512/iec61850). They may be run as interop peers and read
-to understand *observable protocol behaviour* only. IEC standard text must
-not be reproduced beyond short factual references. See `PLAN.md` §12.
+Apache-2.0. **Never copy or mechanically translate code** from GPL-licensed
+IEC 61850 implementations, including the C stack the interop harness builds
+and wendy512/iec61850. They may be run as interop peers and read to understand
+*observable protocol behaviour* only. IEC standard text must not be reproduced
+beyond short factual references. See `PLAN.md` §12.
 
 ## Repository map
 

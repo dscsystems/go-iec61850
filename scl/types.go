@@ -210,6 +210,8 @@ type ReportControl struct {
 	TrgOps    *TrgOps     `xml:"TrgOps"`
 	OptFields *OptFields  `xml:"OptFields"`
 	RptEnab   *RptEnabled `xml:"RptEnabled"`
+	// Indexed is the xs:boolean indexed attribute; absent means true.
+	Indexed string `xml:"indexed,attr"`
 }
 
 // TrgOps holds report/log trigger option flags. The gi attribute defaults
