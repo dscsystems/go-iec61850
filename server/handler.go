@@ -514,9 +514,17 @@ func (h *handler) defineNVL(content []byte) (*asn1.Element, error) {
 	if !ok {
 		return nil, mms.AccessObjectValueInvalid
 	}
-	listContent, err := dec.Expect(asn1.ContextConstructed(1)) // listOfVariable [1]
+	// listOfVariable is [0] in ISO 9506-2. Earlier versions of this
+	// library sent [1], the tag of the attributes response, so that is
+	// accepted too rather than refusing them.
+	listContent, found, err := dec.Optional(asn1.ContextConstructed(0))
 	if err != nil {
 		return nil, err
+	}
+	if !found {
+		if listContent, err = dec.Expect(asn1.ContextConstructed(1)); err != nil {
+			return nil, err
+		}
 	}
 	var entries []model.FCDA
 	ld := asn1.NewDecoder(listContent)

@@ -174,22 +174,31 @@ func parseReadResponseWithSpec(resp []byte) ([]VarRef, []*Value, error) {
 	return refs, values, nil
 }
 
-// DefineNamedVariableList creates a named variable list (dataset) from the
-// given domain variable item IDs.
-func (c *Conn) DefineNamedVariableList(ctx context.Context, domain, listName string, members []VarRef) error {
-	list := asn1.Cons(asn1.ContextConstructed(1)) // listOfVariable [1]
+// defineNamedVariableListRequest builds
+//
+//	DefineNamedVariableList-Request ::= SEQUENCE {
+//	  variableListName ObjectName,
+//	  listOfVariable [0] IMPLICIT SEQUENCE OF ... }   (ISO 9506-2)
+//
+// The list is [0], not the [1] of the GetNamedVariableListAttributes
+// response. A server that decodes strictly rejects [1] as an invalid PDU.
+func defineNamedVariableListRequest(domain, listName string, members []VarRef) *asn1.Element {
+	list := asn1.Cons(asn1.ContextConstructed(0)) // listOfVariable [0]
 	for _, m := range members {
 		list.Add(asn1.Cons(asn1.TagSequence,
 			asn1.Cons(asn1.ContextConstructed(0), objectName(m.Domain, m.Item)),
 		))
 	}
-	// DefineNamedVariableList-Request ::= SEQUENCE {
-	//   variableListName ObjectName, listOfVariable [1] SEQUENCE OF ... }
-	req := asn1.Cons(asn1.ContextConstructed(svcDefineNamedVarList),
+	return asn1.Cons(asn1.ContextConstructed(svcDefineNamedVarList),
 		objectName(domain, listName),
 		list,
 	)
-	resp, err := c.call(ctx, req)
+}
+
+// DefineNamedVariableList creates a named variable list (dataset) from the
+// given domain variable item IDs.
+func (c *Conn) DefineNamedVariableList(ctx context.Context, domain, listName string, members []VarRef) error {
+	resp, err := c.call(ctx, defineNamedVariableListRequest(domain, listName, members))
 	if err != nil {
 		return err
 	}
