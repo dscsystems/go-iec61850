@@ -157,11 +157,34 @@ Implemented: browse, read/write, datasets, reporting (URCB + buffered BRCB
 with resync), control (all four models), setting groups, file services,
 log queries, GOOSE/SV pub-sub, SCL parsing, TLS.
 Not yet: server-side journal storage, R-GOOSE/R-SV, 62351-6 message
-signing. If a task needs one of these, say so rather than faking it.
+signing, GOOSE TLV encoding. If a task needs one of these, say so rather
+than faking it. `docs/edition-2.1.md` is the full conformance matrix.
+
+## Edition 2.1
+
+Targets IEC 61850 Edition 2 + Amendment 1 (SCL `2007B4`). Loading a file is
+**permissive**: an element, basic type or functional constraint the library
+does not know is recorded as a `model.Diagnostic` and the model is still
+built, so one odd construct cannot make an IED unreadable. `SCL.Dropped()`
+reports the elements the parser does not decode, with their paths.
+
+```go
+m, err := scl.LoadModel("device.cid", scl.Strict(true))  // or omit Strict
+for _, d := range m.Diagnostics { log.Printf("%s", d) } // what was not understood
+s, _ := scl.ParseFile("device.cid")
+log.Printf("edition %s", s.Edition())                    // 2007B4
+```
+
+`model.NewDataObject` still panics on a class it does not know; use
+`model.NewDataObjectOr` on a runtime-supplied class. An unknown FC parses
+to `model.FCUnknown` and is carried verbatim, so the object stays
+readable — use `model.ParseFCLenient` and `model.FCText` for it.
 
 ## Where to look
 
 - `docs/api.md` — every public call with an example.
+- `docs/edition-2.1.md` — what is implemented of each standard part, and
+  what is not.
 - `examples/` — runnable programs (`read`, `server`, `report-monitor`,
   `goose-subscribe`, `control`).
 - `cmd/` — full apps to copy patterns from (`ied-client`, `ied-server`,

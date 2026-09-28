@@ -151,6 +151,43 @@ handled. The ones that must precede the request's response go out first, then
 the response, then the rest. That's how a CommandTermination, or a report a
 write provokes, follows the response it belongs to.
 
+## Permissive parsing
+
+SCL is parsed **permissively on purpose**, and that is the single most
+important thing to know before changing `scl/`.
+
+Elements are matched by local name, so any SCL namespace revision parses. A
+construct the library does not recognise — a basic type, a functional
+constraint, a common data class, an element the parser does not decode — is
+recorded as a `model.Diagnostic` and the load continues.
+
+The reason is that the alternative is worse in practice. A vendor CID, a
+tool that emits a private element, or a file from a schema release newer
+than this library would each make an entire IED unreadable, with an error
+that says which construct failed and nothing about what to do about it. An
+operator facing that has no better move than to look at the file. An
+operator facing "loaded, but attribute X of Y uses a type I do not know" can
+check whether that attribute matters.
+
+The cost is that a genuine schema change that alters the meaning of a value
+is not caught. `scl.Strict(true)` turns every diagnostic into an error, for
+a conformance harness that wants the opposite trade.
+
+Two rules follow for anyone extending the parser:
+
+- **Never add a hard failure for a construct that exists.** Adding a field
+  to an SCL type and reading it is the whole job; a construct that is
+  present-but-unused gets a diagnostic or nothing, not an error.
+- **Never invent a standard's tables.** `model/cdc.go` gains a class only
+  with its attribute list from 7-3. A plausible but wrong attribute table
+  is worse than none, because it produces a model that lies about the
+  device instead of one that admits it does not know. See
+  [docs/edition-2.1.md](edition-2.1.md) for what is deliberately missing.
+
+`SCL.Dropped()` is derived by reflection from the struct tags, so it cannot
+drift from the decoder: a field added to an SCL type is decoded, and stops
+being reported as dropped, automatically.
+
 ## Adding a new MMS service
 
 1. Add the confirmed-service CHOICE tag number as a constant in `mms/pdu.go`
@@ -236,3 +273,4 @@ beyond short factual references. See `PLAN.md` §12.
 | `examples/` | runnable snippets |
 | `interop/` | bidirectional interop harness |
 | `testdata/` | SCL files and fixtures |
+| `docs/edition-2.1.md` | per-part conformance matrix; keep it with the code |

@@ -46,3 +46,22 @@ pull request.
 
 SBO with normal security is implemented on the server (`server/select.go`)
 and covered by the unit tests; it has no interop assertion yet.
+
+## Edition 2.1
+
+This suite exercises the Edition 2 wire formats against libiec61850 v1.6,
+which implements Edition 2 and the R-GOOSE/R-SV profiles. It is not an
+Edition 2.1 conformance suite: it tests that the two stacks interoperate,
+not that either is conformant.
+
+That distinction matters for reading the Edition 2.1 work. Most of it is
+*loader* changes — the SCL parser, the diagnostics, the control-block
+objects the server now materialises — which interop cannot exercise at all,
+because there is only one stack involved. Those are covered by
+`scl/edition_test.go` and `server/cb_test.go` against the synthetic
+`2007B4` fixture. The wire-format changes interop *can* cover — `smpMod`,
+GOOSE state and timing semantics, time quality — are covered by
+`goose/ed21_test.go` and `sv/ed21_test.go`.
+
+Adding interop assertions for the wire-format changes is the obvious next
+step and needs no harness change.
