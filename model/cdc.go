@@ -48,6 +48,13 @@ const (
 	// Description.
 	CDCLPL CDC = "LPL" // logical node name plate
 	CDCDPL CDC = "DPL" // device name plate
+
+	// Classes added by Edition 2 and 2.1 whose attribute tables are
+	// implemented here. A class that is not listed is still usable: the
+	// SCL loader takes its attributes from the file, and NewDataObjectOr
+	// reports that there is no template. See docs/edition-2.1.md.
+	CDCSEC CDC = "SEC" // physical communication address
+	CDCORG CDC = "ORG" // oriented direction, a controlled double point
 )
 
 // CDCAttribute describes one attribute of a common data class: what it is
@@ -479,7 +486,9 @@ func optional(a CDCAttribute) CDCAttribute {
 	return a
 }
 
-// substitution is the SV group every status and measurand class may carry.
+// substitution is the SV group a status, measurand or controllable class
+// may carry: the substituted value takes the type of the value it
+// replaces, so the caller passes a bare attribute of the right kind.
 func substitution(valueKind CDCAttribute) []CDCAttribute {
 	sub := valueKind
 	sub.Name = "subVal"
@@ -493,6 +502,11 @@ func substitution(valueKind CDCAttribute) []CDCAttribute {
 		optional(daString("subID", SV)),
 	}
 }
+
+// subOf is substitution for a class whose value lives inside a structure:
+// the substituted value keeps the structure's shape, so the caller passes
+// the value attribute as it appears in the class.
+func subOf(value CDCAttribute) []CDCAttribute { return substitution(value) }
 
 type cdcSpec struct {
 	attrs      []CDCAttribute
@@ -545,6 +559,10 @@ var cdcTable = map[CDC]cdcSpec{
 		optional(daBool("phsC", ST)), optional(daBool("neut", ST)),
 		daQuality(ST), daTime(ST),
 		optional(daString("d", DC)),
+	).with(subOf(daStruct("", SV,
+		daBool("general", SV),
+		optional(daBool("phsA", SV)), optional(daBool("phsB", SV)),
+		optional(daBool("phsC", SV)), optional(daBool("neut", SV))))...,
 	),
 	CDCACD: spec(
 		daBool("general", ST), daInt("dirGeneral", ST),
@@ -554,6 +572,12 @@ var cdcTable = map[CDC]cdcSpec{
 		optional(daBool("neut", ST)), optional(daInt("dirNeut", ST)),
 		daQuality(ST), daTime(ST),
 		optional(daString("d", DC)),
+	).with(subOf(daStruct("", SV,
+		daBool("general", SV), daInt("dirGeneral", SV),
+		optional(daBool("phsA", SV)), optional(daInt("dirPhsA", SV)),
+		optional(daBool("phsB", SV)), optional(daInt("dirPhsB", SV)),
+		optional(daBool("phsC", SV)), optional(daInt("dirPhsC", SV)),
+		optional(daBool("neut", SV)), optional(daInt("dirNeut", SV))))...,
 	),
 	CDCBCR: spec(
 		CDCAttribute{Name: "actVal", FC: ST, Kind: mms.TypeInteger},
@@ -566,6 +590,7 @@ var cdcTable = map[CDC]cdcSpec{
 
 	// --- Measurand information ---
 	CDCMV: spec(daAnalogue("mag", MX), daQuality(MX), daTime(MX)).
+		with(subOf(daAnalogue("", MX))...).
 		with(
 			optional(daAnalogue("instMag", MX)),
 			optional(daInt("range", MX)),
@@ -578,12 +603,15 @@ var cdcTable = map[CDC]cdcSpec{
 		daStruct("cVal", MX, daAnalogue("mag", MX), optional(daAnalogue("ang", MX))),
 		daQuality(MX), daTime(MX),
 	).with(
+		subOf(daStruct("cVal", SV, daAnalogue("mag", SV), optional(daAnalogue("ang", SV))))...,
+	).with(
 		optional(daInt("range", MX)),
 		optional(daUnits(CF)),
 		optional(daInt("db", CF)),
 		optional(daString("d", DC)),
 	),
 	CDCSAV: spec(daAnalogue("instMag", MX), daQuality(MX)).
+		with(subOf(daAnalogue("", MX))...).
 		with(optional(daTime(MX)), optional(daUnits(CF)), optional(daString("d", DC))),
 	CDCWYE: spec(optional(daInt("angRef", CF)), optional(daString("d", DC))).
 		containing(
@@ -603,6 +631,7 @@ var cdcTable = map[CDC]cdcSpec{
 
 	// --- Controllable information ---
 	CDCSPC: spec(daBool("stVal", ST), daQuality(ST), daTime(ST)).
+		with(substitution(daBool("", ST))...).
 		with(
 			optional(daBool("stSeld", ST)),
 			optional(daInt("sboTimeout", CF)), optional(daInt("sboClass", CF)),
@@ -610,6 +639,7 @@ var cdcTable = map[CDC]cdcSpec{
 		).
 		controlledBy(daBool("ctlVal", CO)),
 	CDCDPC: spec(daBits("stVal", ST, 2), daQuality(ST), daTime(ST)).
+		with(substitution(daBits("", ST, 2))...).
 		with(
 			optional(daBool("stSeld", ST)),
 			optional(daInt("sboTimeout", CF)), optional(daInt("sboClass", CF)),
@@ -617,6 +647,7 @@ var cdcTable = map[CDC]cdcSpec{
 		).
 		controlledBy(daBool("ctlVal", CO)),
 	CDCINC: spec(daInt("stVal", ST), daQuality(ST), daTime(ST)).
+		with(substitution(daInt("", ST))...).
 		with(
 			optional(daBool("stSeld", ST)),
 			optional(daUnits(CF)), optional(daInt("minVal", CF)),
@@ -625,17 +656,21 @@ var cdcTable = map[CDC]cdcSpec{
 		).
 		controlledBy(daInt("ctlVal", CO)),
 	CDCENC: spec(daInt("stVal", ST), daQuality(ST), daTime(ST)).
+		with(substitution(daInt("", ST))...).
 		with(optional(daBool("stSeld", ST)), optional(daString("d", DC))).
 		controlledBy(daInt("ctlVal", CO)),
 	CDCBSC: spec(
 		daStruct("valWTr", ST, daInt("posVal", ST), daBool("transInd", ST)),
 		daQuality(ST), daTime(ST),
 	).with(
+		subOf(daStruct("valWTr", SV, daInt("posVal", SV), daBool("transInd", SV)))...,
+	).with(
 		optional(daBool("stSeld", ST)),
 		optional(daInt("minVal", CF)), optional(daInt("maxVal", CF)),
 		optional(daString("d", DC)),
 	).controlledBy(daInt("ctlVal", CO)),
 	CDCAPC: spec(daAnalogue("mxVal", MX), daQuality(MX), daTime(MX)).
+		with(subOf(daAnalogue("", MX))...).
 		with(
 			optional(daBool("stSeld", ST)),
 			optional(daUnits(CF)), optional(daInt("db", CF)),
@@ -673,4 +708,22 @@ var cdcTable = map[CDC]cdcSpec{
 			optional(daString("serNum", DC)), optional(daString("model", DC)),
 			optional(daString("location", DC)),
 		),
+
+	// --- Classes added by Edition 2 and 2.1 ---
+	// SEC carries the physical communication address of the physical
+	// interface (IEC 61850-7-3, and the PhyCom logical node of 7-4). The
+	// type is PhyComAddr, an octet string, which the SCL loader maps.
+	CDCSEC: spec(daOctet("PhyComAddr", CF)),
+	// ORG is a double point with a direction: the direction of the
+	// position, following the double point semantics of DPS.
+	CDCORG: spec(
+		daBits("stVal", ST, 2),
+		daStruct("dirVal", ST,
+			daInt("dirGeneral", ST), optional(daInt("dirPhsA", ST)),
+			optional(daInt("dirPhsB", ST)), optional(daInt("dirPhsC", ST)),
+			optional(daInt("dirNeut", ST)),
+		),
+		daQuality(ST), daTime(ST),
+	).with(substitution(daBits("", ST, 2))...).
+		with(optional(daString("d", DC))),
 }

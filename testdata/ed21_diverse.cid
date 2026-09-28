@@ -65,6 +65,12 @@
             <P type="APPID">4000</P>
           </Address>
         </SMV>
+        <SMV ldInst="LD0" cbName="usvcb01" desc="unicast SV block">
+          <Address>
+            <P type="MAC-Address">01-0C-CD-04-00-02</P>
+            <P type="APPID">4001</P>
+          </Address>
+        </SMV>
         <PhysConn type="iec60870-5-104">
           <Address>
             <P type="C37-118-IP-Port">2404</P>
@@ -156,11 +162,17 @@
             </GSEControl>
             <GSEControl name="gscb01" desc="legacy GSSE" appID="ED21LD0/LLN0.gscb01"
                         datSet="Measurements" confRev="1" type="GSSE"/>
-            <SampledValueControl name="msvcb01" desc="SV" smvID="ED21MSVCB01"
+            <SampledValueControl name="msvcb01" desc="multicast SV" smvID="ED21MSVCB01"
                                 datSet="Measurements" confRev="1" smpRate="50" nofASDU="1"
                                 multicast="true" smpMod="SmpPerSec">
               <SmvOpts refreshTime="true" sampleSynchronized="true" sampleRate="true"
                        dataSet="false" security="false" timestamp="true" synchSourceId="true"/>
+            </SampledValueControl>
+            <SampledValueControl name="usvcb01" desc="unicast R-SV" smvID="ED21USVCB01"
+                                datSet="Measurements" confRev="1" smpRate="4000" nofASDU="1"
+                                multicast="false" smpMod="SmpPerPeriod">
+              <SmvOpts refreshTime="false" sampleSynchronized="true" sampleRate="false"
+                       dataSet="true" security="true" timestamp="true" synchSourceId="true"/>
               <Protocol>R-SV</Protocol>
             </SampledValueControl>
             <LogControl name="lcb01" desc="event log" datSet="Measurements" logName="ED21/LLN0.EventLog"

@@ -15,6 +15,9 @@ type sgManager struct {
 	ld      *model.LogicalDevice
 	sgcb    *model.DataObject
 	numOfSG uint8
+	// resvTms is the reservation time in milliseconds from SCL, zero when
+	// the document declares none.
+	resvTms int
 
 	mu     sync.Mutex
 	actSG  uint8
@@ -28,17 +31,18 @@ type sgManager struct {
 type sgSetting struct {
 	sg     *model.DataAttribute // FC SG (active view)
 	se     *model.DataAttribute // FC SE (edit view), may be nil
+	ref    string               // "LD/LN.DO.DA", the key the model groups by
 	groups []*mms.Value         // one value per setting group
 }
 
 // newSGManager scans ld for SG/SE setting attributes and materialises the
 // SGCB in LLN0. Returns nil if the device has no setting-constrained
 // attributes.
-func newSGManager(ld *model.LogicalDevice, numOfSG uint8) *sgManager {
+func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int) *sgManager {
 	if numOfSG == 0 {
 		numOfSG = 1
 	}
-	m := &sgManager{ld: ld, numOfSG: numOfSG, actSG: 1}
+	m := &sgManager{ld: ld, numOfSG: numOfSG, actSG: 1, resvTms: resvTms}
 
 	// Pair SG and SE attributes by their DO path within each LN.
 	for _, ln := range ld.Nodes {
@@ -48,7 +52,7 @@ func newSGManager(ld *model.LogicalDevice, numOfSG uint8) *sgManager {
 			collectSGAttrs(model.ObjectReference(ln.Name+"."+do.Name), do, sgAttrs, seAttrs)
 		}
 		for path, sg := range sgAttrs {
-			s := &sgSetting{sg: sg, se: seAttrs[path]}
+			s := &sgSetting{sg: sg, se: seAttrs[path], ref: ld.Name + "/" + path}
 			s.groups = make([]*mms.Value, numOfSG)
 			for i := range s.groups {
 				s.groups[i] = sg.Value.Clone()
@@ -64,7 +68,7 @@ func newSGManager(ld *model.LogicalDevice, numOfSG uint8) *sgManager {
 	if lln0 == nil {
 		return nil
 	}
-	m.sgcb = buildSGCB(numOfSG)
+	m.sgcb = buildSGCB(numOfSG, m.resvTms)
 	lln0.Objects = append(lln0.Objects, m.sgcb)
 	return m
 }
@@ -93,17 +97,49 @@ func collectSGAttr(path model.ObjectReference, a *model.DataAttribute, sg, se ma
 	}
 }
 
-func buildSGCB(numOfSG uint8) *model.DataObject {
+// buildSGCB materialises the setting group control block of IEC 61850-7-2
+// under FC SP in LLN0. ResvTms, the reservation time, is present only when
+// the configuration declares one.
+func buildSGCB(numOfSG uint8, resvTms int) *model.DataObject {
 	attr := func(name string, v *mms.Value) *model.DataAttribute {
 		return &model.DataAttribute{Name: name, FC: model.SP, Kind: v.Type(), Value: v}
 	}
-	return &model.DataObject{Name: "SGCB", Attributes: []*model.DataAttribute{
+	do := &model.DataObject{Name: "SGCB", Attributes: []*model.DataAttribute{
 		attr("NumOfSG", mms.NewUint8(numOfSG)),
 		attr("ActSG", mms.NewUint8(1)),
 		attr("EditSG", mms.NewUint8(0)),
 		attr("CnfEdit", mms.NewBool(false)),
 		attr("LActTm", mms.NewUTCTimeNow()),
 	}}
+	if resvTms > 0 {
+		do.Attributes = append(do.Attributes, attr("ResvTms", mms.NewUint32(uint32(resvTms))))
+	}
+	return do
+}
+
+// seedGroups fills each setting group's store with the value the source
+// configuration recorded for it, so a document that gives one initial value
+// per sGroup is served as configured instead of every group starting from
+// the first. A group the document does not mention keeps the attribute's
+// own value, which is the active group's.
+func (m *sgManager) seedGroups(groups []model.SettingGroup) {
+	if len(groups) == 0 || len(m.settings) == 0 {
+		return
+	}
+	byRef := make(map[string]*sgSetting, len(m.settings))
+	for _, s := range m.settings {
+		byRef[s.ref] = s
+	}
+	for _, g := range groups {
+		if g.Number <= 0 || int(g.Number) > int(m.numOfSG) {
+			continue // group 0 is the active group; beyond the count has no store
+		}
+		for ref, v := range g.Values {
+			if s, ok := byRef[ref]; ok {
+				s.groups[g.Number-1] = v.Clone()
+			}
+		}
+	}
 }
 
 // isSGCBWrite reports whether item addresses this device's SGCB and

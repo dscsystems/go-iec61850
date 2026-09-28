@@ -327,21 +327,37 @@ func TestSdiIx(t *testing.T) {
 func TestSampledValueOpts(t *testing.T) {
 	_, m := loadEd21(t)
 	ln := m.Device("ED21LD0").Node("LLN0")
-	if len(ln.SVControls) != 1 {
-		t.Fatalf("%d SV control blocks, want 1", len(ln.SVControls))
+	if len(ln.SVControls) != 2 {
+		t.Fatalf("%d SV control blocks, want 2", len(ln.SVControls))
 	}
-	sc := ln.SVControls[0]
-	if sc.SmpMod != model.SmpPerSec {
-		t.Errorf("SmpMod = %v, want SmpPerSec", sc.SmpMod)
+	byName := map[string]*model.SVControl{}
+	for _, sc := range ln.SVControls {
+		byName[sc.Name] = sc
 	}
-	if !sc.Opts.SampleSynchronized || !sc.Opts.SynchSourceID {
-		t.Errorf("SmvOpts = %+v, want sampleSynchronized and synchSourceId set", sc.Opts)
+	mcast := byName["msvcb01"]
+	if mcast.SmpMod != model.SmpPerSec {
+		t.Errorf("msvcb01 SmpMod = %v, want SmpPerSec", mcast.SmpMod)
 	}
-	if sc.Opts.DataSet || sc.Opts.Security {
-		t.Errorf("SmvOpts = %+v, want dataSet and security clear", sc.Opts)
+	if !mcast.Multicast {
+		t.Error("msvcb01 should be multicast")
 	}
-	if sc.Protocol != "R-SV" {
-		t.Errorf("Protocol = %q, want R-SV", sc.Protocol)
+	if !mcast.Opts.SampleSynchronized || !mcast.Opts.SynchSourceID {
+		t.Errorf("msvcb01 SmvOpts = %+v, want sampleSynchronized and synchSourceId set", mcast.Opts)
+	}
+	if mcast.Opts.DataSet || mcast.Opts.Security {
+		t.Errorf("msvcb01 SmvOpts = %+v, want dataSet and security clear", mcast.Opts)
+	}
+	// The unicast block carries the R-SV profile, which the loader reports
+	// rather than implementing.
+	ucast := byName["usvcb01"]
+	if ucast.Multicast {
+		t.Error("usvcb01 should be unicast")
+	}
+	if ucast.Protocol != "R-SV" {
+		t.Errorf("usvcb01 Protocol = %q, want R-SV", ucast.Protocol)
+	}
+	if !ucast.Opts.DataSet || !ucast.Opts.Security {
+		t.Errorf("usvcb01 SmvOpts = %+v, want dataSet and security set", ucast.Opts)
 	}
 	assertDiagnostic(t, m, "R-SV")
 }

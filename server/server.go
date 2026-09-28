@@ -170,6 +170,33 @@ func WithSettingGroups(numOfSG uint8) Option {
 	return func(s *Server) { s.numOfSG = numOfSG }
 }
 
+// materialiseDeclaredSettingGroups builds the SGCB of every logical device
+// whose model declares a SettingControl, using the declared number of
+// groups and active group. A device that declares neither keeps whatever
+// WithSettingGroups set up.
+func (s *Server) materialiseDeclaredSettingGroups() {
+	if s.sgs == nil {
+		s.sgs = make(map[string]*sgManager)
+	}
+	for _, ld := range s.model.Devices {
+		var declared *model.SettingControl
+		for _, ln := range ld.Nodes {
+			if ln.SettingControl != nil && ln.SettingControl.NumOfSGs > 0 {
+				declared = ln.SettingControl
+				break
+			}
+		}
+		if declared == nil {
+			continue
+		}
+		if mgr := newSGManager(ld, uint8(declared.NumOfSGs), declared.ResvTms); mgr != nil {
+			mgr.actSG = uint8(declared.ActSG)
+			mgr.seedGroups(s.model.SettingGroups)
+			s.sgs[ld.Name] = mgr
+		}
+	}
+}
+
 // New returns a server serving m.
 func New(m *model.Model, opts ...Option) *Server {
 	s := &Server{
@@ -187,11 +214,18 @@ func New(m *model.Model, opts ...Option) *Server {
 	if s.numOfSG > 0 {
 		s.sgs = make(map[string]*sgManager)
 		for _, ld := range m.Devices {
-			if mgr := newSGManager(ld, s.numOfSG); mgr != nil {
+			if mgr := newSGManager(ld, s.numOfSG, 0); mgr != nil {
+				mgr.seedGroups(m.SettingGroups)
 				s.sgs[ld.Name] = mgr
 			}
 		}
 	}
+	// A logical device may also declare its setting groups in SCL; where it
+	// does, the declared count wins over the WithSettingGroups default.
+	s.materialiseDeclaredSettingGroups()
+	// Publish the GOOSE, sampled-value and log control blocks the model
+	// carries, so a client browsing control blocks finds them.
+	materialiseControlBlocks(m)
 	// Materialise report control blocks into the model and prepare the
 	// report engine.
 	s.reports = newReportManager(s)

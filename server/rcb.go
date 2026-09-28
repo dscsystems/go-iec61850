@@ -36,11 +36,10 @@ type rcbState struct {
 	pendTimer *time.Timer
 
 	// Buffered-report state (BRCB only).
-	buffer       []*reportEntry // retained reports, oldest first
-	next         int            // index in buffer of the next to transmit
-	entryCounter uint64         // monotonic EntryID source
-	resyncID     []byte         // client-requested resync point (EntryID write)
-	bufOverflow  bool           // entries were discarded before transmission
+	buffer      []*reportEntry // retained reports, oldest first
+	next        int            // index in buffer of the next to transmit
+	resyncID    []byte         // client-requested resync point (EntryID write)
+	bufOverflow bool           // entries were discarded before transmission
 }
 
 // reportEntry is one report's content, captured when its events happen.
@@ -140,7 +139,9 @@ func buildRCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, rc *model.Re
 	// reference", which is resolved when a report is sent (rptIDOf).
 	if rc.Buffered {
 		// BRCB layout (IEC 61850-8-1): buffered reports carry EntryID and
-		// TimeofEntry, so those option bits are always set.
+		// TimeofEntry, so those option bits are always set. Owner names the
+		// client holding the block, and is the only way a client learns
+		// that, so it has to exist even while the block is unreserved.
 		optFlds |= model.OptEntryID | model.OptTimeOfEntry | model.OptBufOvfl
 		return &model.DataObject{Name: instName, Attributes: []*model.DataAttribute{
 			attr("RptID", mms.NewVisibleString(rc.RptID)),
@@ -154,6 +155,7 @@ func buildRCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, rc *model.Re
 			attr("IntgPd", mms.NewUint32(rc.IntgPd)),
 			attr("GI", mms.NewBool(false)),
 			attr("PurgeBuf", mms.NewBool(false)),
+			attr("Owner", mms.NewOctetString(nil)),
 			attr("EntryID", mms.NewOctetString(make([]byte, 8))),
 			attr("TimeofEntry", mms.NewBinaryTime(time.Date(1984, 1, 1, 0, 0, 0, 0, time.UTC))),
 			attr("ResvTms", mms.NewInt16(0)),

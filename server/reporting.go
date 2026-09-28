@@ -20,6 +20,12 @@ import (
 type reportManager struct {
 	s   *Server
 	reg map[string]*rcbState
+	// entryCounter is the server-wide EntryID source. IEC 61850-7-2
+	// requires an EntryID to identify a report uniquely within the server,
+	// so the counter is per server and not per control block: two buffered
+	// blocks must never hand out the same identifier, or a client
+	// resyncing on EntryID cannot tell which block an entry came from.
+	entryCounter uint64
 }
 
 func newReportManager(s *Server) *reportManager {
@@ -155,11 +161,32 @@ func (rm *reportManager) onRCBWrite(domain, item, attr string, v *mms.Value, con
 	}
 }
 
-// syncResvLocked reflects the reservation into the URCB's Resv.
+// syncResvLocked reflects the reservation into the URCB's Resv, and the
+// holder into the BRCB's Owner. Owner is how a client learns that a
+// buffered block is taken: a BRCB has no Resv, so the connection that holds
+// it would otherwise be invisible (IEC 61850-7-2).
 func (rs *rcbState) syncResvLocked() {
 	if a := rs.do.Attribute("Resv"); a != nil {
 		a.Value = mms.NewBool(rs.owner != nil)
 	}
+	if a := rs.do.Attribute("Owner"); a != nil {
+		a.Value = mms.NewOctetString(ownerIdent(rs.owner))
+	}
+}
+
+// ownerIdent is the octet string a BRCB's Owner attribute carries: the
+// address and association of the client holding the block, or empty when
+// the block is free. Identifying the client by its transport address is
+// what IEC 61850-8-1 leaves to the implementation, and is what a client
+// comparing Owner values needs to tell "mine" from "someone else's".
+func ownerIdent(conn *mms.ServerConn) []byte {
+	if conn == nil {
+		return nil
+	}
+	if conn.Peer == nil {
+		return nil
+	}
+	return []byte(conn.Peer.String())
 }
 
 func (rm *reportManager) enableLocked(rs *rcbState, conn *mms.ServerConn) {
@@ -427,8 +454,7 @@ func (rm *reportManager) emitLocked(rs *rcbState, e *reportEntry) {
 		}
 		return
 	}
-	rs.entryCounter++
-	e.id = makeEntryID(rs.entryCounter)
+	e.id = rm.nextEntryID()
 	rs.buffer = append(rs.buffer, e)
 	for len(rs.buffer) > rs.maxBuffer {
 		rs.buffer = rs.buffer[1:]
@@ -615,6 +641,22 @@ func makeEntryID(n uint64) []byte {
 		byte(n >> 56), byte(n >> 48), byte(n >> 40), byte(n >> 32),
 		byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n),
 	}
+}
+
+// serverEntryIDSeed keeps the top four octets of a freshly started server's
+// EntryIDs away from those of a restarted one, so a client that persisted an
+// EntryID across a restart does not mistake a new entry for an old one. It
+// comes from the process start time, which moves forward across restarts
+// and is monotonic within a run.
+var serverEntryIDSeed = uint64(time.Now().UnixNano())
+
+// nextEntryID returns a fresh server-wide EntryID. The low 32 bits are the
+// per-server counter; the high 32 bits are the seed, so identifiers are
+// unique across a restart as well as within a run.
+func (rm *reportManager) nextEntryID() []byte {
+	rm.entryCounter++
+	high := serverEntryIDSeed & 0xFFFFFFFF
+	return makeEntryID(high<<32 | uint64(uint32(rm.entryCounter)))
 }
 
 func isZeroEntryID(id []byte) bool {

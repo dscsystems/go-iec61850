@@ -465,3 +465,64 @@ func TestNewDataObjectTriggerOptions(t *testing.T) {
 		}
 	}
 }
+
+// Every class whose value can be substituted carries the SV group, and the
+// substituted value keeps the shape of the value it replaces
+// (IEC 61850-7-2, 7-3).
+func TestSubstitutionGroupCoverage(t *testing.T) {
+	hasSub := map[string]bool{}
+	for cdc, sp := range cdcTable {
+		for _, a := range sp.attrs {
+			if a.Name == "subEna" {
+				hasSub[string(cdc)] = true
+			}
+		}
+	}
+	for _, cdc := range []CDC{CDCSPS, CDCDPS, CDCINS, CDCENS, CDCVSS, CDCACT, CDCACD,
+		CDCMV, CDCCMV, CDCSAV, CDCSPC, CDCDPC, CDCINC, CDCENC, CDCBSC, CDCAPC, CDCORG} {
+		if !hasSub[string(cdc)] {
+			t.Errorf("%s has no substitution group", cdc)
+		}
+	}
+	// The substituted value of a structure-valued class keeps the structure.
+	mv, _ := NewDataObjectOr("AnIn1", CDCMV, WithOptional("subEna", "subVal", "subQ", "subID"))
+	sub := mv.Attribute("subVal")
+	if sub == nil || sub.Kind != mms.TypeStructure {
+		t.Fatalf("MV.subVal = %v, want a structure", sub)
+	}
+	if sub.Child("f") == nil && sub.Child("i") == nil {
+		t.Error("MV.subVal should be an AnalogueValue, with one numeric member")
+	}
+	if q := mv.Attribute("subQ"); q == nil || q.Kind != mms.TypeBitString || q.Value == nil || q.Value.BitLen() != 13 {
+		t.Error("MV.subQ should be a 13-bit quality")
+	}
+}
+
+// The classes of Edition 2 and 2.1 that have templates here, and the
+// classes a document may still use without failing to load.
+func TestNewDataObjectOrUnknownCDC(t *testing.T) {
+	do, d := NewDataObjectOr("Thing", CDC("HST"))
+	if d.Message == "" {
+		t.Error("an unknown class should report a diagnostic")
+	}
+	if do == nil || do.Name != "Thing" {
+		t.Error("an unknown class should still yield the object")
+	}
+	if do, d := NewDataObjectOrNil("Thing", CDC("HST")); do != nil || d.Message == "" {
+		t.Error("NewDataObjectOrNil should yield nil and a diagnostic")
+	}
+	// A known class reports nothing and builds normally.
+	if _, d := NewDataObjectOr("Sec", CDCSEC); d.Message != "" {
+		t.Errorf("SEC should be known, got %q", d.Message)
+	}
+}
+
+// The class lookup is case-insensitive, as the SCL cdc attribute is.
+func TestKnownCDICaseInsensitive(t *testing.T) {
+	if !KnownCDC("cmv") || !KnownCDC(" CMV ") {
+		t.Error("class lookup should ignore case and surrounding space")
+	}
+	if KnownCDC("nosuchclass") {
+		t.Error("an unknown class reported as known")
+	}
+}
