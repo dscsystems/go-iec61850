@@ -29,8 +29,11 @@ var sampleNames = []string{
 	"LLN0$GS$gscb01",
 	"LLN0$MS$msvcb01",
 	"LLN0$US$usvcb01",
-	"GGIO1$ST$Ind1",       // another logical node
-	"LLN0$ZZ$Bogus",       // unknown functional constraint
+	"GGIO1$ST$Ind1", // another logical node
+	// An unknown functional constraint is carried, not skipped: the object
+	// is under a constraint this library has no class mapping for, so it is
+	// a data object rather than one of the control-block classes.
+	"LLN0$ZZ$Bogus",
 	"LLN0$",               // malformed
 	"$ST$Mod",             // malformed
 	"LLN0$ST$Mod$stVal$x", // deeper leaf, same object
@@ -41,7 +44,7 @@ func TestObjectsOfClass(t *testing.T) {
 		class ACSIClass
 		want  []string
 	}{
-		{ACSIDataObject, []string{"Mod", "StrVal"}},
+		{ACSIDataObject, []string{"Mod", "StrVal", "Bogus"}},
 		{ACSIURCB, []string{"urcb01", "urcb02"}},
 		{ACSIBRCB, []string{"brcb01"}},
 		{ACSILCB, []string{"lcb01"}},

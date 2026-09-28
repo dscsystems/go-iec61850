@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/mms"
@@ -162,10 +163,57 @@ func WithSettingFC(fc FC) CDCOption { return func(b *cdcBuild) { b.settingFC = f
 //	mv := model.NewDataObject("AnIn1", model.CDCMV,
 //		model.WithOptional("units", "db"))
 //
+// A class it does not know is not an error: NewDataObjectOr returns a
+// diagnostic and an empty data object, and NewDataObjectOrNil returns nil.
+// This matters for a model built from a file of a newer edition than this
+// library, where the class is real and simply has no template here yet —
+// panicking would make such a file unloadable, which is a worse outcome
+// than serving an object with no attributes.
+func NewDataObjectOr(name string, cdc CDC, opts ...CDCOption) (*DataObject, Diagnostic) {
+	if !KnownCDC(string(cdc)) {
+		return &DataObject{Name: name, CDC: string(cdc)}, Addf(name,
+			"common data class %q has no attribute template in this library; "+
+				"the object is present but has no attributes", cdc)
+	}
+	return NewDataObject(name, cdc, opts...), Diagnostic{}
+}
+
+// NewDataObjectOrNil is NewDataObject without the fallback object: an
+// unknown class yields nil and a diagnostic.
+func NewDataObjectOrNil(name string, cdc CDC, opts ...CDCOption) (*DataObject, Diagnostic) {
+	if !KnownCDC(string(cdc)) {
+		return nil, Addf(name,
+			"common data class %q has no attribute template in this library", cdc)
+	}
+	return NewDataObject(name, cdc, opts...), Diagnostic{}
+}
+
+// KnownCDC reports whether this library has an attribute template for the
+// named common data class. The comparison is case-insensitive, as the SCL
+// cdc attribute is.
+func KnownCDC(name string) bool {
+	_, ok := cdcTable[CDC(strings.ToUpper(strings.TrimSpace(name)))]
+	return ok
+}
+
+// CDCName is a hook for a build that adds classes to cdcTable. It reports
+// whether a class has a template; the SCL loader uses it to warn about a
+// class it cannot expand, and defaults to the table's contents.
+var CDCName = func(name string) bool { return KnownCDC(name) }
+
+// NewDataObject builds a data object of the given common data class: its
+// mandatory attributes, any optional ones asked for, and any nested data
+// objects the class defines, each with a zero value of its type.
+//
+//	spc := model.NewDataObject("SPCSO1", model.CDCSPC,
+//		model.WithControlModel(model.CtlSBOEnhanced))
+//	mv := model.NewDataObject("AnIn1", model.CDCMV,
+//		model.WithOptional("units", "db"))
+//
 // It panics on a class it does not know: the class names are constants,
-// and a caller assembling one at run time can check CDCAttributes first.
+// and a caller assembling one at run time can check NewDataObjectOr first.
 func NewDataObject(name string, cdc CDC, opts ...CDCOption) *DataObject {
-	spec, ok := cdcTable[cdc]
+	spec, ok := cdcTable[CDC(strings.ToUpper(string(cdc)))]
 	if !ok {
 		panic(fmt.Sprintf("model: unknown common data class %q", cdc))
 	}

@@ -124,10 +124,7 @@ func objectsOfClass(names []string, ln string, class ACSIClass) []string {
 		if len(parts) < 3 || parts[0] != ln {
 			continue
 		}
-		fc, err := model.ParseFC(parts[1])
-		if err != nil {
-			continue
-		}
+		fc := model.ParseFCLenient(parts[1])
 		name := parts[2]
 		if name == "" || !classHolds(class, fc, name) || seen[name] {
 			continue
@@ -154,6 +151,11 @@ func classHolds(class ACSIClass, fc model.FC, name string) bool {
 	want, ok := acsiClassFC[class]
 	return ok && fc == want
 }
+
+// FCName returns the mnemonic to address an object under, for a constraint
+// this library does not know: the peer's own spelling, so the object stays
+// reachable.
+func FCName(fc model.FC, raw string) string { return model.FCText(fc, raw) }
 
 // sgcbName is the fixed MMS name of the setting group control block.
 const sgcbName = "SGCB"
@@ -249,10 +251,7 @@ func (c *Client) Browse(ctx context.Context, ld string, classes ...ACSIClass) ([
 			if len(parts) < 3 || parts[0] == "" || parts[2] == "" {
 				continue
 			}
-			fc, err := model.ParseFC(parts[1])
-			if err != nil {
-				continue
-			}
+			fc := model.ParseFCLenient(parts[1])
 			ln, name := parts[0], parts[2]
 			for _, class := range classes {
 				// The classes are disjoint, so the first match is the only
@@ -321,10 +320,7 @@ func (c *Client) DataDirectory(ctx context.Context, ref model.ObjectReference, f
 		if len(parts) < 3 || parts[0] != lnName {
 			continue
 		}
-		efc, err := model.ParseFC(parts[1])
-		if err != nil {
-			continue
-		}
+		efc := model.ParseFCLenient(parts[1])
 		if fc != model.ALL && fc != model.FCNone && efc != fc {
 			continue
 		}

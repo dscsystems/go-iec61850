@@ -58,10 +58,9 @@ func (c *Client) retrieveDevice(ctx context.Context, domain string) (*model.Logi
 			continue
 		}
 		ln, fcStr, do := parts[0], parts[1], parts[2]
-		fc, err := model.ParseFC(fcStr)
-		if err != nil {
-			continue
-		}
+		// An FC this library does not know is carried verbatim, so the
+		// object is still retrieved rather than silently dropped.
+		fc := model.ParseFCLenient(fcStr)
 		if !lnSeen[ln] {
 			lnSeen[ln] = true
 			lnOrder = append(lnOrder, ln)

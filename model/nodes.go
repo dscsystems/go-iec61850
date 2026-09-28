@@ -13,6 +13,37 @@ import (
 type Model struct {
 	Name    string // IED name
 	Devices []*LogicalDevice
+
+	// Diagnostics holds non-fatal problems found while interpreting the
+	// source of this model (SCL build, or online retrieval): unknown basic
+	// types, unknown functional constraints, unresolvable dataset members.
+	// The model is still usable. See Diagnostic.
+	Diagnostics []Diagnostic
+
+	// SettingGroups holds the per-group initial values of FC SG and SE
+	// attributes, when the source configuration defines them (SCL Val
+	// elements carrying an sGroup). The first entry is the active group.
+	SettingGroups []SettingGroup
+}
+
+// SettingGroup is one named setting group of a logical device: the value
+// each setting-group attribute takes in it.
+type SettingGroup struct {
+	// Number is the setting-group number; 0 is the active group.
+	Number int
+	// LD is the logical device (MMS domain) the group applies to.
+	LD string
+	// Values maps an attribute reference, e.g.
+	// "SIMPLEIOLD0/GGIO1.AnIn1.setVal", to its value in this group.
+	Values map[string]*mms.Value
+}
+
+// Diagnosticf records a non-fatal problem on the model.
+func (m *Model) Diagnosticf(path, format string, args ...any) {
+	m.Diagnostics = append(m.Diagnostics, Diagnostic{
+		Path:    path,
+		Message: fmt.Sprintf(format, args...),
+	})
 }
 
 // LogicalDevice is one MMS domain.
@@ -49,6 +80,7 @@ type DataObject struct {
 type DataAttribute struct {
 	Name     string
 	FC       FC
+	FCName   string   // mnemonic verbatim from the source; used when FC is FCUnknown
 	Kind     mms.Type // leaf basic type, or TypeStructure/TypeArray
 	BType    string   // SCL bType (e.g. "Quality", "Timestamp", "INT32"), informational
 	Count    int      // array element count when Kind == TypeArray
@@ -56,6 +88,28 @@ type DataAttribute struct {
 	Value    *mms.Value // leaf value; nil on structured attributes
 
 	TrgOps TrgOps // dchg/qchg/dupd flags from SCL, drives reporting
+}
+
+// Attr returns the named member of a structured attribute, or of an array
+// attribute, by its element name.
+func (da *DataAttribute) Attr(name string) *DataAttribute { return da.Child(name) }
+
+// Elem returns the i-th element of an array attribute.
+func (da *DataAttribute) Elem(i int) *mms.Value {
+	v, _ := da.ElemOK(i)
+	return v
+}
+
+// ElemOK returns the i-th element of an array attribute, false when the
+// attribute is not an array or the index is out of range.
+func (da *DataAttribute) ElemOK(i int) (*mms.Value, bool) {
+	if da == nil || da.Kind != mms.TypeArray || da.Value == nil {
+		return nil, false
+	}
+	if i < 0 || i >= da.Value.Len() {
+		return nil, false
+	}
+	return da.Value.Index(i), true
 }
 
 // DataSet is a named set of functionally-constrained data references.
@@ -66,9 +120,13 @@ type DataSet struct {
 
 // FCDA is one dataset member.
 type FCDA struct {
-	Ref ObjectReference // LD/LN.DO[.DA]
-	FC  FC
+	Ref    ObjectReference // LD/LN.DO[.DA]
+	FC     FC
+	FCName string // mnemonic verbatim from the source; used when FC is FCUnknown
 }
+
+// FCText renders the functional constraint of the member.
+func (f FCDA) FCText() string { return FCText(f.FC, f.FCName) }
 
 // ReportControl is the SCL-side configuration of a report control block.
 type ReportControl struct {
@@ -92,20 +150,76 @@ type ReportControl struct {
 	MaxQueueSize int
 }
 
+// GSType is the variant of a GOOSE control block: plain GOOSE or the
+// legacy GSSE.
+type GSType uint8
+
+const (
+	GOOSE GSType = iota
+	GSSE
+)
+
+func (t GSType) String() string {
+	if t == GSSE {
+		return "GSSE"
+	}
+	return "GOOSE"
+}
+
 // GSEControl is the SCL-side configuration of a GOOSE control block.
 type GSEControl struct {
 	Name    string
 	GoID    string
 	DataSet string
 	ConfRev uint32
+	Type    GSType
+	// Protocol names the transmission profile, e.g. "R-GOOSE". The
+	// routable profiles of IEC 61850-90-5 are reported here but are not
+	// implemented by this library.
+	Protocol string
 	// Communication parameters resolved from the SCL Communication
 	// section (zero when absent).
-	DstMAC  [6]byte
-	AppID   uint16
-	VLANID  uint16
-	VLANPri uint8
-	MinTime uint32 // ms
-	MaxTime uint32 // ms
+	DstMAC    [6]byte
+	AppID     uint16
+	VLANID    uint16
+	VLANPri   uint8
+	MinTime   uint32 // ms
+	MaxTime   uint32 // ms
+	FixedOffs uint32 // ms; zero when the block requests no fixed offset
+}
+
+// SmpMod is the sample mode of a sampled-value control block: the rate is
+// samples per measurement period, per second, or seconds per sample
+// (IEC 61850-9-2).
+type SmpMod uint8
+
+const (
+	SmpPerPeriod SmpMod = iota
+	SmpPerSec
+	SecPerSmp
+)
+
+func (m SmpMod) String() string {
+	switch m {
+	case SmpPerSec:
+		return "SmpPerSec"
+	case SecPerSmp:
+		return "SecPerSmp"
+	}
+	return "SmpPerPeriod"
+}
+
+// SVOpts is the set of optional fields a sampled-value control block
+// includes in its ASDU (IEC 61850-6 SmvOpts). A field is present only when
+// its option is set.
+type SVOpts struct {
+	RefreshTime        bool
+	SampleSynchronized bool
+	SampleRate         bool
+	DataSet            bool
+	Security           bool
+	Timestamp          bool
+	SynchSourceID      bool
 }
 
 // SVControl is the SCL-side configuration of a sampled-value control block.
@@ -117,10 +231,14 @@ type SVControl struct {
 	SmpRate   uint32
 	NoASDU    uint32
 	Multicast bool
-	DstMAC    [6]byte
-	AppID     uint16
-	VLANID    uint16
-	VLANPri   uint8
+	SmpMod    SmpMod
+	Opts      SVOpts
+	// Protocol names the transmission profile, e.g. "R-SV".
+	Protocol string
+	DstMAC   [6]byte
+	AppID    uint16
+	VLANID   uint16
+	VLANPri  uint8
 }
 
 // LogControl is the SCL-side configuration of a log control block.
@@ -131,12 +249,19 @@ type LogControl struct {
 	TrgOps  TrgOps
 	IntgPd  uint32
 	LogEna  bool
+	// BufTime is the buffer period, and ReasonCode whether the log is
+	// reported with a reason for each entry.
+	BufTime    uint32
+	ReasonCode bool
 }
 
 // SettingControl describes the setting groups of a logical device.
 type SettingControl struct {
-	NumOfSGs uint8
-	ActSG    uint8
+	NumOfSGs int
+	ActSG    int
+	// ResvTms is how long a setting-group reservation lasts, in
+	// milliseconds (IEC 61850-8-1, Ed 2.1). Zero leaves it to the server.
+	ResvTms int
 }
 
 // Device returns the logical device with the given (domain) name.
@@ -268,6 +393,31 @@ func (m *Model) Lookup(ref ObjectReference, fc FC) any {
 func (m *Model) Attribute(ref ObjectReference, fc FC) *DataAttribute {
 	da, _ := m.Lookup(ref, fc).(*DataAttribute)
 	return da
+}
+
+// FCText returns the mnemonic to use in an item ID for the constraint the
+// object exposes. An FCUnknown attribute carries the verbatim mnemonic, so
+// an object under a constraint this library does not know still composes the
+// name the peer uses.
+func (do *DataObject) FCText(fc FC) string {
+	var walk func(*DataObject) string
+	walk = func(o *DataObject) string {
+		for _, a := range o.Attributes {
+			if a.FC == fc {
+				return FCText(a.FC, a.FCName)
+			}
+		}
+		for _, s := range o.Objects {
+			if t := walk(s); t != "" {
+				return t
+			}
+		}
+		return ""
+	}
+	if t := walk(do); t != "" {
+		return t
+	}
+	return fc.String()
 }
 
 // FCs returns the sorted set of functional constraints present on the

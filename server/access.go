@@ -18,17 +18,22 @@ func namesForDomain(ld *model.LogicalDevice) []string {
 		// Collect the FCs present, in canonical order.
 		fcs := map[model.FC][]*model.DataObject{}
 		var order []model.FC
+		// fcText maps a constraint to the mnemonic to compose item IDs
+		// with: the verbatim spelling when the object is under a
+		// constraint this library does not know.
+		fcText := map[model.FC]string{}
 		for _, do := range ln.Objects {
 			for _, fc := range do.FCs() {
 				if _, ok := fcs[fc]; !ok {
 					order = append(order, fc)
+					fcText[fc] = do.FCText(fc)
 				}
 				fcs[fc] = append(fcs[fc], do)
 			}
 		}
 		sortFCs(order)
 		for _, fc := range order {
-			prefix := ln.Name + "$" + fc.String()
+			prefix := ln.Name + "$" + fcText[fc]
 			names = append(names, prefix)
 			for _, do := range ln.Objects {
 				if !hasFC(do, fc) {
@@ -97,10 +102,7 @@ func resolveRead(ln *model.LogicalNode, item string) (*mms.Value, bool) {
 	if len(parts) < 2 {
 		return nil, false
 	}
-	fc, err := model.ParseFC(parts[1])
-	if err != nil {
-		return nil, false
-	}
+	fc := model.ParseFCLenient(parts[1])
 	if len(parts) == 2 {
 		// LN$FC: structure of all DOs with that FC.
 		var members []*mms.Value
@@ -190,10 +192,7 @@ func resolveWrite(ln *model.LogicalNode, item string, v *mms.Value) (*model.Data
 	if len(parts) < 4 {
 		return nil, false
 	}
-	fc, err := model.ParseFC(parts[1])
-	if err != nil {
-		return nil, false
-	}
+	fc := model.ParseFCLenient(parts[1])
 	do := ln.Object(parts[2])
 	if do == nil {
 		return nil, false
@@ -237,16 +236,12 @@ func typeSpecFor(ln *model.LogicalNode, item string) (*mms.TypeSpec, bool) {
 	case 1:
 		return lnTypeSpec(ln), true // "LN": a structure with one member per FC
 	case 2:
-		fc, err := model.ParseFC(parts[1])
-		if err != nil {
-			return nil, false
-		}
-		return fcTypeSpec(ln, fc), true // "LN$FC": one member per data object
+		// "LN$FC": one member per data object exposing that FC. An
+		// unknown FC yields an empty structure rather than an error, so a
+		// newer constraint does not make the node un-introspectable.
+		return fcTypeSpec(ln, model.ParseFCLenient(parts[1])), true
 	}
-	fc, err := model.ParseFC(parts[1])
-	if err != nil {
-		return nil, false
-	}
+	fc := model.ParseFCLenient(parts[1])
 	do := ln.Object(parts[2])
 	if do == nil {
 		return nil, false
@@ -297,9 +292,23 @@ func lnTypeSpec(ln *model.LogicalNode) *mms.TypeSpec {
 	sortFCs(order)
 	ts := &mms.TypeSpec{Kind: mms.TypeStructure}
 	for _, fc := range order {
-		ts.Components = append(ts.Components, mms.Component{Name: fc.String(), Spec: fcTypeSpec(ln, fc)})
+		ts.Components = append(ts.Components, mms.Component{
+			Name: fcNameFor(ln, fc), Spec: fcTypeSpec(ln, fc),
+		})
 	}
 	return ts
+}
+
+// fcNameFor is the component name a node-level type specification uses for a
+// functional constraint: the verbatim mnemonic for one this library does not
+// know.
+func fcNameFor(ln *model.LogicalNode, fc model.FC) string {
+	for _, do := range ln.Objects {
+		if hasFC(do, fc) {
+			return do.FCText(fc)
+		}
+	}
+	return fc.String()
 }
 
 // fcTypeSpec builds the functional-constraint type: a structure with one
