@@ -170,31 +170,52 @@ func WithSettingGroups(numOfSG uint8) Option {
 	return func(s *Server) { s.numOfSG = numOfSG }
 }
 
-// materialiseDeclaredSettingGroups builds the SGCB of every logical device
-// whose model declares a SettingControl, using the declared number of
-// groups and active group. A device that declares neither keeps whatever
-// WithSettingGroups set up.
-func (s *Server) materialiseDeclaredSettingGroups() {
-	if s.sgs == nil {
-		s.sgs = make(map[string]*sgManager)
-	}
+// buildSettingGroups creates one setting-group manager per logical device
+// that has setting attributes, and materialises its SGCB. Exactly one
+// manager per device, because each one appends an SGCB to LLN0: two
+// managers for one device would leave two SGCB objects in the model, and a
+// write would reach the one the read path does not resolve.
+//
+// A device that declares its groups in SCL uses the declared count, active
+// group and reservation time; otherwise WithSettingGroups supplies a
+// default count for every device. Declared wins where both are present,
+// because the configuration states the device's own answer.
+func (s *Server) buildSettingGroups() {
+	s.sgs = make(map[string]*sgManager)
 	for _, ld := range s.model.Devices {
-		var declared *model.SettingControl
-		for _, ln := range ld.Nodes {
-			if ln.SettingControl != nil && ln.SettingControl.NumOfSGs > 0 {
-				declared = ln.SettingControl
-				break
+		declared := declaredSettingGroups(ld)
+		n := s.numOfSG
+		resvTms := 0
+		if declared != nil {
+			if declared.NumOfSGs > 0 {
+				n = uint8(declared.NumOfSGs)
 			}
+			resvTms = declared.ResvTms
 		}
-		if declared == nil {
+		if n == 0 {
 			continue
 		}
-		if mgr := newSGManager(ld, uint8(declared.NumOfSGs), declared.ResvTms); mgr != nil {
+		mgr := newSGManager(ld, n, resvTms)
+		if mgr == nil {
+			continue
+		}
+		mgr.seedGroups(s.model.SettingGroups)
+		if declared != nil && declared.ActSG > 0 {
 			mgr.actSG = uint8(declared.ActSG)
-			mgr.seedGroups(s.model.SettingGroups)
-			s.sgs[ld.Name] = mgr
+		}
+		s.sgs[ld.Name] = mgr
+	}
+}
+
+// declaredSettingGroups returns the setting-group declaration of a logical
+// device, which IEC 61850-6 puts on its LLN0.
+func declaredSettingGroups(ld *model.LogicalDevice) *model.SettingControl {
+	for _, ln := range ld.Nodes {
+		if ln.SettingControl != nil && ln.SettingControl.NumOfSGs > 0 {
+			return ln.SettingControl
 		}
 	}
+	return nil
 }
 
 // New returns a server serving m.
@@ -211,18 +232,7 @@ func New(m *model.Model, opts ...Option) *Server {
 	}
 	// Setting groups must be materialised before the report engine so the
 	// SGCB appears in the model.
-	if s.numOfSG > 0 {
-		s.sgs = make(map[string]*sgManager)
-		for _, ld := range m.Devices {
-			if mgr := newSGManager(ld, s.numOfSG, 0); mgr != nil {
-				mgr.seedGroups(m.SettingGroups)
-				s.sgs[ld.Name] = mgr
-			}
-		}
-	}
-	// A logical device may also declare its setting groups in SCL; where it
-	// does, the declared count wins over the WithSettingGroups default.
-	s.materialiseDeclaredSettingGroups()
+	s.buildSettingGroups()
 	// Publish the GOOSE, sampled-value and log control blocks the model
 	// carries, so a client browsing control blocks finds them.
 	materialiseControlBlocks(m)

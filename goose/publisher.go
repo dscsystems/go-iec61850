@@ -208,10 +208,12 @@ func (p *Publisher) retransmit(msg Message, stop chan struct{}) {
 		case <-time.After(p.cfg.Retrans[idx]):
 		}
 		msg.SqNum++
-		p.sqNum = msg.SqNum
 		msg.TimeAllowedToLive = p.tatl(i + 1)
 		// Send under the publisher lock and re-check stop, so a stale
 		// retransmission can never follow the next Publish on the wire.
+		// The state is updated inside the same critical section, so a
+		// goroutine whose state has been superseded cannot overwrite the
+		// counters of the state that replaced it.
 		p.mu.Lock()
 		select {
 		case <-stop:
@@ -219,6 +221,7 @@ func (p *Publisher) retransmit(msg Message, stop chan struct{}) {
 			return
 		default:
 		}
+		p.sqNum = msg.SqNum
 		err := p.send(&msg)
 		p.mu.Unlock()
 		if err != nil {

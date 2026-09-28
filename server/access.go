@@ -112,6 +112,11 @@ func resolveReadErr(ln *model.LogicalNode, item string) (*mms.Value, byte, bool)
 	if len(parts) < 2 {
 		return nil, notFound, false
 	}
+	// readOK is the reason a successful read reports. It is not a
+	// DataAccessError — ISO 9506-2 defines 0..11 — so it must never be
+	// returned on a failure path, where it would reach the peer as an
+	// undefined error code.
+	const readOK = byte(0xff)
 	fc := model.ParseFCLenient(parts[1])
 	if len(parts) == 2 {
 		// LN$FC: structure of all DOs with that FC.
@@ -121,7 +126,7 @@ func resolveReadErr(ln *model.LogicalNode, item string) (*mms.Value, byte, bool)
 				members = append(members, v)
 			}
 		}
-		return mms.NewStructure(members...), 0xff, true
+		return mms.NewStructure(members...), readOK, true
 	}
 	do := ln.Object(parts[2])
 	if do == nil {
@@ -137,8 +142,16 @@ func resolveReadErr(ln *model.LogicalNode, item string) (*mms.Value, byte, bool)
 		break
 	}
 	if len(rest) == 0 {
+		// The data object is not exposed under this functional
+		// constraint, so the item "LN$FC$DO" does not exist on the
+		// device. That is a missing item rather than a type problem, and
+		// saying so matters: a client told type-inconsistent would look
+		// for a type it cannot find.
 		v, ok := doValue(do, fc)
-		return v, 0xff, ok
+		if !ok {
+			return nil, notFound, false
+		}
+		return v, readOK, true
 	}
 	// Descend attributes.
 	var da *model.DataAttribute
@@ -168,7 +181,7 @@ func resolveReadErr(ln *model.LogicalNode, item string) (*mms.Value, byte, bool)
 		// able to tell the two cases apart.
 		return nil, byte(mms.AccessTypeInconsistent), false
 	}
-	return v, 0xff, true
+	return v, readOK, true
 }
 
 // doValue composes the value of a data object under one FC as a structure
@@ -176,9 +189,19 @@ func resolveReadErr(ln *model.LogicalNode, item string) (*mms.Value, byte, bool)
 func doValue(do *model.DataObject, fc model.FC) (*mms.Value, bool) {
 	var members []*mms.Value
 	for _, a := range do.Attributes {
-		if a.FC == fc {
-			members = append(members, daValue(a))
+		if a.FC != fc {
+			continue
 		}
+		v := daValue(a)
+		if v == nil {
+			// One member of the structure cannot be produced. Returning
+			// the rest would encode a structure with fewer components
+			// than the type specification declares, and the client would
+			// read them against the wrong member names — silent
+			// misalignment, which is worse than an error.
+			return nil, false
+		}
+		members = append(members, v)
 	}
 	for _, sub := range do.Objects {
 		if v, ok := doValue(sub, fc); ok && v.Len() > 0 {
@@ -207,9 +230,13 @@ func daValue(da *model.DataAttribute) *mms.Value {
 		}
 		return mms.NewBool(false)
 	}
-	members := make([]*mms.Value, len(da.Children))
-	for i, c := range da.Children {
-		members[i] = daValue(c)
+	members := make([]*mms.Value, 0, len(da.Children))
+	for _, c := range da.Children {
+		v := daValue(c)
+		if v == nil {
+			return nil
+		}
+		members = append(members, v)
 	}
 	return mms.NewStructure(members...)
 }

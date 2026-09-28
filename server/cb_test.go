@@ -17,7 +17,13 @@ import (
 // startServerWith serves m on a loopback listener and returns its address.
 func startServerWith(t *testing.T, m *model.Model, opts ...server.Option) (string, *server.Server) {
 	t.Helper()
-	srv := server.New(m, opts...)
+	return startServerWithModel(t, server.New(m, opts...))
+}
+
+// startServerWithModel serves an already-configured server, for a test that
+// had to register handlers or options on it first.
+func startServerWithModel(t *testing.T, srv *server.Server) (string, *server.Server) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -25,6 +31,13 @@ func startServerWith(t *testing.T, m *model.Model, opts ...server.Option) (strin
 	go srv.Serve(ln)
 	t.Cleanup(func() { srv.Close() })
 	return ln.Addr().String(), srv
+}
+
+// loadEd21 parses the Edition 2.1 fixture for a test that needs the model
+// rather than a server.
+func loadEd21(t *testing.T) (*model.Model, error) {
+	t.Helper()
+	return scl.LoadModel("../testdata/ed21_diverse.cid")
 }
 
 // mustRead is a Read that fails the test rather than returning an error.

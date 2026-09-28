@@ -145,7 +145,7 @@ func (b *builder) applyActiveGroup(ld *model.LogicalDevice, n int) {
 	if n <= 0 {
 		return
 	}
-	for _, sv := range b.groupValues[n] {
+	for _, sv := range b.groupValues[ld.Name][n] {
 		i := strings.IndexByte(sv.Path, '/')
 		if i < 0 {
 			continue
@@ -200,24 +200,50 @@ func (b *builder) settingGroups() []model.SettingGroup {
 	if len(b.groupValues) == 0 {
 		return nil
 	}
-	nums := make([]int, 0, len(b.groupValues))
-	for n := range b.groupValues {
-		nums = append(nums, n)
-	}
-	sort.Ints(nums)
-	out := make([]model.SettingGroup, 0, len(nums))
-	for _, n := range nums {
-		g := model.SettingGroup{Number: n, Values: map[string]*mms.Value{}}
-		for _, sv := range b.groupValues[n] {
-			g.Values[sv.Path] = sv.Value
-			if g.LD == "" {
-				if i := strings.IndexByte(sv.Path, '/'); i >= 0 {
-					g.LD = sv.Path[:i]
-				}
-			}
+	var out []model.SettingGroup
+	for _, ld := range sortedKeys(b.groupValues) {
+		nums := make([]int, 0, len(b.groupValues[ld]))
+		for n := range b.groupValues[ld] {
+			nums = append(nums, n)
 		}
-		out = append(out, g)
+		sort.Ints(nums)
+		for _, n := range nums {
+			g := model.SettingGroup{Number: n, LD: ld, Values: map[string]*mms.Value{}}
+			for _, sv := range b.groupValues[ld][n] {
+				g.Values[sv.Path] = sv.Value
+			}
+			out = append(out, g)
+		}
 	}
+	return out
+}
+
+// recordGroupValue notes a Val@sGroup value of an FC SG or SE attribute for
+// the logical device being built, so the setting-group machinery can serve
+// it. It reports whether the value was recorded: a Val carrying an sGroup on
+// an attribute of another constraint is not a setting-group value, and the
+// caller must then leave it applied rather than roll it back.
+func (b *builder) recordGroupValue(group int, da *model.DataAttribute, path string) bool {
+	if da.FC != model.SG && da.FC != model.SE {
+		return false
+	}
+	led := b.ledRef()
+	if b.groupValues[led] == nil {
+		b.groupValues[led] = map[int][]settingValue{}
+	}
+	b.groupValues[led][group] = append(b.groupValues[led][group], settingValue{
+		Path:  b.ref(path, da.Name),
+		Value: da.Value.Clone(),
+	})
+	return true
+}
+
+func sortedKeys[T any](m map[string]T) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -291,10 +317,13 @@ type builder struct {
 	enums          map[string]*EnumType
 	enumOf         map[*model.DataAttribute]string // Enum leaf -> EnumType id
 	// groupValues collects the per-setting-group initial values of FC SG
-	// and SE attributes, keyed by group number. Val elements carrying an
-	// sGroup give one value per group; without it the value applies to the
-	// active group only.
-	groupValues map[int][]settingValue
+	// and SE attributes, keyed by logical device and then by group number.
+	// The device is part of the key because an IED usually has several and
+	// they can have differently named settings: keying on the group alone
+	// would apply one device's value to another's same-named attribute.
+	// Val elements carrying an sGroup give one value per group; without it
+	// the value applies to the active group only.
+	groupValues map[string]map[int][]settingValue
 	// curLN and curDO are the logical node and the dotted path of the data
 	// object being built, for diagnostics.
 	curLN string
@@ -334,7 +363,7 @@ func newBuilder(s *SCL, d *diag) *builder {
 		daTypes:     map[string]*DAType{},
 		enums:       map[string]*EnumType{},
 		enumOf:      map[*model.DataAttribute]string{},
-		groupValues: map[int][]settingValue{},
+		groupValues: map[string]map[int][]settingValue{},
 	}
 	if t := s.DataTypeTemplates; t != nil {
 		// LNodeType identity is the pair (id, lnClass), so index both
@@ -490,7 +519,7 @@ func (b *builder) buildDO(name, typeID string, depth int) (*model.DataObject, er
 			continue
 		} else if isArray {
 			for ix := 1; ix <= n; ix++ {
-				do.Objects = append(do.Objects, cloneDO(sub, fmt.Sprintf("%s(%d)", sdo.Name, ix)))
+				do.Objects = append(do.Objects, b.cloneDO(sub, fmt.Sprintf("%s(%d)", sdo.Name, ix)))
 			}
 			continue
 		}
@@ -532,19 +561,23 @@ func trgOpsOfBDA(bda *BDA, inherited model.TrgOps) model.TrgOps {
 }
 
 // cloneDO deep-copies a data object under a new name, so that the instances
-// of an array have independent values.
-func cloneDO(src *model.DataObject, name string) *model.DataObject {
+// of an array have independent values. The enum bindings of the copy are
+// carried over: an Enum attribute resolves a Val given as a literal name
+// through that binding, so a copy without it rejects every literal — and
+// enum-valued attributes inside a multi-instance data object, such as the
+// direction of a phase current, are common.
+func (b *builder) cloneDO(src *model.DataObject, name string) *model.DataObject {
 	dst := &model.DataObject{Name: name, CDC: src.CDC}
 	for _, a := range src.Attributes {
-		dst.Attributes = append(dst.Attributes, cloneDA(a, a.Name))
+		dst.Attributes = append(dst.Attributes, b.cloneDA(a, a.Name))
 	}
 	for _, s := range src.Objects {
-		dst.Objects = append(dst.Objects, cloneDO(s, s.Name))
+		dst.Objects = append(dst.Objects, b.cloneDO(s, s.Name))
 	}
 	return dst
 }
 
-func cloneDA(src *model.DataAttribute, name string) *model.DataAttribute {
+func (b *builder) cloneDA(src *model.DataAttribute, name string) *model.DataAttribute {
 	dst := &model.DataAttribute{
 		Name: name, FC: src.FC, FCName: src.FCName, Kind: src.Kind,
 		BType: src.BType, Count: src.Count, TrgOps: src.TrgOps,
@@ -552,8 +585,11 @@ func cloneDA(src *model.DataAttribute, name string) *model.DataAttribute {
 	if src.Value != nil {
 		dst.Value = src.Value.Clone()
 	}
+	if id, ok := b.enumOf[src]; ok {
+		b.enumOf[dst] = id
+	}
 	for _, c := range src.Children {
-		dst.Children = append(dst.Children, cloneDA(c, c.Name))
+		dst.Children = append(dst.Children, b.cloneDA(c, c.Name))
 	}
 	return dst
 }
@@ -918,8 +954,8 @@ func (b *builder) sdiTarget(do *model.DataObject, sdi *SDI, path string) *model.
 // sub-address and the sGroup setting group. vals selects the elements that
 // apply here: the first one when sAddr does not narrow it to an element.
 func (b *builder) applyVals(da *model.DataAttribute, dai *DAI, path string) {
-	// An sAddr names an element of an array attribute, or a member of a
-	// structure; a DAI without one applies to the whole attribute.
+	// An sAddr names an element of an array attribute; a DAI without one
+	// applies to the whole attribute.
 	elem := -1
 	if s := strings.TrimSpace(dai.SAddr); s != "" {
 		if da.Kind != mms.TypeArray {
@@ -934,44 +970,71 @@ func (b *builder) applyVals(da *model.DataAttribute, dai *DAI, path string) {
 	}
 	for i := range dai.Vals {
 		v := &dai.Vals[i]
+		// A Val carrying an sGroup other than the active one defines a
+		// setting group. It is applied, recorded, and then rolled back, so
+		// the group value is kept without becoming the served one.
+		group := b.groupOf(v.SGroup)
+
 		if elem >= 0 {
-			if arr := da.Value; arr != nil {
-				cur := arr.Index(elem)
-				if cur == nil {
-					b.diag.addf(joinPath(path, da.Name), "sAddr %q does not select an "+
-						"element of the %d-element array", dai.SAddr, da.Count)
-					continue
-				}
-				tmp := &model.DataAttribute{
+			arr := da.Value
+			if arr == nil {
+				continue
+			}
+			prev := arr.Index(elem)
+			if prev == nil {
+				b.diag.addf(joinPath(path, da.Name), "sAddr %q does not select an "+
+					"element of the %d-element array", dai.SAddr, da.Count)
+				continue
+			}
+			// The value is parsed against a stand-in attribute, because
+			// that is how setValue resolves an enum literal and the
+			// element carries no type of its own. The stand-in inherits the
+			// enum binding, or an Enum array would reject every literal.
+			tmp := &model.DataAttribute{
+				Name: da.Name, FC: da.FC, FCName: da.FCName,
+				Kind: prev.Type(), BType: da.BType, TrgOps: da.TrgOps,
+			}
+			if id, ok := b.enumOf[da]; ok {
+				b.enumOf[tmp] = id
+			}
+			if err := b.setValue(tmp, v.Value); err != nil {
+				b.diag.add(joinPath(path, da.Name), err.Error())
+				delete(b.enumOf, tmp)
+				continue
+			}
+			delete(b.enumOf, tmp)
+			arr.SetIndex(elem, tmp.Value)
+			if group > 0 {
+				// The recorded value is the whole array with that one
+				// position changed, because that is what the group
+				// holds; the served array is then put back.
+				elemAttr := &model.DataAttribute{
 					Name: da.Name, FC: da.FC, FCName: da.FCName,
-					Kind: cur.Type(), BType: da.BType, TrgOps: da.TrgOps,
+					Kind: da.Kind, BType: da.BType, TrgOps: da.TrgOps,
+					Value: arr.Clone(),
 				}
-				if err := b.setValue(tmp, v.Value); err != nil {
-					b.diag.add(joinPath(path, da.Name), err.Error())
-					continue
+				if b.recordGroupValue(group, elemAttr, path) {
+					arr.SetIndex(elem, prev)
 				}
-				arr.SetIndex(elem, tmp.Value)
 			}
 			continue
 		}
+
 		// The value is applied to the attribute itself, because that is
 		// what resolves an enum literal against its EnumType. A Val
 		// carrying an sGroup other than the active one is then rolled
 		// back, leaving only the per-group record.
-		group := b.groupOf(v.SGroup)
 		prev := da.Value
 		if err := b.setValue(da, v.Value); err != nil {
 			b.diag.add(joinPath(path, da.Name), err.Error())
 			continue
 		}
-		if group > 0 {
-			if da.FC == model.SG || da.FC == model.SE {
-				key := b.ref(path, da.Name)
-				b.groupValues[group] = append(b.groupValues[group], settingValue{
-					Path:  key,
-					Value: da.Value.Clone(),
-				})
-			}
+		if group > 0 && b.recordGroupValue(group, da, path) {
+			// Only a setting-group value is rolled back: the caller asked
+			// for group n, not for the active group. A Val carrying an
+			// sGroup on an attribute of another constraint is just a
+			// value, and discarding it would lose the document's meaning
+			// for no reason.
 			da.Value = prev
 		}
 	}
