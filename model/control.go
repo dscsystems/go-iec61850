@@ -103,10 +103,19 @@ const (
 	// different ctlNum above all.
 	AddCauseInconsistentParameters AddCause = 26
 	AddCauseLockedByOtherClient    AddCause = 27
+	// AddCauseTestNotAllowed is the diagnosis for an operate that sets
+	// Test on an object whose control model is enhanced security. There
+	// the test flag would skip the CommandTermination the client relies on
+	// to confirm the command, so IEC 61850-7-2 requires the server to
+	// refuse rather than execute it.
+	AddCauseTestNotAllowed AddCause = 28
+	// AddCauseBlockedByTest is the diagnosis for a command refused because
+	// the object is under test.
+	AddCauseBlockedByTest AddCause = 29
 
 	// AddCauseNone is not an IEC 61850 value: it is this library's "no
 	// error", returned by a ControlHandler to accept a command. Every
-	// value a peer can send is 0..27, so 255 cannot collide with one.
+	// value a peer can send is 0..29, so 255 cannot collide with one.
 	AddCauseNone AddCause = 255
 )
 
@@ -124,7 +133,8 @@ func (a AddCause) String() string {
 		21: "ended-with-overshoot", 22: "abortion-due-to-deviation",
 		23: "abortion-by-communication-loss", 24: "blocked-by-command",
 		25: "none-reported", 26: "inconsistent-parameters",
-		27: "locked-by-other-client", 255: "none",
+		27: "locked-by-other-client", 28: "test-not-allowed",
+		29: "blocked-by-test", 255: "none",
 	}
 	if s, ok := names[a]; ok {
 		return s

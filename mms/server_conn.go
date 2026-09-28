@@ -201,13 +201,21 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	if len(respondingPSel) == 0 {
 		respondingPSel = presentation.DefaultCalledPSel
 	}
-	cpa := presentation.BuildCPA(respondingPSel, cp.Contexts, aare)
+	negotiatedCtx, cpa := presentation.BuildCPA(respondingPSel, cp.Contexts, aare)
 	opts.trace("tx CPA", cpa)
+	if !negotiatedCtx.HasMMS() {
+		// Without an agreed MMS context nothing sent after the
+		// association can be understood, so refuse here rather than
+		// accepting and then going silent.
+		return nil, fmt.Errorf("mms: peer proposed no usable MMS presentation "+
+			"context (%d contexts proposed)", len(cp.Contexts))
+	}
 	if err := session.Reply(ct, res.CalledSSEL, cpa); err != nil {
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}
 	sc := &ServerConn{
-		fr: &framing{cotp: ct}, raw: raw, Password: password, Peer: raw.RemoteAddr(),
+		fr: &framing{cotp: ct, mmsContext: negotiatedCtx.MMS}, raw: raw,
+		Password: password, Peer: raw.RemoteAddr(),
 		MaxPDU:  int(answer.LocalDetail),
 		unconf:  make(chan []byte, 512),
 		Called:  identityFromACSE(areq.Called),
@@ -225,7 +233,7 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 // clients, files, journals) passes its own InitiateRequest.
 func DefaultServerInitiate() InitiateRequest {
 	return InitiateRequest{
-		LocalDetail:        65000,
+		LocalDetail:        MMSmax,
 		MaxServOutstanding: 10,
 		NestingLevel:       10,
 		Services: NewServiceSupport(

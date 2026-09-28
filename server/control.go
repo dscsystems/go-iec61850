@@ -22,6 +22,12 @@ type ControlCtx struct {
 	Synchro   bool
 	Select    bool // true for the select phase (SBOw), false for operate
 
+	// T is the operate timestamp the client sent. It is the client's
+	// statement of when it decided to operate, not of when the server
+	// received it, so a handler that needs the arrival time must take it
+	// itself. It is the epoch when the client sent none.
+	T time.Time
+
 	// Conn is the association the command arrived on, nil only for a
 	// command with no association behind it. Origin and OrIdent are what
 	// the client claims about itself; this is what the server observed,
@@ -36,6 +42,15 @@ type ControlCtx struct {
 	// operate; see DeferTermination.
 	term *termination
 }
+
+// maxOrIdentLen is the length of the originator identifier in the operate
+// structure. IEC 61850-7-2 types it as an OctetString(0..64); a longer one
+// means the client is not writing the structure the standard defines.
+const maxOrIdentLen = 64
+
+// OrIdentLen is the length of the originator identifier as it arrived, for
+// a handler that wants to police it.
+func (c *ControlCtx) OrIdentLen() int { return len(c.OrIdent) }
 
 // ControlHandler decides whether a control is allowed and applies its
 // effect. Returning model.AddCauseNone accepts the command; any other
@@ -94,6 +109,17 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	case phase == "SBOw" && declared && cm != model.CtlSBOEnhanced:
 		// Select-with-value belongs to SBO with enhanced security only.
 		return refuse(model.AddCauseNotSupported)
+	case ctx.Test && declared && cm.Enhanced():
+		// Enhanced security is the test mechanism: the client confirms it
+		// saw the operate and the server concludes it with a
+		// CommandTermination. A test-flagged operate on such an object
+		// bypasses the confirmation, so IEC 61850-7-2 clause 13.3.1.5.4
+		// requires it to be refused.
+		return refuse(model.AddCauseTestNotAllowed)
+	case ctx.OrIdentLen() > maxOrIdentLen:
+		// orIdent is an OctetString(0..64); a longer one is a client
+		// that is not implementing the structure.
+		return refuse(model.AddCauseInconsistentParameters)
 	}
 
 	if phase == "Cancel" {
@@ -327,6 +353,9 @@ func decodeOper(ref model.ObjectReference, v *mms.Value, conn *mms.ServerConn) *
 	}
 	if n := v.Index(2); n != nil {
 		ctx.CtlNum = uint8(n.Int64())
+	}
+	if t := v.Index(3); t != nil {
+		ctx.T = t.Time()
 	}
 	if t := v.Index(4); t != nil {
 		ctx.Test = t.Bool()

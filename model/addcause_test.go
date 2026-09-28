@@ -40,6 +40,8 @@ func TestAddCauseNumbering(t *testing.T) {
 		{AddCauseNoneReported, 25, "none-reported"},
 		{AddCauseInconsistentParameters, 26, "inconsistent-parameters"},
 		{AddCauseLockedByOtherClient, 27, "locked-by-other-client"},
+		{AddCauseTestNotAllowed, 28, "test-not-allowed"},
+		{AddCauseBlockedByTest, 29, "blocked-by-test"},
 	} {
 		if uint8(tc.cause) != tc.n {
 			t.Errorf("%s = %d, want %d", tc.name, uint8(tc.cause), tc.n)

@@ -23,6 +23,28 @@ var (
 	oidBER  = asn1.OID{2, 1, 1}          // basic encoding transfer syntax
 )
 
+// Context is one presentation context a peer proposed: the identifier it
+// chose for it, the abstract syntax it means, and the transfer syntax it
+// proposes for that syntax.
+type Context struct {
+	ID             int
+	AbstractSyntax asn1.OID
+	TransferSyntax asn1.OID
+}
+
+// IsACSE and IsMMS report which syntax the context carries. The identifiers
+// do not say so: a peer is free to number its contexts as it likes, and
+// only the abstract syntax decides what each one is for.
+func (c Context) IsACSE() bool { return c.AbstractSyntax.Equal(oidACSE) }
+func (c Context) IsMMS() bool  { return c.AbstractSyntax.Equal(oidMMS) }
+
+// BER reports whether the context proposes the basic encoding rules, the
+// only transfer syntax this library implements.
+func (c Context) BER() bool { return c.TransferSyntax.Equal(oidBER) }
+
+// Acceptable reports whether this library can serve the context.
+func (c Context) Acceptable() bool { return (c.IsACSE() || c.IsMMS()) && c.BER() }
+
 // Default presentation selectors used by common 61850 stacks.
 var (
 	DefaultCallingPSel = []byte{0x00, 0x00, 0x00, 0x01}
@@ -52,8 +74,42 @@ func BuildCP(callingPSel, calledPSel, acseData []byte) []byte {
 	return cp.Encode()
 }
 
-// BuildCPA builds a CPA (Connect Presentation Accept) PDU accepting the
-// contexts the peer proposed and wrapping acseData (the ACSE AARE).
+// Negotiated records which of the contexts a peer proposed this library
+// accepted, under the identifiers the peer gave them.
+//
+// A presentation context identifier is chosen by the proposer, not agreed
+// as a constant: the ACSE and MMS contexts are conventionally numbered 1
+// and 3, but that is a convention of the stacks that use it. A responder
+// that assumes 3 and a proposer that chose 2 agree on nothing, and every
+// subsequent PDU is mis-tagged — which a client sees as silence rather
+// than as an error, since a wrong context identifier is not a decodable
+// MMS PDU.
+type Negotiated struct {
+	// ACSE and MMS are the identifiers the peer assigned to the two
+	// contexts, or zero when it proposed neither.
+	ACSE, MMS int
+}
+
+// HasACSE and HasMMS report which contexts were agreed.
+func (n Negotiated) HasACSE() bool { return n.ACSE != 0 }
+func (n Negotiated) HasMMS() bool  { return n.MMS != 0 }
+
+// Result is the per-context outcome in a CPA's result list.
+type Result int
+
+const (
+	// ResultAcceptance: the context is accepted.
+	ResultAcceptance Result = 0
+	// ResultProviderRejection: the responder cannot serve the context.
+	ResultProviderRejection Result = 1
+	// ResultAbstractSyntaxNotSupported: the abstract syntax is unknown.
+	ResultAbstractSyntaxNotSupported Result = 2
+)
+
+// BuildCPA builds a CPA (Connect Presentation Accept) PDU wrapping acseData
+// (the ACSE AARE), accepting the contexts this library can serve and
+// rejecting the rest. The result list has one entry per proposal, in
+// proposal order, which is how the peer maps it back to its own contexts.
 //
 // The CPA is not a CP with a different name: ISO 8823 gives its normal-mode
 // parameters their own tags, where the responder states one
@@ -62,35 +118,49 @@ func BuildCP(callingPSel, calledPSel, acseData []byte) []byte {
 // decodes as a malformed CPA, and a peer that validates it drops the
 // connection before any user data is exchanged.
 //
-// contexts is the number of presentation contexts the peer proposed: the
-// result list has one entry per proposal, matched by position, so a fixed
-// pair would misreport any peer that proposes a different number.
-func BuildCPA(respondingPSel []byte, contexts int, acseData []byte) []byte {
+// acseContextID is the identifier the peer gave the ACSE context, used to
+// wrap the AARE.
+func BuildCPA(respondingPSel []byte, proposed []Context, acseData []byte) (Negotiated, []byte) {
+	var neg Negotiated
 	normal := asn1.Cons(asn1.ContextConstructed(2))
 	if len(respondingPSel) > 0 {
 		// responding-presentation-selector [3] IMPLICIT OCTET STRING
 		normal.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
 	}
-	if contexts <= 0 {
-		contexts = 2 // the ACSE and MMS pair every MMS peer proposes
-	}
 	results := asn1.Cons(asn1.ContextConstructed(5))
-	for i := 0; i < contexts; i++ {
-		results.Add(contextResult(0)) // acceptance
+	for _, c := range proposed {
+		switch {
+		case !c.Acceptable():
+			results.Add(contextResult(ResultProviderRejection))
+		case c.IsACSE():
+			neg.ACSE = c.ID
+			results.Add(contextResult(ResultAcceptance))
+		case c.IsMMS():
+			neg.MMS = c.ID
+			results.Add(contextResult(ResultAcceptance))
+		}
 	}
 	normal.Add(results)
-	normal.Add(userData(ContextACSE, acseData))
+	acseID := neg.ACSE
+	if acseID == 0 {
+		// A peer that proposed no ACSE context cannot receive the AARE;
+		// the ACSE context is the one that carries it, so the CPA is
+		// built with the conventional identifier and the peer will reject
+		// it. Failing here would be a clearer error than a silent one.
+		acseID = ContextACSE
+	}
+	normal.Add(userData(acseID, acseData))
 
 	cpa := asn1.Cons(asn1.TagSet, modeSelector(), normal)
-	return cpa.Encode()
+	return neg, cpa.Encode()
 }
 
-// CP holds what a responder needs from a peer's CP: the selector it addressed
-// and how many presentation contexts it proposed.
+// CP holds what a responder needs from a peer's CP: the selector it
+// addressed and the presentation contexts it proposed.
 type CP struct {
 	CallingPSel []byte
 	CalledPSel  []byte
-	Contexts    int
+	Contexts    []Context
 	UserData    []byte // the ACSE AARQ
 }
 
@@ -123,7 +193,7 @@ func ParseCP(pdu []byte) (CP, error) {
 			case asn1.ContextPrimitive(2):
 				cp.CalledPSel = append([]byte(nil), c...)
 			case asn1.ContextConstructed(4): // context-definition-list
-				cp.Contexts = countSequences(c)
+				cp.Contexts = parseContextList(c)
 			case asn1.ApplicationConstructed(1): // fully-encoded-data
 				_, data, err := parsePDVList(c)
 				if err != nil {
@@ -139,25 +209,72 @@ func ParseCP(pdu []byte) (CP, error) {
 	return cp, nil
 }
 
-// countSequences counts the SEQUENCE entries in a list.
-func countSequences(content []byte) int {
+// parseContextList decodes a context-definition-list. Each entry is
+// PresentationContextDefinition ::= SEQUENCE { presentation-context-identifier
+// INTEGER, abstract-syntax, transfer-syntax-name }, and the last may instead
+// be the abbreviated form without a transfer syntax.
+func parseContextList(content []byte) []Context {
 	dec := asn1.NewDecoder(content)
-	n := 0
+	var out []Context
 	for dec.More() {
-		tag, _, err := dec.ReadTLV()
-		if err != nil {
-			return n
+		tag, body, err := dec.ReadTLV()
+		if err != nil || tag != asn1.TagSequence {
+			// An entry that does not decode ends the list; the caller's
+			// acceptance check reports the shortfall.
+			return out
 		}
-		if tag == asn1.TagSequence {
-			n++
+		entry := asn1.NewDecoder(body)
+		var c Context
+		for entry.More() {
+			t, v, err := entry.ReadTLV()
+			if err != nil {
+				return out
+			}
+			switch t {
+			case asn1.TagInteger:
+				if n, err := asn1.DecodeInt(v); err == nil {
+					c.ID = int(n)
+				}
+			case asn1.TagOID:
+				// The abbreviated form names the transfer syntax directly.
+				oid, err := asn1.DecodeOID(v)
+				if err != nil {
+					return out
+				}
+				if c.AbstractSyntax == nil {
+					c.AbstractSyntax = oid
+				} else {
+					c.TransferSyntax = oid
+				}
+			case asn1.TagSequence:
+				// transfer-syntax-name, a CHOICE of OIDs.
+				ts := asn1.NewDecoder(v)
+				for ts.More() {
+					ot, ov, err := ts.ReadTLV()
+					if err != nil {
+						break
+					}
+					if ot == asn1.TagOID {
+						if oid, err := asn1.DecodeOID(ov); err == nil {
+							c.TransferSyntax = oid
+						}
+					}
+				}
+			}
 		}
+		out = append(out, c)
 	}
-	return n
+	return out
 }
 
-// WrapData wraps an MMS PDU in fully-encoded-data for the MMS context.
-func WrapData(mmsPDU []byte) []byte {
-	return userData(ContextMMS, mmsPDU).Encode()
+// WrapData wraps an MMS PDU in fully-encoded-data for the MMS presentation
+// context. contextID is the identifier the peer assigned to it, which is
+// not necessarily ContextMMS: the identifier is the proposer's choice.
+func WrapData(contextID int, mmsPDU []byte) []byte {
+	if contextID == 0 {
+		contextID = ContextMMS
+	}
+	return userData(contextID, mmsPDU).Encode()
 }
 
 // UnwrapData extracts the user data (an MMS PDU) from a data-phase
@@ -211,12 +328,16 @@ func contextEntry(id int, abstractSyntax asn1.OID) *asn1.Element {
 	)
 }
 
-func contextResult(result int) *asn1.Element {
-	// Result ::= SEQUENCE { result [0] INTEGER, transfer-syntax-name [1] }
-	return asn1.Cons(asn1.TagSequence,
-		asn1.IntElem(asn1.ContextPrimitive(0), int64(result)),
-		asn1.OIDElem(asn1.ContextPrimitive(1), oidBER),
-	)
+// contextResult builds one entry of a CPA result list. An accepted context
+// names the transfer syntax it is accepted with; a rejected one carries
+// only the reason.
+func contextResult(result Result) *asn1.Element {
+	e := asn1.Cons(asn1.TagSequence,
+		asn1.IntElem(asn1.ContextPrimitive(0), int64(result)))
+	if result == ResultAcceptance {
+		e.Add(asn1.OIDElem(asn1.ContextPrimitive(1), oidBER))
+	}
+	return e
 }
 
 // userData builds a fully-encoded-data [APPLICATION 1] wrapping payload in

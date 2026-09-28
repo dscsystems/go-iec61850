@@ -10,10 +10,15 @@ import (
 // top of an established COTP connection.
 type framing struct {
 	cotp *cotp.Conn
+	// mmsContext is the presentation-context-identifier the peer assigned
+	// to the MMS context. It is the proposer's choice, not a constant, so
+	// it comes from the association setup: tagging data with the wrong one
+	// produces PDUs the peer cannot decode, which looks like silence.
+	mmsContext int
 }
 
 func (f *framing) sendMMS(pdu []byte) error {
-	return session.SendData(f.cotp, presentation.WrapData(pdu))
+	return session.SendData(f.cotp, presentation.WrapData(f.mmsContext, pdu))
 }
 
 func (f *framing) recvMMS() ([]byte, error) {

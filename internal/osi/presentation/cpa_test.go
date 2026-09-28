@@ -13,7 +13,7 @@ import (
 // accepts, and peers that validate it drop the connection before any user
 // data is exchanged. Real devices answer with responding [3] alone.
 func TestCPAUsesRespondingSelectorOnly(t *testing.T) {
-	cpa := BuildCPA([]byte{0x00, 0x00, 0x00, 0x01}, 2, []byte{0x61, 0x00})
+	_, cpa := BuildCPA([]byte{0x00, 0x00, 0x00, 0x01}, defaultContexts(), []byte{0x61, 0x00})
 
 	normal := normalModeParams(t, cpa)
 	dec := asn1.NewDecoder(normal)
@@ -44,8 +44,14 @@ func TestCPAUsesRespondingSelectorOnly(t *testing.T) {
 // The result list is matched to the proposal by position, so its length has
 // to follow what the peer actually proposed.
 func TestCPAResultsMatchTheProposedContexts(t *testing.T) {
-	for _, contexts := range []int{1, 2, 3} {
-		cpa := BuildCPA(nil, contexts, []byte{0x61, 0x00})
+	for _, n := range []int{1, 2, 3} {
+		// One more context than the conventional pair, to show the
+		// result list follows the proposal rather than a fixed length.
+		contexts := append(defaultContexts(), Context{
+			ID: 7, AbstractSyntax: asn1.OID{1, 2, 3, 4}, TransferSyntax: oidBER,
+		})
+		contexts = contexts[:n]
+		_, cpa := BuildCPA(nil, contexts, []byte{0x61, 0x00})
 		dec := asn1.NewDecoder(normalModeParams(t, cpa))
 		found := -1
 		for dec.More() {
@@ -54,11 +60,11 @@ func TestCPAResultsMatchTheProposedContexts(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tag == asn1.ContextConstructed(5) {
-				found = countSequences(c)
+				found = countEntries(c)
 			}
 		}
-		if found != contexts {
-			t.Errorf("%d proposed contexts produced %d results", contexts, found)
+		if found != n {
+			t.Errorf("%d proposed contexts produced %d results", n, found)
 		}
 	}
 }
@@ -83,12 +89,52 @@ func TestParseCPFromARealClient(t *testing.T) {
 	if hex.EncodeToString(cp.CalledPSel) != "00000001" {
 		t.Errorf("called PSel = %x, want 00000001", cp.CalledPSel)
 	}
-	if cp.Contexts != 2 {
-		t.Errorf("contexts = %d, want 2 (ACSE and MMS)", cp.Contexts)
+	if len(cp.Contexts) != 2 {
+		t.Fatalf("%d contexts, want 2 (ACSE and MMS)", len(cp.Contexts))
+	}
+	var sawACSE, sawMMS bool
+	for _, c := range cp.Contexts {
+		if c.IsACSE() {
+			sawACSE = true
+		}
+		if c.IsMMS() {
+			sawMMS = true
+		}
+		if !c.BER() {
+			t.Errorf("context %d proposes transfer syntax %v, want BER", c.ID, c.TransferSyntax)
+		}
+	}
+	if !sawACSE || !sawMMS {
+		t.Errorf("contexts = %+v, want one ACSE and one MMS", cp.Contexts)
 	}
 	if len(cp.UserData) == 0 || cp.UserData[0] != 0x60 {
 		t.Errorf("user data is not an AARQ: %x", cp.UserData)
 	}
+}
+
+// defaultContexts is the ACSE and MMS pair every MMS peer proposes,
+// under the identifiers convention gives them.
+func defaultContexts() []Context {
+	return []Context{
+		{ID: ContextACSE, AbstractSyntax: oidACSE, TransferSyntax: oidBER},
+		{ID: ContextMMS, AbstractSyntax: oidMMS, TransferSyntax: oidBER},
+	}
+}
+
+// countEntries counts the SEQUENCE entries in a list.
+func countEntries(content []byte) int {
+	dec := asn1.NewDecoder(content)
+	n := 0
+	for dec.More() {
+		tag, _, err := dec.ReadTLV()
+		if err != nil {
+			return n
+		}
+		if tag == asn1.TagSequence {
+			n++
+		}
+	}
+	return n
 }
 
 func normalModeParams(t *testing.T, pdu []byte) []byte {

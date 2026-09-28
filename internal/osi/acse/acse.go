@@ -22,6 +22,43 @@ var (
 // MMS application context name OID.
 var oidMMSContext = asn1.OID{1, 0, 9506, 2, 3}
 
+// The ACSI application context name, the alternative IEC 61850-7-2 defines
+// for the association. Some servers accept only this one; most, including
+// the reference C stack, accept the plain MMS context. Which is used is
+// therefore a per-connection choice rather than a library-wide one, and
+// neither is wrong: see SetApplicationContext.
+var oidACSIContext = asn1.OID{1, 0, 61850, 4, 0, 2}
+
+// SetApplicationContext selects the application-context-name an association
+// names: ACSIContext for the IEC 61850 context, MMSContext for the plain
+// MMS one. It is process-wide, so set it before dialling. The default is
+// the MMS context, which is what interoperates with the widest set of
+// peers.
+func SetApplicationContext(c ApplicationContext) {
+	switch c {
+	case ACSIContext:
+		oidMMSContext = oidACSIContext
+	default:
+		oidMMSContext = asn1.OID{1, 0, 9506, 2, 3}
+	}
+}
+
+// ApplicationContext names an application context for SetApplicationContext.
+type ApplicationContext int
+
+const (
+	// MMSContext is the plain ISO 9506-2 MMS context, 1.0.9506.2.3.
+	MMSContext ApplicationContext = iota
+	// ACSIContext is the IEC 61850 ACSI context, 1.0.61850.4.0.2.
+	ACSIContext
+)
+
+// ApplicationContextOID returns the OID in use, for a caller that reports
+// the negotiated context to a user.
+func ApplicationContextOID() asn1.OID {
+	return oidMMSContext
+}
+
 // PresentationContextMMS is the presentation-context-identifier used for
 // MMS in the EXTERNAL indirect reference.
 const PresentationContextMMS = 3

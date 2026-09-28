@@ -80,10 +80,17 @@ type ServiceSupport struct {
 	Raw []byte
 }
 
+// MMSmax is the largest MMS PDU this library proposes or accepts. IEC
+// 61850-7-2 fixes it at 65001 octets; the number is negotiated downwards
+// to the smaller of the two peers' proposals, so proposing less than the
+// standard requires costs interoperability with a peer that insists on the
+// value.
+const MMSmax = 65001
+
 // DefaultInitiate returns typical client initiate parameters.
 func DefaultInitiate() InitiateRequest {
 	return InitiateRequest{
-		LocalDetail:        65000,
+		LocalDetail:        MMSmax,
 		MaxServOutstanding: 10,
 		NestingLevel:       5,
 		Services:           defaultServiceSupport(),
@@ -307,7 +314,7 @@ func parseInitiateBody(content []byte) (InitiateRequest, error) {
 		}
 	}
 	if req.LocalDetail == 0 {
-		req.LocalDetail = 65000
+		req.LocalDetail = MMSmax
 	}
 	if req.MaxServOutstanding == 0 {
 		req.MaxServOutstanding = 1
