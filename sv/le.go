@@ -23,12 +23,40 @@ type LESample struct {
 // (int32 value, uint32 quality).
 const leSampleLen = 8 * 8
 
+// leQualityMask selects the 13 bits of the 9-2LE quality word that are the
+// IEC 61850-7-3 Quality, with the quality string's own bit 0 — the most
+// significant bit of the string, the high bit of Validity — at bit 0 of
+// the word. The word is 32 bits wide but only those 13 carry quality; the
+// rest are reserved.
+//
+// This orientation is easy to get backwards, and getting it backwards
+// yields plausible-looking nonsense rather than an error, so it is worth
+// stating what pins it down. 9-2LE gives the test procedures these exact
+// masks, and they are the ones this reading produces:
+//
+//	validity = Invalid   0x0001   (Validity = 01, the first two bits)
+//	test                  0x0800   (detail bit 11)
+//	derived               0x2000   (9-2LE's fourteenth bit, bit 13)
+//
+// See also the 9-2LE Annex A figure 5, which the conformance test
+// procedures for SV publishers check a captured ASDU against.
+const leQualityMask = 0x1fff
+
 // Quality returns the quality of channel i (0..3 currents, 4..7 voltages).
 func (s *LESample) Quality(i int) model.Quality {
 	if i < 0 || i >= len(s.Q) {
 		return 0
 	}
-	return model.Quality(s.Q[i] & 0x1fff)
+	return model.Quality(s.Q[i] & leQualityMask)
+}
+
+// SetQuality writes a 13-bit quality into channel i, leaving the reserved
+// bits of the word alone.
+func (s *LESample) SetQuality(i int, q model.Quality) {
+	if i < 0 || i >= len(s.Q) {
+		return
+	}
+	s.Q[i] = (s.Q[i] &^ leQualityMask) | (uint32(q) & leQualityMask)
 }
 
 // EncodeLESample serialises a 9-2LE dataset payload (64 octets).

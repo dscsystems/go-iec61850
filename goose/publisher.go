@@ -32,20 +32,39 @@ type PublisherConfig struct {
 	ConfRev uint32
 	SrcMAC  [6]byte
 	// Retrans is the interval schedule after a state change; the last
-	// entry repeats indefinitely. Defaults to DefaultRetrans.
+	// entry repeats indefinitely. Defaults to DefaultRetrans. MinTime and
+	// MaxTime from the SCL build this schedule: the first interval is the
+	// minimum time between transmissions and the steady one the maximum,
+	// with the doubling between them that makes the receiver back off
+	// smoothly. See NewPublisherFromModel.
 	Retrans []time.Duration
+	// Test and NdsCom set the corresponding GOOSE fields, which tell a
+	// receiver that the publisher is in test or commissioning state. A
+	// receiver is expected to act on them, so they are only set
+	// deliberately.
+	Test   bool
+	NdsCom bool
+	// TimeQuality is the quality of the time stamp in the message. The
+	// zero value carries the library's default: leap seconds known and an
+	// accuracy of 10.
+	TimeQuality mms.TimeQuality
 }
 
 // Publisher sends GOOSE messages with the standard retransmission state
-// machine: each Publish increments stNum and restarts the schedule, and
-// a background goroutine retransmits with increasing sqNum until the
-// next Publish or Close. Safe for concurrent use.
+// machine. Publish announces a state change: it increments stNum, resets
+// sqNum and restarts the schedule. Refresh repeats the current state: it
+// leaves stNum alone and only restarts the schedule, which is what
+// IEC 61850-8-1 requires a publisher to do when nothing has changed. A
+// background goroutine retransmits with increasing sqNum until the next
+// Publish, Refresh or Close. Safe for concurrent use.
 type Publisher struct {
 	iface ethernet.Interface
 	cfg   PublisherConfig
 
 	mu     sync.Mutex
 	stNum  uint32
+	sqNum  uint32
+	msg    Message       // the state currently being advertised
 	stop   chan struct{} // stops the current retransmission loop
 	closed bool
 	wg     sync.WaitGroup
@@ -75,30 +94,74 @@ func NewPublisher(iface ethernet.Interface, cfg PublisherConfig) (*Publisher, er
 
 // Publish announces a state change: stNum increments, sqNum resets to
 // zero, the message is sent immediately and retransmission restarts.
-// The values must not be mutated until the next Publish or Close.
+// The values must not be mutated until the next Publish, Refresh or Close.
+//
+// stNum starts at 1 and never returns to 0. IEC 61850-8-1 reserves 0 for
+// "no state change yet", so a receiver that treats it as a state change
+// would report one where the publisher has made none; on wrap the counter
+// goes to 1, skipping 0.
 func (p *Publisher) Publish(values []*mms.Value) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return ErrClosed
 	}
+	p.stNum++
+	if p.stNum == 0 {
+		p.stNum = 1
+	}
+	p.sqNum = 0
+	return p.publishLocked(values, true)
+}
+
+// Refresh repeats the current state without announcing a change: stNum
+// stays where it is, sqNum resets, and the retransmission schedule
+// restarts. Use it to re-advertise a value that has not changed, for
+// instance after a subscriber has evidently lost the stream.
+//
+// The values must not be mutated until the next Publish, Refresh or Close.
+// A Refresh before any Publish has nothing to repeat, so it behaves as one.
+func (p *Publisher) Refresh(values []*mms.Value) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return ErrClosed
+	}
+	if p.stNum == 0 {
+		p.stNum = 1
+	}
+	p.sqNum = 0
+	return p.publishLocked(values, false)
+}
+
+// publishLocked sends the message and starts a new retransmission loop.
+func (p *Publisher) publishLocked(values []*mms.Value, stateChange bool) error {
 	if p.stop != nil {
 		close(p.stop)
 	}
-	p.stNum++
-	msg := Message{
+	t := time.Now()
+	if !stateChange && !p.msg.T.IsZero() {
+		// A refresh keeps the timestamp of the change it repeats, so a
+		// receiver can tell how old the state is.
+		t = p.msg.T
+	}
+	p.msg = Message{
 		GoCbRef:           p.cfg.GoCbRef,
 		DatSet:            p.cfg.DatSet,
 		GoID:              p.cfg.GoID,
 		TimeAllowedToLive: p.tatl(0),
-		T:                 time.Now(),
+		T:                 t,
 		StNum:             p.stNum,
 		SqNum:             0,
 		ConfRev:           p.cfg.ConfRev,
 		NumDatSetEntries:  uint32(len(values)),
 		Values:            values,
 		AppID:             p.cfg.AppID,
+		Test:              p.cfg.Test,
+		NdsCom:            p.cfg.NdsCom,
+		TimeQuality:       p.cfg.TimeQuality,
 	}
+	msg := p.msg
 	if err := p.send(&msg); err != nil {
 		return err
 	}
@@ -107,6 +170,14 @@ func (p *Publisher) Publish(values []*mms.Value) error {
 	p.wg.Add(1)
 	go p.retransmit(msg, stop)
 	return nil
+}
+
+// State returns the stNum and sqNum the publisher is currently
+// advertising.
+func (p *Publisher) State() (stNum, sqNum uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.stNum, p.sqNum
 }
 
 // Close stops retransmission and waits for the loop to exit. It does
@@ -137,6 +208,7 @@ func (p *Publisher) retransmit(msg Message, stop chan struct{}) {
 		case <-time.After(p.cfg.Retrans[idx]):
 		}
 		msg.SqNum++
+		p.sqNum = msg.SqNum
 		msg.TimeAllowedToLive = p.tatl(i + 1)
 		// Send under the publisher lock and re-check stop, so a stale
 		// retransmission can never follow the next Publish on the wire.

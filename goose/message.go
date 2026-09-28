@@ -31,8 +31,20 @@ type Message struct {
 	NumDatSetEntries      uint32
 	Values                []*mms.Value
 	AppID                 uint16
+	// TimeQuality is the quality of T. The zero value means the library
+	// default: leap seconds known, clock synchronised, accuracy 10.
+	TimeQuality mms.TimeQuality
 
 	Anomalies Anomalies
+}
+
+// timeQuality is the quality to stamp T with: the caller's, or the
+// library default when none was given.
+func (m *Message) timeQuality() mms.TimeQuality {
+	if m.TimeQuality != 0 {
+		return m.TimeQuality
+	}
+	return mms.TimeAccuracy(10)
 }
 
 // optString returns a context-primitive string element, or nil when s is
@@ -57,7 +69,7 @@ func (m *Message) Marshal() []byte {
 		asn1.UintElem(asn1.ContextPrimitive(1), uint64(m.TimeAllowedToLive)),
 		asn1.Prim(asn1.ContextPrimitive(2), []byte(m.DatSet)),
 		optString(3, m.GoID),
-		asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(m.T, mms.TimeAccuracy(10)).Bytes()),
+		asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(m.T, m.timeQuality()).Bytes()),
 		asn1.UintElem(asn1.ContextPrimitive(5), uint64(m.StNum)),
 		asn1.UintElem(asn1.ContextPrimitive(6), uint64(m.SqNum)),
 		asn1.BoolElem(asn1.ContextPrimitive(7), m.Test),
@@ -118,6 +130,7 @@ func Parse(apdu []byte) (*Message, error) {
 		return nil, fmt.Errorf("goose: t: %w", err)
 	}
 	m.T = tv.Time()
+	m.TimeQuality = tv.TimeQualityFlags()
 	if m.StNum, err = expectUint32(d, 5, "stNum"); err != nil {
 		return nil, err
 	}

@@ -21,6 +21,31 @@ type LEConfig struct {
 	SamplesPerCycle int
 	// NominalHz is the power system frequency (50 or 60).
 	NominalHz int
+	// SmpMod is the sample mode to declare in smpMod [8]. Zero, the
+	// default, leaves the field out, which is what an Edition 1 receiver
+	// expects. Set it when publishing to Edition 2 equipment that reads
+	// SmpRate through it.
+	SmpMod SmpMod
+	// DatSet is the dataset name to declare when Opts.DataSet is set.
+	DatSet string
+	// Opts selects the optional ASDU fields to include. The zero value
+	// includes none beyond the mandatory ones, which is the 9-2LE
+	// profile; set it to publish the refresh time, sample rate, dataset
+	// name or a reference timestamp alongside the sample.
+	Opts SVOpts
+}
+
+// SVOpts selects the optional fields of a sampled-value ASDU
+// (IEC 61850-9-2 and the SmvOpts element of IEC 61850-6).
+type SVOpts struct {
+	// SampleRate includes smpRate [6].
+	SampleRate bool
+	// RefreshTime includes the reference timestamp refrTm [4].
+	RefreshTime bool
+	// DataSet includes the dataset name datSet [1].
+	DataSet bool
+	// SmpMod declares the sample mode in smpMod [8].
+	SmpMod bool
 }
 
 // DefaultMAC returns the 9-2LE multicast destination MAC for the given
@@ -86,13 +111,7 @@ func (p *LEPublisher) Run(ctx context.Context, fill func(smpCnt uint16, out *LES
 }
 
 func (p *LEPublisher) emit(s *LESample) error {
-	pdu := &PDU{AppID: p.cfg.AppID, ASDUs: []*ASDU{{
-		SvID:     p.cfg.SvID,
-		SmpCnt:   s.SmpCnt,
-		ConfRev:  p.cfg.ConfRev,
-		SmpSynch: s.SmpSynch,
-		Sample:   EncodeLESample(s),
-	}}}
+	pdu := &PDU{AppID: p.cfg.AppID, ASDUs: []*ASDU{p.asdu(s)}}
 	return p.iface.WriteFrame(&ethernet.Frame{
 		Dst:       p.cfg.DstMAC,
 		Src:       p.cfg.SrcMAC,
@@ -100,4 +119,29 @@ func (p *LEPublisher) emit(s *LESample) error {
 		VLAN:      p.cfg.VLAN,
 		Payload:   pdu.Marshal(),
 	})
+}
+
+// asdu builds the ASDU for one sample, including the optional fields the
+// configuration asks for.
+func (p *LEPublisher) asdu(s *LESample) *ASDU {
+	a := &ASDU{
+		SvID:     p.cfg.SvID,
+		SmpCnt:   s.SmpCnt,
+		ConfRev:  p.cfg.ConfRev,
+		SmpSynch: s.SmpSynch,
+		Sample:   EncodeLESample(s),
+	}
+	if p.cfg.Opts.SampleRate {
+		a.SmpRate = uint16(p.rate)
+	}
+	if p.cfg.Opts.RefreshTime {
+		a.RefrTm = time.Now()
+	}
+	if p.cfg.Opts.DataSet && p.cfg.DatSet != "" {
+		a.DatSet = p.cfg.DatSet
+	}
+	if p.cfg.Opts.SmpMod {
+		a.SmpMod = p.cfg.SmpMod
+	}
+	return a
 }

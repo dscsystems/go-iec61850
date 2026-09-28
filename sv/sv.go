@@ -24,6 +24,37 @@ const (
 	SmpSynchGlobal uint8 = 2
 )
 
+// SmpMod is the sample mode of IEC 61850-9-2: whether SmpRate counts
+// samples per measurement period, per second, or seconds per sample. It is
+// the smpMod [8] field of the ASDU, added in Edition 2.
+type SmpMod uint8
+
+const (
+	// SmpModUnset is the zero value: the ASDU carried no smpMod, which is
+	// every Edition 1 stream and any stream that leaves the field out.
+	SmpModUnset SmpMod = 0
+	// SmpPerPeriod: SmpRate is samples per measurement period, the
+	// Edition 1 reading and the default when the field is present but the
+	// mode is not.
+	SmpPerPeriod SmpMod = 1
+	// SmpPerSec: SmpRate is samples per second.
+	SmpPerSec SmpMod = 2
+	// SecPerSmp: SmpRate is seconds per sample.
+	SecPerSmp SmpMod = 3
+)
+
+func (m SmpMod) String() string {
+	switch m {
+	case SmpPerPeriod:
+		return "SmpPerPeriod"
+	case SmpPerSec:
+		return "SmpPerSec"
+	case SecPerSmp:
+		return "SecPerSmp"
+	}
+	return "unset"
+}
+
 // ASDU is one Application Service Data Unit within a sampled-value APDU.
 type ASDU struct {
 	SvID     string
@@ -33,6 +64,7 @@ type ASDU struct {
 	RefrTm   time.Time // zero when absent
 	SmpSynch uint8
 	SmpRate  uint16 // zero when absent
+	SmpMod   SmpMod // smpMod [8], zero when absent
 	Sample   []byte // the raw dataset payload (phsMeas for 9-2LE)
 }
 
@@ -84,6 +116,13 @@ func (a *ASDU) element() *asn1.Element {
 		el.Add(asn1.Prim(asn1.ContextPrimitive(6), []byte{byte(a.SmpRate >> 8), byte(a.SmpRate)}))
 	}
 	el.Add(asn1.Prim(asn1.ContextPrimitive(7), a.Sample)) // sample [7] OCTET STRING
+	// smpMod [8] is the last field of the Edition 2 ASDU, after the
+	// sample. It says how to read SmpRate, so a receiver that has it and
+	// one that does not interpret the same field differently. It is
+	// omitted when unset, which is what an Edition 1 stream carries.
+	if a.SmpMod != SmpModUnset {
+		el.Add(asn1.Prim(asn1.ContextPrimitive(8), []byte{byte(a.SmpMod)}))
+	}
 	return el
 }
 
@@ -162,6 +201,9 @@ func parseASDU(content []byte) (*ASDU, error) {
 		return nil, fmt.Errorf("sv: sample: %w", err)
 	}
 	a.Sample = append([]byte(nil), b...)
+	if b, ok, _ := d.Optional(asn1.ContextPrimitive(8)); ok && len(b) > 0 {
+		a.SmpMod = SmpMod(b[len(b)-1])
+	}
 	return a, nil
 }
 
