@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -310,5 +311,41 @@ func TestUnknownFCIsReadableOverMMS(t *testing.T) {
 	if err := c.Write(ctx, model.ObjectReference("ED21LD0/GGIO1.Beh.vendorFCAttr"),
 		model.ParseFCLenient("ZX"), mms.NewInt32(7)); err == nil {
 		t.Error("a write under an unknown functional constraint should be refused")
+	}
+}
+
+// An attribute whose basic type the library does not know is reported with
+// an access error, not served as a zero of some invented type. The two are
+// worth telling apart: the object is there, and a client told
+// object-non-existent will conclude the device does not have it.
+func TestUnknownBasicTypeReadIsReportedNotFabricated(t *testing.T) {
+	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
+	if err != nil {
+		t.Fatalf("LoadModel: %v", err)
+	}
+	addr, _ := startServerWith(t, m)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr, client.WithTimeout(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	_, err = c.Read(ctx, model.ObjectReference("ED21LD0/GGIO1.VendorDO.stVal"), model.ST)
+	if err == nil {
+		t.Fatal("an attribute of an unknown basic type served a value")
+	}
+	if !errors.Is(err, mms.AccessTypeInconsistent) {
+		t.Errorf("read failed with %v, want type-inconsistent", err)
+	}
+	// A known-typed sibling in the same object still reads, so the failure
+	// is about the type and not about the object.
+	v, err := c.Read(ctx, model.ObjectReference("ED21LD0/GGIO1.VendorDO.opts"), model.ST)
+	if err != nil {
+		t.Fatalf("a known-typed sibling failed to read: %v", err)
+	}
+	if v.BitLen() != 10 {
+		t.Errorf("bit-string attribute read back with %d bits, want 10", v.BitLen())
 	}
 }

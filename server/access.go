@@ -96,11 +96,21 @@ func sortFCs(fcs []model.FC) {
 
 // resolveRead returns the MMS value for an item ID "LN$FC$DO[$DA...]"
 // within a logical node, composing structures for DO- and structured-DA
-// level reads.
+// level reads. A false ok means the item does not resolve, or its leaf has a
+// basic type this library does not know: readErr says which.
 func resolveRead(ln *model.LogicalNode, item string) (*mms.Value, bool) {
+	v, _, ok := resolveReadErr(ln, item)
+	return v, ok
+}
+
+// resolveReadErr is resolveRead with the access error that explains a
+// failure, so a caller can answer with a reason rather than the generic
+// object-non-existent.
+func resolveReadErr(ln *model.LogicalNode, item string) (*mms.Value, byte, bool) {
+	notFound := byte(mms.AccessObjectNonExistent)
 	parts := strings.Split(item, "$")
 	if len(parts) < 2 {
-		return nil, false
+		return nil, notFound, false
 	}
 	fc := model.ParseFCLenient(parts[1])
 	if len(parts) == 2 {
@@ -111,11 +121,11 @@ func resolveRead(ln *model.LogicalNode, item string) (*mms.Value, bool) {
 				members = append(members, v)
 			}
 		}
-		return mms.NewStructure(members...), true
+		return mms.NewStructure(members...), 0xff, true
 	}
 	do := ln.Object(parts[2])
 	if do == nil {
-		return nil, false
+		return nil, notFound, false
 	}
 	rest := parts[3:]
 	// Descend sub-objects.
@@ -127,7 +137,8 @@ func resolveRead(ln *model.LogicalNode, item string) (*mms.Value, bool) {
 		break
 	}
 	if len(rest) == 0 {
-		return doValue(do, fc)
+		v, ok := doValue(do, fc)
+		return v, 0xff, ok
 	}
 	// Descend attributes.
 	var da *model.DataAttribute
@@ -138,15 +149,26 @@ func resolveRead(ln *model.LogicalNode, item string) (*mms.Value, bool) {
 		}
 	}
 	if da == nil {
-		return nil, false
+		return nil, notFound, false
 	}
 	for _, name := range rest[1:] {
 		da = da.Child(name)
 		if da == nil {
-			return nil, false
+			return nil, notFound, false
 		}
 	}
-	return daValue(da), true
+	v := daValue(da)
+	if v == nil {
+		// A leaf whose basic type this library does not know has no value
+		// this library could encode, and no type to describe it in a
+		// GetVariableAccessAttributes reply. Returning a zero of some
+		// other type would be a lie the client cannot detect, so the read
+		// reports that the type is inconsistent rather than the object
+		// being absent — the object is there, and the client should be
+		// able to tell the two cases apart.
+		return nil, byte(mms.AccessTypeInconsistent), false
+	}
+	return v, 0xff, true
 }
 
 // doValue composes the value of a data object under one FC as a structure
@@ -175,6 +197,13 @@ func daValue(da *model.DataAttribute) *mms.Value {
 	if len(da.Children) == 0 {
 		if da.Value != nil {
 			return da.Value.Clone()
+		}
+		if da.Kind == mms.TypeNone {
+			// The basic type is one this library does not know, so there
+			// is no value it could encode and no way to describe it. A
+			// zero of some other type would be a lie the client cannot
+			// detect, so this reports the access error instead.
+			return nil
 		}
 		return mms.NewBool(false)
 	}

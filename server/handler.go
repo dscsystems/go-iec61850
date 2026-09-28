@@ -239,9 +239,9 @@ func (h *handler) readOne(domain, item string) *asn1.Element {
 	if ln == nil {
 		return accessFailure(mms.AccessObjectNonExistent)
 	}
-	v, ok := resolveRead(ln, itemRest)
+	v, reason, ok := resolveReadErr(ln, itemRest)
 	if !ok {
-		return accessFailure(mms.AccessObjectNonExistent)
+		return accessFailure(mms.DataAccessError(reason))
 	}
 	return mms.DataElement(v)
 }
