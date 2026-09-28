@@ -28,10 +28,16 @@ func LoadModel(path string, opts ...Option) (*model.Model, error) {
 // control blocks (including GSE/SMV addresses from the Communication
 // section) are resolved.
 //
-// Limitations, kept deliberately: only the first Val of a DAI is applied
-// (setting-group specific values are ignored), array elements cannot be
-// addressed by DAI, Octet64 values must be hexadecimal, and log/report
-// instances beyond configuration are not created here.
+// Initial values are applied per setting group (Val@sGroup) and per array
+// element (DAI@sAddr, DOI/SDI@ix), and the group SettingControl declares
+// active is the one the objects carry. What is not understood is recorded
+// as a diagnostic on the model rather than failing the build, so a single
+// unrecognised construct cannot make a whole IED unreadable; pass
+// Strict(true) for the opposite behaviour.
+//
+// Remaining limitations, kept deliberately: Octet64 and EntryID values must
+// be written as hexadecimal, a Timestamp must be RFC 3339, and report
+// instances beyond those the configuration declares are not created.
 func BuildModel(s *SCL, opts ...Option) (*model.Model, error) {
 	var o buildOptions
 	for _, opt := range opts {

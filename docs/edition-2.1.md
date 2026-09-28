@@ -154,9 +154,9 @@ every IED's GOOSE addressing is missing.
 ### Not implemented
 
 The Edition 2.1 classes whose attribute sets are not implemented here:
-`HST`, `SEQ`, `HMV`, `HWYE`, `HDEL`, `BAC`, `ORG`*, `TSG`, `CUG`, `VSG`,
-`CSG`, `CURVE`, `ISC`, `CSD`, `CST`, `BTS`, `UTS`, `LTS`, `GTS`, `MTS`,
-`NTS`, `STS`, `CTS`, `OTS`, `VSD`, `ORS`, `TCS` — *(`ORG` is implemented)*.
+`HST`, `SEQ`, `HMV`, `HWYE`, `HDEL`, `BAC`, `TSG`, `CUG`, `VSG`, `CSG`,
+`CURVE`, `ISC`, `CSD`, `CST`, `BTS`, `UTS`, `LTS`, `GTS`, `MTS`, `NTS`,
+`STS`, `CTS`, `OTS`, `VSD`, `ORS`, `TCS`.
 
 This is a deliberate limit, not an oversight. A class is added to
 `cdcTable` only with its attribute list from 7-3, because a plausible but
