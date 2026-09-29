@@ -32,12 +32,16 @@ func newFileStore(fsys fs.FS) *fileStore {
 const fileChunkSize = 8000
 
 func (fstore *fileStore) open_(name string) (int32, uint32, time.Time, error) {
-	data, err := fs.ReadFile(fstore.fsys, path.Clean(name))
+	n, ok := fsName(name)
+	if !ok {
+		return 0, 0, time.Time{}, fs.ErrInvalid
+	}
+	data, err := fs.ReadFile(fstore.fsys, n)
 	if err != nil {
 		return 0, 0, time.Time{}, err
 	}
 	var mod time.Time
-	if info, err := fs.Stat(fstore.fsys, path.Clean(name)); err == nil {
+	if info, err := fs.Stat(fstore.fsys, n); err == nil {
 		mod = info.ModTime()
 	}
 	fstore.mu.Lock()

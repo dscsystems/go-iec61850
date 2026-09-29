@@ -167,6 +167,83 @@ func BuildCPA(respondingPSel []byte, proposed []Context, acseData []byte) (Negot
 	return neg, cpa.Encode()
 }
 
+// BuildCPR builds a CPR (Connect Presentation Reject) PDU for a
+// connection the presentation user refuses — an association the ACSE
+// rejects — carrying acseData (the rejecting AARE) in the ACSE context.
+// Its normal-mode parameters are a SEQUENCE (ISO 8823), with the
+// responding selector and the per-context results as in a CPA.
+func BuildCPR(respondingPSel []byte, proposed []Context, acseData []byte) []byte {
+	neg := Negotiate(proposed)
+	seq := asn1.Cons(asn1.TagSequence)
+	if len(respondingPSel) > 0 {
+		seq.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
+	}
+	results := asn1.Cons(asn1.ContextConstructed(5))
+	for _, c := range proposed {
+		if c.Acceptable() {
+			results.Add(contextResult(ResultAcceptance))
+		} else {
+			results.Add(contextResult(ResultProviderRejection))
+		}
+	}
+	seq.Add(results)
+	acseID := neg.ACSE
+	if acseID == 0 {
+		acseID = ContextACSE
+	}
+	seq.Add(userData(acseID, acseData))
+	return seq.Encode()
+}
+
+// ParseCPRUserData extracts the ACSE user data (the AARE) from a CPR PDU.
+func ParseCPRUserData(pdu []byte) ([]byte, error) {
+	seq, err := asn1.NewDecoder(pdu).Expect(asn1.TagSequence)
+	if err != nil {
+		return nil, fmt.Errorf("presentation: CPR not a SEQUENCE: %w", err)
+	}
+	return findFullyEncoded(seq)
+}
+
+// WrapAbort builds an ARU (abnormal release by the user) PDU carrying abrt
+// (the ACSE ABRT) in the ACSE presentation context: its normal-mode
+// parameters, [0] IMPLICIT SEQUENCE, hold only the user data.
+func WrapAbort(acseContextID int, abrt []byte) []byte {
+	if acseContextID == 0 {
+		acseContextID = ContextACSE
+	}
+	return asn1.Cons(asn1.ContextConstructed(0), userData(acseContextID, abrt)).Encode()
+}
+
+// UnwrapAbort extracts the user data (the ACSE ABRT) from an ARU PDU. A
+// SEQUENCE in place of the [0] tag is accepted too.
+func UnwrapAbort(pdu []byte) ([]byte, error) {
+	tag, content, err := asn1.NewDecoder(pdu).ReadTLV()
+	if err != nil {
+		return nil, err
+	}
+	if tag != asn1.ContextConstructed(0) && tag != asn1.TagSequence {
+		return nil, fmt.Errorf("presentation: ARU of tag %v", tag)
+	}
+	return findFullyEncoded(content)
+}
+
+// findFullyEncoded returns the data of the first fully-encoded-data element
+// among a PDU's parameters.
+func findFullyEncoded(content []byte) ([]byte, error) {
+	dec := asn1.NewDecoder(content)
+	for dec.More() {
+		t, c, err := dec.ReadTLV()
+		if err != nil {
+			return nil, err
+		}
+		if t == asn1.ApplicationConstructed(1) {
+			_, data, err := parsePDVList(c)
+			return data, err
+		}
+	}
+	return nil, fmt.Errorf("presentation: no user data")
+}
+
 // CP holds what a responder needs from a peer's CP: the selector it
 // addressed and the presentation contexts it proposed.
 type CP struct {

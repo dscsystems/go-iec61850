@@ -218,15 +218,57 @@ func AAREFor(mmsInitiateResp []byte, responding Identity, proposed asn1.OID, mms
 	return seq.Encode()
 }
 
+// Associate-source-diagnostic values of the acse-service-user (ISO 8650).
+const (
+	DiagNoReason                   = 1
+	DiagAuthenticationFailure      = 13
+	DiagAuthenticationRequired     = 14
+	DiagAuthMechanismNotRecognised = 11
+)
+
 // AAREReject builds a rejecting AARE with the given service-user diagnostic.
-func AAREReject(diagnostic int) []byte {
+func AAREReject(diagnostic int) []byte { return AARERejectFor(nil, diagnostic) }
+
+// AARERejectFor is AAREReject answering with the application context the
+// peer proposed (the MMS context when nil), as a responder must echo it.
+func AARERejectFor(proposed asn1.OID, diagnostic int) []byte {
+	ctx := oidMMSContext
+	if knownApplicationContext(proposed) {
+		ctx = proposed
+	}
 	seq := asn1.Cons(tagAARE,
-		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, oidMMSContext)),
+		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, ctx)),
 		asn1.Cons(asn1.ContextConstructed(2), asn1.IntElem(asn1.TagInteger, 1)), // rejected-permanent
 		asn1.Cons(asn1.ContextConstructed(3),
 			asn1.Cons(asn1.ContextConstructed(1), asn1.IntElem(asn1.TagInteger, int64(diagnostic)))),
 	)
 	return seq.Encode()
+}
+
+// ABRT source values (ISO 8650).
+const (
+	AbortSourceUser     = 0 // acse-service-user
+	AbortSourceProvider = 1 // acse-service-provider
+)
+
+// ABRT builds an A-ABORT APDU: ABRT-apdu ::= [APPLICATION 4] IMPLICIT
+// SEQUENCE { abort-source [0] IMPLICIT INTEGER }.
+func ABRT(source int) []byte {
+	return asn1.Cons(tagABRT, asn1.IntElem(asn1.ContextPrimitive(0), int64(source))).Encode()
+}
+
+// ParseABRT returns the abort source of an A-ABORT APDU.
+func ParseABRT(apdu []byte) (int, error) {
+	content, err := asn1.NewDecoder(apdu).Expect(tagABRT)
+	if err != nil {
+		return 0, fmt.Errorf("acse: not an ABRT: %w", err)
+	}
+	src, ok, err := asn1.NewDecoder(content).Optional(asn1.ContextPrimitive(0))
+	if err != nil || !ok {
+		return 0, err
+	}
+	n, err := asn1.DecodeInt(src)
+	return int(n), err
 }
 
 // RLRQ builds an A-RELEASE request APDU.

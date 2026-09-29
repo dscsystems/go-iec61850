@@ -147,14 +147,31 @@ every IED's GOOSE addressing is missing.
   false because the server publishes neither. `GsCB` carries only `GsEna`
   and `GsID`. The `LCB` is live (above).
 
+### Also implemented (association, files, data sets, logs)
+
+- **Association authentication.** `server.WithPassword` and
+  `server.WithAuthenticator` decide on each association before it is
+  accepted; a refused one gets an ACSE AARE rejected with the diagnostic
+  authentication-failure or authentication-required, in a presentation CPR
+  in a session REFUSE, which the client reports as `mms.RejectedError`.
+  The authenticator sees the password, the ACSE identities, the address
+  and the TLS state.
+- **Abort** in both directions: ACSE A-ABORT in a presentation ARU in a
+  session ABORT, framed as libiec61850 frames it.
+- **DeleteDataSet** refuses a data set configured in SCL and one a control
+  block refers to; only data sets a client created are deletable, and the
+  client reports a refused delete (`mms.ErrNotDeleted`).
+- **SetFile** (MMS obtainFile: the server reads the file from the client
+  over the same association) and **DeleteFile**, with a writable file
+  store (`server.DirFS`, confined to its directory).
+- **Logs:** `ReportJournalStatus`, and `InitializeJournal` with
+  `server.WithDeletableLogs`.
+- **MMS Status and Cancel.**
+
 ### Not implemented
 
-- **DeleteDataSet restrictions.** The server deletes any named data set it
-  is asked to, including one configured in SCL or referenced by a control
-  block; IEC 61850-7-2 requires both to be refused.
 - **Persistent logs.** A log lives in memory and starts empty with the
-  server. `InitializeJournal` (clearing a log) and `ReportJournalStatus`
-  are not served.
+  server.
 - **The ACSI directory services** (`GetDirectory`, `DirectoryObject`,
   `GetDataObjectDefinition`) as services. `client.Browse` is a filter over
   `getNameList`, which is a faithful derivation of the class of each object

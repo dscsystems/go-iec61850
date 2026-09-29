@@ -77,6 +77,13 @@ if [ ! -x "$C_TLS_SERVER" ] || [ ! -f "$SEC/cbuild/src/libiec61850.a" ]; then
   cmake -S "$SEC" -B "$SEC/cbuild" -DBUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
   cmake --build "$SEC/cbuild" -j"$(nproc)"
 fi
+MMS_PEER="$WORK/mms_peer"
+if [ ! -x "$MMS_PEER" ] || [ "$REPO_ROOT/interop/c/mms_peer.c" -nt "$MMS_PEER" ]; then
+  echo "== building the MMS services peer =="
+  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
+  gcc -O1 -o "$MMS_PEER" "$REPO_ROOT/interop/c/mms_peer.c" @"$WORK/inc.rsp" \
+    "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
+fi
 PEER="$WORK/rsession_peer"
 if [ ! -x "$PEER" ] || [ "$REPO_ROOT/interop/c/rsession_peer.c" -nt "$PEER" ]; then
   echo "== building the R-GOOSE/R-SV peer =="
@@ -126,10 +133,16 @@ kill "$SRV_PID" 2>/dev/null || true
 SRV_PID=""
 
 echo
+echo "== direction 1d: our client -> C file server (Status, SetFile, DeleteFile, abort) =="
+IEC61850_C_FILE_SERVER="$LIB/examples/server_example_files/server_example_files" \
+IEC61850_C_FILE_SERVER_STORE="$LIB/examples/server_example_files/vmd-filestore" \
+  go test "$REPO_ROOT/client/..." -run 'FilesInterop' -v
+
+echo
 echo "== direction 2: C clients -> our server =="
 IEC61850_C_CLIENT="$C_CLIENT" IEC61850_C_LOG_CLIENT="$C_LOG_CLIENT" \
-IEC61850_C_MMS_UTILITY="$C_MMS_UTILITY" \
-  go test "$REPO_ROOT/server/..." -run 'CClient|CLogClient|CMMSUtility' -v
+IEC61850_C_MMS_UTILITY="$C_MMS_UTILITY" IEC61850_C_MMS_PEER="$MMS_PEER" \
+  go test "$REPO_ROOT/server/..." -run 'CClient|CLogClient|CMMSUtility|CMMSPeer' -v
 
 echo
 echo "== model: libiec61850's LTRK against our 7-3 tables =="

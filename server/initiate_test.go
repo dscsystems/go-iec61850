@@ -45,10 +45,15 @@ func TestInitiateAnswersWithServerCapabilities(t *testing.T) {
 		{mms.ServiceGetVariableAccessAttributes, "getVariableAccessAttributes", true},
 		{mms.ServiceDefineNamedVariableList, "defineNamedVariableList", true},
 		{mms.ServiceInformationReport, "informationReport", true},
-		{mms.ServiceStatus, "status", false},           // not implemented
-		{mms.ServiceCancel, "cancel", false},           // not implemented
-		{mms.ServiceReadJournal, "readJournal", false}, // the demo model has no logs
-		{mms.ServiceFileOpen, "fileOpen", false},       // no file store configured
+		{mms.ServiceStatus, "status", true},
+		{mms.ServiceCancel, "cancel", true},
+		{mms.ServiceConclude, "conclude", true},
+		{mms.ServiceReadJournal, "readJournal", false},                 // the demo model has no logs
+		{mms.ServiceReportJournalStatus, "reportJournalStatus", false}, // likewise
+		{mms.ServiceInitializeJournal, "initializeJournal", false},     // likewise
+		{mms.ServiceFileOpen, "fileOpen", false},                       // no file store configured
+		{mms.ServiceFileDelete, "fileDelete", false},                   // likewise
+		{mms.ServiceObtainFile, "obtainFile", false},                   // likewise
 	} {
 		if has := got.Services.Has(svc.bit); has != svc.want {
 			t.Errorf("server advertises %s = %v, want %v", svc.name, has, svc.want)

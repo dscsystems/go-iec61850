@@ -5,8 +5,10 @@ Bidirectional interoperability tests against
 
 1. our `client` against the C `server_example_basic_io`, the control
    example and the logging example
-2. the C `client_example1`, `client_example_log` and `mms_utility`
-   against our `server`
+2. the C `client_example1`, `client_example_log`, `mms_utility` and
+   `interop/c/mms_peer.c` (authentication, Status, SetFile, DeleteFile,
+   release, abort) against our `server`; and our client against the C
+   `server_example_files`
 3. libiec61850's service tracking model (`simpleIO_ltrk_tests.icd`, the
    LTRK of `server_example_service_tracking`) loaded by our SCL loader and
    compared with our IEC 61850-7-3 attribute tables
@@ -63,6 +65,11 @@ pull request.
 | Control: SBO-enhanced, CommandTermination±, LastApplError | ✓ | |
 | Logs: browse (ACSILog/LCB), LCB read, ReadJournal by time and after entry | ✓ | ✓ |
 | Logs: LogEna write, entries with data reference, value and ReasonCode | | ✓ |
+| Association: password authentication and rejection | | ✓ |
+| MMS Status | ✓ | ✓ |
+| SetFile (MMS obtainFile, the server reading back from the client) | ✓ | ✓ |
+| DeleteFile, including the server's refusal | ✓ | ✓ |
+| Release (Conclude), Abort | ✓ | ✓ |
 | Ed 2/2.1 classes (HST, BAC, ORG, TSG, CUG, VSG, CSG): directory, read, arrays of structures | | ✓ |
 | Service tracking (CTS, GTS) under FC SR, PhyComAddr structure | | ✓ |
 | R-GOOSE, R-SV: unsecured (C publishes) | ✓ | |
