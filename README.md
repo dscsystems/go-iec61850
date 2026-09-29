@@ -50,6 +50,8 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 
 - [docs/api.md](docs/api.md) — full API reference with examples for every package
 - [docs/developer-guide.md](docs/developer-guide.md) — architecture and how to extend the stack
+- [docs/pics.md](docs/pics.md) — Protocol Implementation Conformance Statement (ACSI models and services, MMS, GOOSE, SV, security)
+- [docs/edition-2.1.md](docs/edition-2.1.md) — the detailed IEC 61850 Edition 2.1 conformance record
 - [SKILL.md](SKILL.md) — task-oriented guide for building apps (agent-friendly)
 - [examples/](examples) — runnable programs: `read`, `server`, `report-monitor`, `goose-subscribe`, `control`
 - godoc: `go doc github.com/dscsystems/go-iec61850/client` (etc.)
