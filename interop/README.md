@@ -5,7 +5,11 @@ Bidirectional interoperability tests against
 
 1. our `client` against the C `server_example_basic_io`, the control
    example and the logging example
-2. the C `client_example1` and `client_example_log` against our `server`
+2. the C `client_example1`, `client_example_log` and `mms_utility`
+   against our `server`
+3. libiec61850's service tracking model (`simpleIO_ltrk_tests.icd`, the
+   LTRK of `server_example_service_tracking`) loaded by our SCL loader and
+   compared with our IEC 61850-7-3 attribute tables
 
 The logging examples need SQLite (`libsqlite3-dev`), which the C server's
 log storage is built on.
@@ -49,6 +53,14 @@ pull request.
 | Control: SBO-enhanced, CommandTermination±, LastApplError | ✓ | |
 | Logs: browse (ACSILog/LCB), LCB read, ReadJournal by time and after entry | ✓ | ✓ |
 | Logs: LogEna write, entries with data reference, value and ReasonCode | | ✓ |
+| Ed 2/2.1 classes (HST, BAC, ORG, TSG, CUG, VSG, CSG): directory, read, arrays of structures | | ✓ |
+| Service tracking (CTS, GTS) under FC SR, PhyComAddr structure | | ✓ |
+
+The service tracking model of libiec61850 (CTS for a boolean, an INT32 and
+a Tcmd control, UTS, BTS, GTS, STS and LTS) is also checked, attribute by
+attribute and in order within each functional constraint, against the
+templates of `model.NewDataObject`. `server_example_service_tracking`
+itself listens on port 102 only, so it is not run.
 
 SBO with normal security is implemented on the server (`server/select.go`)
 and covered by the unit tests; it has no interop assertion yet.

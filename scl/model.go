@@ -674,6 +674,18 @@ func (b *builder) buildDA(name, fcRaw, bType, typeID, count string, trg model.Tr
 		return da, nil
 	}
 
+	if bType == "PhyComAddr" {
+		// IEC 61850-8-1 maps PhyComAddr to a structure, the one a GoCB's
+		// DstAddress and the tracking classes' dstAddress are served as.
+		da.Kind = mms.TypeStructure
+		da.Children = phyComAddr(fc, fcRaw, trg)
+		if isArray {
+			da.Kind = mms.TypeArray
+			da.Count = n
+		}
+		return da, nil
+	}
+
 	kind, known := kindOf(bType)
 	if !known {
 		b.diag.addf(b.path(name), "basic type %q of DA %s is not in the "+
@@ -703,6 +715,20 @@ func (b *builder) buildDA(name, fcRaw, bType, typeID, count string, trg model.Tr
 		}
 	}
 	return da, nil
+}
+
+// phyComAddr is the PHYCOMADDR structure of IEC 61850-8-1: the MAC
+// address, VLAN priority and identifier, and APPID of a stream.
+func phyComAddr(fc model.FC, fcRaw string, trg model.TrgOps) []*model.DataAttribute {
+	leaf := func(name string, kind mms.Type, v *mms.Value) *model.DataAttribute {
+		return &model.DataAttribute{Name: name, FC: fc, FCName: fcRaw, Kind: kind, TrgOps: trg, Value: v}
+	}
+	return []*model.DataAttribute{
+		leaf("Addr", mms.TypeOctetString, mms.NewOctetString(make([]byte, 6))),
+		leaf("PRIORITY", mms.TypeUnsigned, mms.NewUint8(0)),
+		leaf("VID", mms.TypeUnsigned, mms.NewUint16(0)),
+		leaf("APPID", mms.TypeUnsigned, mms.NewUint16(0)),
+	}
 }
 
 // path builds a diagnostic path from the attribute name being built.
@@ -744,7 +770,7 @@ func kindOf(bType string) (mms.Type, bool) {
 		return mms.TypeVisibleString, true
 	case "Unicode255":
 		return mms.TypeMMSString, true
-	case "Octet6", "Octet16", "Octet64", "EntryID", "PhyComAddr":
+	case "Octet6", "Octet16", "Octet64", "EntryID":
 		return mms.TypeOctetString, true
 	case "Quality", "Dbpos", "Tcmd", "Check", "TrgOps", "OptFlds",
 		"SvOptFlds", "LogOptFlds":

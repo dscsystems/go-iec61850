@@ -19,6 +19,9 @@
     * an unknown basic type and an unknown functional constraint, both of
       which must load and be reported rather than fail the load
     * DocName on LN0
+    * the Edition 2 and 2.1 common data classes (HST, BAC, ORG, TSG, CUG,
+      VSG, CSG) and the 7-2 service tracking classes (CTS, GTS) under FC SR,
+      each shaped as IEC 61850-7-3 defines it
 -->
 <SCL xmlns="http://www.iec.ch/61850/2003/SCL" version="2007" revision="B" release="4">
   <Header id="ED21" version="1" revision="1" toolID="go-iec61850 testgen">
@@ -229,6 +232,21 @@
             </DOI>
           </LN>
           <LN prefix="" lnClass="PHC" inst="1" lnType="PHC_1"/>
+          <!-- Edition 2 and 2.1 common data classes, as 7-3 shapes them. -->
+          <LN prefix="" lnClass="GAPC" inst="1" lnType="GAPC_ED2">
+            <DOI name="Crv">
+              <DAI name="numPts"><Val>2</Val></DAI>
+              <DAI name="maxPts"><Val>5</Val></DAI>
+            </DOI>
+            <DOI name="Cur">
+              <DAI name="cur"><Val>EUR</Val></DAI>
+            </DOI>
+            <DOI name="InRef1">
+              <DAI name="setSrcRef"><Val>ED21LD0/GGIO1.Ind1</Val></DAI>
+            </DOI>
+          </LN>
+          <!-- Service tracking (IEC 61850-7-2 Edition 2), FC SR. -->
+          <LN prefix="" lnClass="LTRK" inst="1" lnType="LTRK_1"/>
           <LN prefix="" lnClass="GGIO" inst="2" lnType="GGIO_1"/>
         </LDevice>
       </Server>
@@ -262,6 +280,19 @@
     <!-- The same lnClass as GGIO_1, to exercise (id, lnClass) identity. -->
     <LNodeType id="GGIO_1" lnClass="GGIO_2">
       <DO name="AnIn9" type="MV_1"/>
+    </LNodeType>
+    <LNodeType id="GAPC_ED2" lnClass="GAPC">
+      <DO name="Hst" type="HST_1"/>
+      <DO name="ColChg" type="BAC_1"/>
+      <DO name="InRef1" type="ORG_1"/>
+      <DO name="StrTm" type="TSG_1"/>
+      <DO name="Cur" type="CUG_1"/>
+      <DO name="Txt" type="VSG_1"/>
+      <DO name="Crv" type="CSG_1"/>
+    </LNodeType>
+    <LNodeType id="LTRK_1" lnClass="LTRK">
+      <DO name="SpcTrk" type="CTS_1"/>
+      <DO name="GocbTrk" type="GTS_1"/>
     </LNodeType>
     <LNodeType id="PHC_1" lnClass="PHC">
       <!-- The physical communication address: PhyComAddr. -->
@@ -314,11 +345,105 @@
       <DA name="opts" bType="SvOptFlds" fc="ST"/>
       <DA name="lgOpts" bType="LogOptFlds" fc="ST"/>
     </DOType>
+    <DOType id="HST_1" cdc="HST">
+      <DA name="hstVal" bType="INT32" fc="ST" count="4" dchg="true" dupd="true"/>
+      <DA name="q" bType="Quality" fc="ST" qchg="true"/>
+      <DA name="t" bType="Timestamp" fc="ST"/>
+      <DA name="numPts" bType="INT16U" fc="CF" dchg="true"/>
+      <DA name="hstRangeC" bType="Struct" type="Cell_1" fc="CF" count="4" dchg="true"/>
+      <DA name="xUnits" bType="Struct" type="Unit_1" fc="CF" dchg="true"/>
+      <DA name="maxPts" bType="INT16U" fc="CF" dchg="true"/>
+      <DA name="xD" bType="VisString255" fc="DC"/>
+    </DOType>
+    <DOType id="BAC_1" cdc="BAC">
+      <DA name="mxVal" bType="Struct" type="AnalogueValue_F" fc="MX" dchg="true" dupd="true"/>
+      <DA name="q" bType="Quality" fc="MX" qchg="true"/>
+      <DA name="t" bType="Timestamp" fc="MX"/>
+      <DA name="persistent" bType="BOOLEAN" fc="CF" dchg="true"/>
+      <DA name="ctlModel" bType="Enum" type="CtlModels" fc="CF"/>
+      <DA name="Oper" bType="Struct" type="BACOper_1" fc="CO"/>
+    </DOType>
+    <DOType id="ORG_1" cdc="ORG">
+      <DA name="setSrcRef" bType="ObjRef" fc="SP" dchg="true"/>
+      <DA name="setTstRef" bType="ObjRef" fc="SP" dchg="true"/>
+      <DA name="tstEna" bType="BOOLEAN" fc="SP" dchg="true"/>
+    </DOType>
+    <DOType id="TSG_1" cdc="TSG">
+      <DA name="setTm" bType="Timestamp" fc="SP" dchg="true"/>
+    </DOType>
+    <DOType id="CUG_1" cdc="CUG">
+      <DA name="cur" bType="Currency" fc="SP" dchg="true"/>
+    </DOType>
+    <DOType id="VSG_1" cdc="VSG">
+      <DA name="setVal" bType="VisString255" fc="SP" dchg="true"/>
+    </DOType>
+    <DOType id="CSG_1" cdc="CSG">
+      <DA name="numPts" bType="INT16U" fc="SP" dchg="true"/>
+      <DA name="crvPts" bType="Struct" type="Point_1" fc="SP" count="5" dchg="true"/>
+      <DA name="xUnits" bType="Struct" type="Unit_1" fc="CF" dchg="true"/>
+      <DA name="yUnits" bType="Struct" type="Unit_1" fc="CF" dchg="true"/>
+      <DA name="maxPts" bType="INT16U" fc="CF" dchg="true"/>
+      <DA name="xD" bType="VisString255" fc="DC"/>
+      <DA name="yD" bType="VisString255" fc="DC"/>
+    </DOType>
+    <DOType id="CTS_1" cdc="CTS">
+      <DA name="objRef" bType="ObjRef" fc="SR" dupd="true"/>
+      <DA name="serviceType" bType="Enum" type="ServiceType" fc="SR"/>
+      <DA name="errorCode" bType="Enum" type="ServiceError" fc="SR"/>
+      <DA name="t" bType="Timestamp" fc="SR"/>
+      <DA name="ctlVal" bType="BOOLEAN" fc="SR"/>
+      <DA name="origin" bType="Struct" type="Originator_1" fc="SR"/>
+      <DA name="ctlNum" bType="INT8U" fc="SR"/>
+      <DA name="T" bType="Timestamp" fc="SR"/>
+      <DA name="Test" bType="BOOLEAN" fc="SR"/>
+      <DA name="Check" bType="Check" fc="SR"/>
+      <DA name="respAddCause" bType="Enum" type="AddCause" fc="SR"/>
+    </DOType>
+    <DOType id="GTS_1" cdc="GTS">
+      <DA name="objRef" bType="ObjRef" fc="SR" dupd="true"/>
+      <DA name="serviceType" bType="Enum" type="ServiceType" fc="SR"/>
+      <DA name="errorCode" bType="Enum" type="ServiceError" fc="SR"/>
+      <DA name="t" bType="Timestamp" fc="SR"/>
+      <DA name="goEna" bType="BOOLEAN" fc="SR"/>
+      <DA name="goID" bType="VisString129" fc="SR"/>
+      <DA name="datSet" bType="ObjRef" fc="SR"/>
+      <DA name="confRev" bType="INT32U" fc="SR"/>
+      <DA name="ndsCom" bType="BOOLEAN" fc="SR"/>
+      <DA name="dstAddress" bType="PhyComAddr" fc="SR"/>
+    </DOType>
 
     <DAType id="AnalogueValue_1">
       <BDA name="f" bType="FLOAT32"/>
       <!-- An array attribute, addressable by DAI@sAddr. -->
       <BDA name="phsAngRef" bType="FLOAT32" count="3"/>
+    </DAType>
+
+    <DAType id="AnalogueValue_F">
+      <BDA name="f" bType="FLOAT32"/>
+    </DAType>
+    <DAType id="Unit_1">
+      <BDA name="SIUnit" bType="Enum" type="SIUnit"/>
+      <BDA name="multiplier" bType="Enum" type="Multiplier"/>
+    </DAType>
+    <DAType id="Cell_1">
+      <BDA name="xStart" bType="FLOAT32"/>
+      <BDA name="xEnd" bType="FLOAT32"/>
+    </DAType>
+    <DAType id="Point_1">
+      <BDA name="xVal" bType="FLOAT32"/>
+      <BDA name="yVal" bType="FLOAT32"/>
+    </DAType>
+    <DAType id="Originator_1">
+      <BDA name="orCat" bType="Enum" type="OrCat"/>
+      <BDA name="orIdent" bType="Octet64"/>
+    </DAType>
+    <DAType id="BACOper_1">
+      <BDA name="ctlVal" bType="Tcmd"/>
+      <BDA name="origin" bType="Struct" type="Originator_1"/>
+      <BDA name="ctlNum" bType="INT8U"/>
+      <BDA name="T" bType="Timestamp"/>
+      <BDA name="Test" bType="BOOLEAN"/>
+      <BDA name="Check" bType="Check"/>
     </DAType>
 
     <EnumType id="Mod">
@@ -339,6 +464,32 @@
       <EnumVal ord="2">direct-with-enhanced-security</EnumVal>
       <EnumVal ord="3">sbo-with-normal-security</EnumVal>
       <EnumVal ord="4">sbo-with-enhanced-security</EnumVal>
+    </EnumType>
+    <EnumType id="SIUnit">
+      <EnumVal ord="1">none</EnumVal>
+      <EnumVal ord="29">V</EnumVal>
+    </EnumType>
+    <EnumType id="Multiplier">
+      <EnumVal ord="0"/>
+      <EnumVal ord="3">k</EnumVal>
+    </EnumType>
+    <EnumType id="OrCat">
+      <EnumVal ord="0">not-supported</EnumVal>
+      <EnumVal ord="1">bay-control</EnumVal>
+      <EnumVal ord="2">station-control</EnumVal>
+      <EnumVal ord="3">remote-control</EnumVal>
+    </EnumType>
+    <EnumType id="ServiceType">
+      <EnumVal ord="0">Unknown</EnumVal>
+      <EnumVal ord="54">Operate</EnumVal>
+    </EnumType>
+    <EnumType id="ServiceError">
+      <EnumVal ord="0">no-error</EnumVal>
+      <EnumVal ord="1">instance-not-available</EnumVal>
+    </EnumType>
+    <EnumType id="AddCause">
+      <EnumVal ord="0">Unknown</EnumVal>
+      <EnumVal ord="1">Not-supported</EnumVal>
     </EnumType>
   </DataTypeTemplates>
 </SCL>

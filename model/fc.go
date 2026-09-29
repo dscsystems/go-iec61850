@@ -34,6 +34,10 @@ const (
 	MS        // multicast sampled values control
 	US        // unicast sampled values control
 	ALL       // wildcard, client side only
+	// SR is service response, the constraint of the service tracking
+	// classes (CST, BTS, CTS...) that IEC 61850-7-2 Edition 2 added. It
+	// comes after ALL so the values of the others stay as they were.
+	SR
 
 	// FCUnknown marks a constraint whose mnemonic the library does not
 	// know: a constraint added by a later edition than this one, or a
@@ -47,6 +51,7 @@ var fcNames = [...]string{
 	FCNone: "", ST: "ST", MX: "MX", CO: "CO", SP: "SP", SG: "SG", SE: "SE",
 	SV: "SV", CF: "CF", DC: "DC", EX: "EX", OR: "OR", BL: "BL", RP: "RP",
 	BR: "BR", LG: "LG", GO: "GO", GS: "GS", MS: "MS", US: "US", ALL: "*",
+	SR: "SR",
 }
 
 func (fc FC) String() string {

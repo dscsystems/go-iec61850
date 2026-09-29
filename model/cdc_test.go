@@ -65,11 +65,11 @@ func TestNewDataObjectStatusClasses(t *testing.T) {
 		t.Errorf("DPS stVal = %s of %d bits, want a 2-bit string", v.Kind, v.Value.BitLen())
 	}
 
-	// A visible string status carries text, and its substitution value is
-	// text as well.
+	// A visible string status carries text. 7-3 gives it no substitution
+	// group, so asking for one builds nothing.
 	vss := NewDataObject("StrSt", CDCVSS, WithOptional("subVal", "subEna"))
-	if got := len(vss.Attributes); got != 5 {
-		t.Errorf("VSS attributes = %v, want stVal, q, t and the two asked for", attrNames(vss))
+	if got := len(vss.Attributes); got != 3 {
+		t.Errorf("VSS attributes = %v, want stVal, q, t", attrNames(vss))
 	}
 	sv := findAttr(t, vss, "stVal")
 	if sv.Kind != mms.TypeVisibleString || sv.FC != ST {
@@ -77,9 +77,6 @@ func TestNewDataObjectStatusClasses(t *testing.T) {
 	}
 	if sv.Value == nil || sv.Value.Text() != "" {
 		t.Errorf("VSS stVal value = %v, want an empty string", sv.Value)
-	}
-	if sub := findAttr(t, vss, "subVal"); sub.Kind != mms.TypeVisibleString || sub.FC != SV {
-		t.Errorf("VSS subVal = %s [%s], want a visible string [SV]", sub.Kind, sub.FC)
 	}
 	if q := findAttr(t, vss, "q"); q.Value.BitLen() != 13 {
 		t.Errorf("VSS q = %d bits, want 13", q.Value.BitLen())
@@ -282,7 +279,9 @@ func TestNewDataObjectControlValueTypes(t *testing.T) {
 		{CDCDPC, mms.TypeBoolean},
 		{CDCINC, mms.TypeInteger},
 		{CDCENC, mms.TypeInteger},
-		{CDCBSC, mms.TypeInteger},
+		{CDCBSC, mms.TypeBitString}, // Tcmd, a coded enum in 8-1
+		{CDCISC, mms.TypeInteger},
+		{CDCBAC, mms.TypeBitString},
 		{CDCAPC, mms.TypeStructure}, // an AnalogueValue
 	} {
 		do := NewDataObject("C", tc.cdc, WithControlModel(CtlDirectNormal))
@@ -383,13 +382,16 @@ func TestCDCTablesAreQueryable(t *testing.T) {
 	}
 }
 
-func TestNewDataObjectUnknownClassPanics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Error("an unknown class did not panic")
-		}
-	}()
-	NewDataObject("X", CDC("NOPE"))
+// An unknown class is not a crash: a class name can arrive at run time,
+// from a file of a newer edition, and the object is still real.
+func TestNewDataObjectUnknownClassDoesNotPanic(t *testing.T) {
+	do := NewDataObject("X", CDC("NOPE"))
+	if do == nil || do.Name != "X" || do.CDC != "NOPE" {
+		t.Fatalf("unknown class built %+v, want the named, empty object", do)
+	}
+	if len(do.Attributes) != 0 || len(do.Objects) != 0 {
+		t.Errorf("unknown class built contents: %v", attrNames(do))
+	}
 }
 
 // Every class in the table builds, and every leaf it produces has a value
@@ -399,7 +401,12 @@ func TestEveryCDCBuilds(t *testing.T) {
 	check = func(t *testing.T, path string, das []*DataAttribute) {
 		for _, da := range das {
 			p := path + "." + da.Name
-			if da.Kind == mms.TypeStructure {
+			// An array of a constructed type carries its element template
+			// in Children and no value, as the SCL loader builds one.
+			if da.Kind == mms.TypeStructure || (da.Kind == mms.TypeArray && len(da.Children) > 0) {
+				if da.Kind == mms.TypeArray && da.Count < 1 {
+					t.Errorf("%s is an array of no elements", p)
+				}
 				if len(da.Children) == 0 {
 					t.Errorf("%s is an empty structure", p)
 				}
@@ -478,20 +485,27 @@ func TestSubstitutionGroupCoverage(t *testing.T) {
 			}
 		}
 	}
-	for _, cdc := range []CDC{CDCSPS, CDCDPS, CDCINS, CDCENS, CDCVSS, CDCACT, CDCACD,
-		CDCMV, CDCCMV, CDCSAV, CDCSPC, CDCDPC, CDCINC, CDCENC, CDCBSC, CDCAPC, CDCORG} {
+	for _, cdc := range []CDC{CDCSPS, CDCDPS, CDCINS, CDCENS,
+		CDCMV, CDCCMV, CDCSPC, CDCDPC, CDCINC, CDCENC, CDCBSC, CDCISC, CDCAPC, CDCBAC} {
 		if !hasSub[string(cdc)] {
 			t.Errorf("%s has no substitution group", cdc)
 		}
 	}
-	// The substituted value of a structure-valued class keeps the structure.
-	mv, _ := NewDataObjectOr("AnIn1", CDCMV, WithOptional("subEna", "subVal", "subQ", "subID"))
-	sub := mv.Attribute("subVal")
+	// 7-3 gives none to the classes whose value is not substitutable.
+	for _, cdc := range []CDC{CDCVSS, CDCACT, CDCACD, CDCSAV, CDCORG, CDCHST, CDCSEC} {
+		if hasSub[string(cdc)] {
+			t.Errorf("%s has a substitution group 7-3 does not give it", cdc)
+		}
+	}
+	// The substituted value of a structure-valued class keeps the
+	// structure; MV names it subMag.
+	mv, _ := NewDataObjectOr("AnIn1", CDCMV, WithOptional("subEna", "subMag", "subQ", "subID"))
+	sub := mv.Attribute("subMag")
 	if sub == nil || sub.Kind != mms.TypeStructure {
-		t.Fatalf("MV.subVal = %v, want a structure", sub)
+		t.Fatalf("MV.subMag = %v, want a structure", sub)
 	}
 	if sub.Child("f") == nil && sub.Child("i") == nil {
-		t.Error("MV.subVal should be an AnalogueValue, with one numeric member")
+		t.Error("MV.subMag should be an AnalogueValue, with one numeric member")
 	}
 	if q := mv.Attribute("subQ"); q == nil || q.Kind != mms.TypeBitString || q.Value == nil || q.Value.BitLen() != 13 {
 		t.Error("MV.subQ should be a 13-bit quality")
@@ -501,19 +515,21 @@ func TestSubstitutionGroupCoverage(t *testing.T) {
 // The classes of Edition 2 and 2.1 that have templates here, and the
 // classes a document may still use without failing to load.
 func TestNewDataObjectOrUnknownCDC(t *testing.T) {
-	do, d := NewDataObjectOr("Thing", CDC("HST"))
+	do, d := NewDataObjectOr("Thing", CDC("XYZ"))
 	if d.Message == "" {
 		t.Error("an unknown class should report a diagnostic")
 	}
 	if do == nil || do.Name != "Thing" {
 		t.Error("an unknown class should still yield the object")
 	}
-	if do, d := NewDataObjectOrNil("Thing", CDC("HST")); do != nil || d.Message == "" {
+	if do, d := NewDataObjectOrNil("Thing", CDC("XYZ")); do != nil || d.Message == "" {
 		t.Error("NewDataObjectOrNil should yield nil and a diagnostic")
 	}
 	// A known class reports nothing and builds normally.
-	if _, d := NewDataObjectOr("Sec", CDCSEC); d.Message != "" {
-		t.Errorf("SEC should be known, got %q", d.Message)
+	for _, cdc := range []CDC{CDCSEC, CDCHST, CDCBAC, CDCORG, CDCTSG, CDCCUG, CDCVSG, CDCCSG} {
+		if _, d := NewDataObjectOr("X", cdc); d.Message != "" {
+			t.Errorf("%s should be known, got %q", cdc, d.Message)
+		}
 	}
 }
 

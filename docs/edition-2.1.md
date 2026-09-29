@@ -164,30 +164,82 @@ every IED's GOOSE addressing is missing.
 
 ### Implemented
 
-- The common data classes listed in `model/cdc.go`: the Ed 1 and Ed 2
-  status, measurand, controllable, settings and description classes, plus
-  `SEC` and `ORG`.
-- The substitution group (FC SV) on every class with a substitutable
-  value, as 7-2 requires.
+- The common data classes listed in `model/cdc.go`: the Ed 1 status,
+  measurand, controllable, settings and description classes, and those
+  Edition 2 and 2.1 added: `SEC`, `HST`, `ORS`, `TCS`, `SEQ`, `HMV`,
+  `HWYE`, `HDEL`, `ISC`, `BAC`, `ORG`, `TSG`, `CUG`, `VSG`, `CURVE`, `CSG`,
+  `CSD` and `VSD`.
+- The service tracking classes of IEC 61850-7-2 Edition 2 (`CST`, `BTS`,
+  `UTS`, `LTS`, `GTS`, `MTS`, `NTS`, `STS`, `CTS`), served under FC `SR`.
+  `WithTrackedControl` gives a `CTS` the `ctlVal` type of the control it
+  tracks.
+- Arrays: `WithMaxPts` sizes the array attributes and sub-objects of `HST`,
+  `CSG`, `CSD`, `HMV`, `HWYE` and `HDEL` and sets `maxPts`. An array of a
+  constructed type (`hstRangeC`, `crvPts`) is served as an array of
+  structures, and described to a client with its element type.
+- The presence groups of 7-3: `TSG` builds `setTm` unless `setCal` is asked
+  for (AtLeastOne), and `ORG` builds `setTstRef` and `tstEna` together
+  (AllOrNonePerGroup).
+- `PhyComAddr` is the IEC 61850-8-1 structure (`Addr`, `PRIORITY`, `VID`,
+  `APPID`) both in the templates and when the SCL loader meets the basic
+  type, as a GoCB's `DstAddress` already was.
+- The substitution group (FC SV) on the classes 7-3 gives one to, with the
+  substituted value shaped like the value it replaces (`subMag` for `MV`,
+  `subCVal` for `CMV`).
 - `Quality` bit positions, `Dbpos`, trigger options and reason codes per
   7-3.
-- An unknown class no longer panics: `NewDataObjectOr` returns a
-  diagnostic and an empty object, and the SCL loader takes the attributes
-  from the file.
+- A value in a setting group (FC `SG` or `SE`) triggers nothing, as the
+  `SG` and `SE` variants of the 7-3 setting classes have no trigger
+  options; the `SP` form keeps its own.
+- The logical node classes of 7-4 most models use: `LLN0`, `LPHD`,
+  `LTRK`, `CSWI`, `CILO`, `GGIO`, `GAPC`, `MMXU`, `MMXN`, `MSQI`, `PTOC`,
+  `PTOV`, `PTUV`, `PDIS`, `PDIF`, `PTRC`, `RREC`, `XCBR` and `XSWI`.
+  `model.NewLogicalNode` builds a node of one of them, with its mandatory
+  data objects and the optional ones asked for, and the tracking objects
+  of `LTRK` tracking the control their name says. `Model.CheckLNClasses`
+  reports each node missing a mandatory data object or holding one of the
+  wrong class, accepting the Edition 1 integer classes (INS, INC, ING) for
+  the enumerated ones. A data object is mandatory in these tables only
+  where every Edition 2 release makes it so, and an object the table does
+  not list is not reported, so the check does not fault a conformant or
+  vendor-extended node. The SCL loader does not run it: conformance to 7-4
+  is a question about the device, not about reading the file, and a
+  `Strict` load must not start failing on it.
+- An unknown class does not panic: `NewDataObject` builds the named object
+  with no attributes, `NewDataObjectOr` also returns a diagnostic, and the
+  SCL loader takes the attributes from the file.
+
+### Verification of the tables
+
+- `model/nsd_test.go` checks every table against the NSD of 7-3
+  (`IEC_61850-7-3_2007B5.nsd`) when `IEC61850_NSD_DIR` names a directory
+  holding it. The NSD is an IEC code component and is not in this
+  repository, so the check is skipped otherwise.
+- `model/nsd_test.go` checks the logical node tables against the 7-4 NSD
+  (`IEC_61850-7-4_2007B5.nsd`) in the same way.
+- `scl/conformance_test.go` checks the Edition 2 classes of the
+  `2007B4` fixture against the templates, attribute by attribute and in
+  order within each functional constraint.
+- The interop run checks the LTRK model libiec61850 ships, written
+  independently, against the tracking templates. It agrees on every class;
+  `LTS` follows the ACSI log control block (`logEna`, `datSet`, `bufTm`,
+  `trgOps`, `intgPd`, `logRef`), not the 8-1 mapping that adds the log's
+  own entry state. It also runs `CheckLNClasses` on that model, which
+  conforms.
 
 ### Not implemented
 
-The Edition 2.1 classes whose attribute sets are not implemented here:
-`HST`, `SEQ`, `HMV`, `HWYE`, `HDEL`, `BAC`, `TSG`, `CUG`, `VSG`, `CSG`,
-`CURVE`, `ISC`, `CSD`, `CST`, `BTS`, `UTS`, `LTS`, `GTS`, `MTS`, `NTS`,
-`STS`, `CTS`, `OTS`, `VSD`, `ORS`, `TCS`.
-
-This is a deliberate limit, not an oversight. A class is added to
-`cdcTable` only with its attribute list from 7-3, because a plausible but
-wrong attribute table is worse than none: it produces a model that lies
-about the device rather than one that admits it does not know. A document
-using one of these classes **loads** — the SCL supplies the attributes, and
-the class is reported as unknown to this library.
+- `OTS`, and any class 7-3 or 7-2 adds after Edition 2.1. A document using
+  one **loads** — the SCL supplies the attributes, and the class is
+  reported as unknown to this library. A class is added to `cdcTable` only
+  with its attribute list from the standard, because a plausible but wrong
+  attribute table is worse than none.
+- The general description and namespace attributes (`dU`, `cdcNs`,
+  `cdcName`, `dataNs`) are not in the templates; an SCL file that declares
+  them keeps them.
+- The 7-4 logical node classes other than those listed above; a node of
+  another class is the data objects its `LNodeType` lists, and is not
+  checked.
 
 ## IEC 61850-8-1 — GOOSE and the SCSM
 
@@ -273,7 +325,8 @@ the class is reported as unknown to this library.
 
 - `go test -race ./...` covers every "implemented" claim in this document.
 - `testdata/ed21_diverse.cid` is a synthetic `2007B4` CID exercising the
-  Edition 2.1 constructs: `PhyComAddr`, `SvOptFlds`/`LogOptFlds`, an
+  Edition 2.1 constructs: `PhyComAddr`, `SvOptFlds`/`LogOptFlds`, the
+  Edition 2 and 2.1 common data classes and service tracking, an
   unknown basic type and an unknown functional constraint, an `SDO@count`
   array with `ix` and `sAddr` selection, per-group `Val`s, `SmvOpts`,
   `smpMod`, a GSSE and an R-GOOSE control block, and the full `Services`

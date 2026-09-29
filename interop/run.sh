@@ -3,7 +3,10 @@
 #   1. our client against the C server_example_basic_io, its control
 #      services against server_example_control, and its log queries
 #      against server_example_logging
-#   2. the C client_example1 and client_example_log against our server
+#   2. the C client_example1, client_example_log and mms_utility against
+#      our server (mms_utility reads the Edition 2 and 2.1 classes)
+#   3. libiec61850's own service tracking model (LTRK) loaded by our SCL
+#      loader and checked against our 7-3 attribute tables
 #
 # It builds libiec61850 from source (cached under $WORK) and drives the
 # Go interop tests, which are otherwise skipped. Usable locally and inside
@@ -39,6 +42,13 @@ if [ ! -x "$C_LOG_SERVER" ] || [ ! -x "$C_LOG_CLIENT" ]; then
   make -C "$LIB/examples/server_example_logging"
   make -C "$LIB/examples/iec61850_client_example_log"
 fi
+
+C_MMS_UTILITY="$LIB/examples/mms_utility/mms_utility"
+if [ ! -x "$C_MMS_UTILITY" ]; then
+  echo "== building libiec61850 mms_utility =="
+  make -C "$LIB/examples/mms_utility"
+fi
+LTRK_ICD="$LIB/examples/server_example_service_tracking/simpleIO_ltrk_tests.icd"
 
 C_SERVER="$LIB/examples/server_example_basic_io/server_example_basic_io"
 C_CTL_SERVER="$LIB/examples/server_example_control/server_example_control"
@@ -83,7 +93,13 @@ SRV_PID=""
 echo
 echo "== direction 2: C clients -> our server =="
 IEC61850_C_CLIENT="$C_CLIENT" IEC61850_C_LOG_CLIENT="$C_LOG_CLIENT" \
-  go test "$REPO_ROOT/server/..." -run 'CClient|CLogClient' -v
+IEC61850_C_MMS_UTILITY="$C_MMS_UTILITY" \
+  go test "$REPO_ROOT/server/..." -run 'CClient|CLogClient|CMMSUtility' -v
+
+echo
+echo "== model: libiec61850's LTRK against our 7-3 tables =="
+IEC61850_LIBIEC_LTRK_ICD="$LTRK_ICD" \
+  go test "$REPO_ROOT/scl/..." -run 'LibiecServiceTracking' -v
 
 echo
 echo "== interop OK =="
