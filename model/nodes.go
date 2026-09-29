@@ -121,6 +121,10 @@ func (da *DataAttribute) ElemOK(i int) (*mms.Value, bool) {
 type DataSet struct {
 	Name    string
 	Entries []FCDA
+	// Deletable marks a data set a client created (DefineNamedVariableList),
+	// which a client may also delete. Configured ones are not deletable
+	// (IEC 61850-7-2).
+	Deletable bool
 }
 
 // FCDA is one dataset member.

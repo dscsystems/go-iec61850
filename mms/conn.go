@@ -80,8 +80,14 @@ type Conn struct {
 	mu       sync.Mutex
 	nextID   uint32
 	pending  map[uint32]chan result
+	cancels  map[uint32]chan error // Cancel requests awaiting their answer
 	state    State
 	closeErr error
+
+	// files serves the file reads of the ObtainFile in progress, nil when
+	// none is; obtainMu runs one ObtainFile at a time.
+	files    *fileServer
+	obtainMu sync.Mutex
 
 	// Unconfirmed-PDU handlers are additive: several independent
 	// subscriptions may share one association, so registering a handler
@@ -190,6 +196,16 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		opts.Called.toACSE(), opts.Calling.toACSE(), opts.ApplicationContext.acse())
 	cp := presentation.BuildCP(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aarq)
 	cpaUserData, err := session.ConnectClient(ct, nil, nil, cp)
+	var refused *session.RefusedError
+	if errors.As(err, &refused) {
+		// A refused association: the CPR carries the AARE saying why.
+		if aare, perr := presentation.ParseCPRUserData(refused.UserData); perr == nil {
+			if res, perr := acse.ParseAARE(aare); perr == nil && !res.Accepted {
+				return nil, &RejectedError{Diagnostic: res.Diagnostic}
+			}
+		}
+		return nil, fmt.Errorf("mms: association refused: %w", err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("mms: session connect: %w", err)
 	}
@@ -202,7 +218,7 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		return nil, fmt.Errorf("mms: ACSE AARE: %w", err)
 	}
 	if !res.Accepted {
-		return nil, fmt.Errorf("mms: association rejected (diagnostic %d)", res.Diagnostic)
+		return nil, &RejectedError{Diagnostic: res.Diagnostic}
 	}
 	negotiated, err := ParseInitiateResponse(res.UserData)
 	if err != nil {
@@ -214,7 +230,7 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 	}
 
 	c := &Conn{
-		fr:         &framing{cotp: ct},
+		fr:         &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE},
 		raw:        raw,
 		log:        logger,
 		negotiate:  negotiated,
@@ -388,8 +404,15 @@ func (c *Conn) dispatch(pdu []byte) {
 		_ = id
 	case tagUnconfirmed:
 		c.handleUnconfirmed(content)
-	case tagConcludeResponse:
+	case tagConcludeResponse, tagConcludeResponseLegacy:
 		// Peer accepted our conclude; the reader will see EOF next.
+	case tagCancelResponse, tagCancelError:
+		c.deliverCancel(tag, content)
+	case tagConfirmedRequest:
+		// A request from the server: the file reads of an ObtainFile this
+		// end asked for. Served off the reader, which has to keep
+		// delivering the responses the ObtainFile is waiting on.
+		go c.serveRequest(content)
 	default:
 		c.log.Debug("mms: unhandled PDU tag", "tag", tag.String())
 	}
@@ -489,44 +512,11 @@ func (c *Conn) failAll(err error) {
 // call sends a confirmed request wrapping the fully-encoded service
 // element and waits for the matching response.
 func (c *Conn) call(ctx context.Context, service *asn1.Element) ([]byte, error) {
-	c.mu.Lock()
-	if c.state != StateConnected {
-		err := c.closeErr
-		c.mu.Unlock()
-		return nil, err
-	}
-	id := c.nextID
-	c.nextID++
-	ch := make(chan result, 1)
-	c.pending[id] = ch
-	c.mu.Unlock()
-
-	// ConfirmedRequestPDU ::= [0] SEQUENCE { invokeID INTEGER, service }
-	req := asn1.Cons(tagConfirmedRequest,
-		asn1.UintElem(asn1.TagInteger, uint64(id)),
-		service,
-	).Encode()
-
-	c.log.Debug("mms: tx PDU", "hex", fmt.Sprintf("%x", req))
-	c.writeMu.Lock()
-	err := c.fr.sendMMS(req)
-	c.writeMu.Unlock()
+	o, err := c.Start(service)
 	if err != nil {
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
 		return nil, err
 	}
-
-	select {
-	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
-		return nil, ctx.Err()
-	case r := <-ch:
-		return r.pdu, r.err
-	}
+	return o.Wait(ctx)
 }
 
 // Close releases the association (best-effort MMS conclude) and closes
@@ -544,7 +534,7 @@ func (c *Conn) Close() error {
 
 	// Best-effort conclude, then ACSE/session release. Ignore errors.
 	c.writeMu.Lock()
-	conclude := asn1.Cons(tagConcludeRequest).Encode()
+	conclude := asn1.Prim(tagConcludeRequest, nil).Encode()
 	c.fr.sendMMS(conclude)
 	c.writeMu.Unlock()
 

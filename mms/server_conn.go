@@ -1,6 +1,8 @@
 package mms
 
 import (
+	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -53,6 +55,8 @@ type ServerConn struct {
 	// responding identity in the AARE against it.
 	Called  ACSEIdentity
 	Calling ACSEIdentity
+
+	serverConnExt
 }
 
 // ACSEIdentity is an application-entity identity: the AP-title and
@@ -110,6 +114,8 @@ type Request struct {
 	Service  int    // confirmed service CHOICE tag number
 	Content  []byte // service-specific content octets
 	Conn     *ServerConn
+
+	deferred func(ctx context.Context) (*asn1.Element, error)
 }
 
 // AcceptOptions configures the server-side association handshake.
@@ -137,6 +143,14 @@ type AcceptOptions struct {
 	// association gives no reason, so these bytes are the only way to see
 	// what it objected to.
 	Trace func(event string, data []byte)
+
+	// Authenticate, when non-nil, decides whether to accept the client.
+	// An error rejects the association (ACSE AARE result rejected, in a
+	// presentation CPR in a session REFUSE), with the diagnostic
+	// authentication-required for ErrAuthenticationRequired and
+	// authentication-failure otherwise; AcceptConnOpts then returns
+	// ErrRejected.
+	Authenticate func(AssociationRequest) error
 }
 
 func (o AcceptOptions) trace(event string, data []byte) {
@@ -175,6 +189,28 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		return nil, fmt.Errorf("mms: ACSE AARQ: %w", err)
 	}
 	mmsInit, password := areq.UserData, areq.Password
+	if opts.Authenticate != nil {
+		ar := AssociationRequest{Peer: raw.RemoteAddr(), Password: password,
+			Called: identityFromACSE(areq.Called), Calling: identityFromACSE(areq.Calling)}
+		if tc, ok := raw.(*tls.Conn); ok {
+			st := tc.ConnectionState()
+			ar.TLS = &st
+		}
+		if aerr := opts.Authenticate(ar); aerr != nil {
+			diag := acse.DiagAuthenticationFailure
+			if errors.Is(aerr, ErrAuthenticationRequired) {
+				diag = acse.DiagAuthenticationRequired
+			}
+			aare := acse.AARERejectFor(areq.ApplicationContext, diag)
+			opts.trace("tx AARE", aare)
+			sel := cp.CalledPSel
+			if len(sel) == 0 {
+				sel = presentation.DefaultCalledPSel
+			}
+			session.Refuse(ct, presentation.BuildCPR(sel, cp.Contexts, aare))
+			return nil, fmt.Errorf("%w: %v", ErrRejected, aerr)
+		}
+	}
 	opts.trace("rx InitiateRequest", mmsInit)
 	negotiated, err := ParseInitiateRequest(mmsInit)
 	if err != nil {
@@ -217,7 +253,7 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}
 	sc := &ServerConn{
-		fr: &framing{cotp: ct, mmsContext: negotiatedCtx.MMS}, raw: raw,
+		fr: &framing{cotp: ct, mmsContext: negotiatedCtx.MMS, acseContext: negotiatedCtx.ACSE}, raw: raw,
 		Password: password, Peer: raw.RemoteAddr(),
 		MaxPDU:  int(answer.LocalDetail),
 		unconf:  make(chan []byte, 512),
@@ -319,9 +355,15 @@ func (sc *ServerConn) handlePDU(pdu []byte, h Handler) error {
 	switch tag {
 	case tagConfirmedRequest:
 		return sc.handleConfirmed(content, h)
-	case tagConcludeRequest:
+	case tagConfirmedResponse, tagConfirmedError, tagRejectPDU:
+		// The client's answer to a request this server sent (Call).
+		sc.deliverCall(tag, content)
+		return nil
+	case tagCancelRequest:
+		return sc.handleCancel(content)
+	case tagConcludeRequest, tagConcludeRequestLegacy:
 		// Accept the conclude and end the association.
-		sc.send(asn1.Cons(tagConcludeResponse).Encode())
+		sc.send(asn1.Prim(tagConcludeResponse, nil).Encode())
 		return net.ErrClosed
 	default:
 		return nil
@@ -357,21 +399,15 @@ func (sc *ServerConn) handleConfirmed(content []byte, h Handler) error {
 		}
 	}
 	err = nil
-	if herr != nil {
+	switch {
+	case herr == errDeferred && req.deferred != nil:
+		sc.runDeferred(invokeID, req.deferred)
+	case herr != nil:
 		err = sc.sendError(invokeID, herr)
-	} else {
-		// ConfirmedResponsePDU ::= [1] SEQUENCE { invokeID, service }
-		out := asn1.Cons(tagConfirmedResponse,
-			asn1.UintElem(asn1.TagInteger, uint64(invokeID)),
-			resp,
-		).Encode()
-		if sc.MaxPDU > 0 && len(out) > sc.MaxPDU {
-			// The peer cannot accept a PDU this long; ISO 9506 answers
-			// with a resource error rather than sending it anyway.
-			err = sc.sendError(invokeID, &ServiceError{Class: errClassResource, Code: 0})
-		} else {
-			err = sc.send(out)
-		}
+	default:
+		// ConfirmedResponsePDU ::= [1] SEQUENCE { invokeID, service };
+		// one the peer cannot accept becomes a resource error (ISO 9506).
+		err = sc.sendResponse(invokeID, resp)
 	}
 	if err != nil {
 		return err
@@ -419,27 +455,32 @@ func (sc *ServerConn) hold(pdu []byte, first bool) bool {
 }
 
 func (sc *ServerConn) sendError(invokeID uint32, herr error) error {
-	// A rejected request is answered with a RejectPDU, not a service error.
+	return sc.send(encodeError(invokeID, herr))
+}
+
+// encodeError builds the PDU answering request invokeID with herr: a
+// RejectPDU for a rejected request, else a ConfirmedErrorPDU.
+func encodeError(invokeID uint32, herr error) []byte {
 	if se, ok := herr.(*ServiceError); ok && se.Rejected {
-		rej := asn1.Cons(tagRejectPDU,
+		return asn1.Cons(tagRejectPDU,
 			asn1.UintElem(asn1.ContextPrimitive(0), uint64(invokeID)),             // originalInvokeID [0]
 			asn1.IntElem(asn1.ContextPrimitive(uint32(se.Class)), int64(se.Code)), // rejectReason [category]
 		).Encode()
-		return sc.send(rej)
 	}
-
 	// ConfirmedErrorPDU ::= [2] SEQUENCE {
 	//   invokeID     [0] IMPLICIT Unsigned32,
 	//   serviceError [2] SEQUENCE { errorClass [0] CHOICE { [class] value } } }
-	classTag, value := errorClassChoice(herr)
-	errPDU := asn1.Cons(tagConfirmedError,
+	return asn1.Cons(tagConfirmedError,
 		asn1.Prim(asn1.ContextPrimitive(0), asn1.AppendUint(nil, uint64(invokeID))),
-		asn1.Cons(asn1.ContextConstructed(2),
-			asn1.Cons(asn1.ContextConstructed(0),
-				asn1.IntElem(asn1.ContextPrimitive(classTag), int64(value))),
-		),
+		asn1.Cons(asn1.ContextConstructed(2), serviceErrorBody(herr)),
 	).Encode()
-	return sc.send(errPDU)
+}
+
+// serviceErrorBody is the errorClass [0] of a ServiceError for err.
+func serviceErrorBody(err error) *asn1.Element {
+	classTag, value := errorClassChoice(err)
+	return asn1.Cons(asn1.ContextConstructed(0),
+		asn1.IntElem(asn1.ContextPrimitive(classTag), int64(value)))
 }
 
 // errorClassChoice maps a handler error to the errorClass CHOICE tag
@@ -517,6 +558,9 @@ func (sc *ServerConn) send(pdu []byte) error {
 
 // Close closes the transport and stops the unconfirmed writer.
 func (sc *ServerConn) Close() error {
-	sc.closeOnce.Do(func() { close(sc.unconf) })
+	sc.closeOnce.Do(func() {
+		close(sc.unconf)
+		sc.stop()
+	})
 	return sc.raw.Close()
 }

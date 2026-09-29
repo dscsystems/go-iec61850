@@ -65,6 +65,16 @@ func (h *handler) Handle(req *mms.Request) (*asn1.Element, error) {
 		return h.deleteNVL(req.Content)
 	case svcReadJournal:
 		return h.readJournal(req.Content, req.Conn.MaxPDU)
+	case svcStatus:
+		return h.serverStatus(), nil
+	case svcReportJournalStatus:
+		return h.reportJournalStatus(req.Content)
+	case svcInitializeJournal:
+		return h.initializeJournal(req.Content)
+	case svcFileDelete:
+		return h.fileDelete(req.Content)
+	case svcObtainFile:
+		return h.obtainFile(req)
 	default:
 		if resp, err, handled := h.fileService(req); handled {
 			return resp, err
@@ -569,7 +579,7 @@ func (h *handler) defineNVL(content []byte) (*asn1.Element, error) {
 	if ln.DataSet(dsName) != nil {
 		return nil, mms.AccessObjectValueInvalid // already exists
 	}
-	ln.DataSets = append(ln.DataSets, &model.DataSet{Name: dsName, Entries: entries})
+	ln.DataSets = append(ln.DataSets, &model.DataSet{Name: dsName, Entries: entries, Deletable: true})
 	// DefineNamedVariableList-Response ::= NULL.
 	return asn1.Prim(asn1.ContextPrimitive(svcDefineNamedVarList), nil), nil
 }
@@ -621,10 +631,16 @@ func (h *handler) deleteDataset(domain, list string) bool {
 		return false
 	}
 	for i, ds := range ln.DataSets {
-		if ds.Name == dsName {
-			ln.DataSets = append(ln.DataSets[:i], ln.DataSets[i+1:]...)
-			return true
+		if ds.Name != dsName {
+			continue
 		}
+		// IEC 61850-7-2: a configured data set cannot be deleted, nor one
+		// a control block refers to.
+		if !ds.Deletable || h.dataSetInUse(domain, lnName, dsName) {
+			return false
+		}
+		ln.DataSets = append(ln.DataSets[:i], ln.DataSets[i+1:]...)
+		return true
 	}
 	return false
 }

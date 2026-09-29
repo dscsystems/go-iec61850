@@ -13,12 +13,21 @@ var (
 	tagConfirmedError    = asn1.ContextConstructed(2)
 	tagUnconfirmed       = asn1.ContextConstructed(3)
 	tagRejectPDU         = asn1.ContextConstructed(4)
+	tagCancelRequest     = asn1.ContextPrimitive(5)   // [5] IMPLICIT Unsigned32
+	tagCancelResponse    = asn1.ContextPrimitive(6)   // [6] IMPLICIT Unsigned32
+	tagCancelError       = asn1.ContextConstructed(7) // [7] IMPLICIT SEQUENCE
 	tagInitiateRequest   = asn1.ContextConstructed(8)
 	tagInitiateResponse  = asn1.ContextConstructed(9)
 	tagInitiateError     = asn1.ContextConstructed(10)
-	tagConcludeRequest   = asn1.ContextConstructed(11)
-	tagConcludeResponse  = asn1.ContextConstructed(12)
-	tagConcludeError     = asn1.ContextConstructed(13)
+	// Conclude-RequestPDU and -ResponsePDU are NULL: [11] and [12]
+	// IMPLICIT make them the primitive octets 8B 00 and 8C 00. Earlier
+	// versions sent them constructed (AB 00, AC 00), which peers such as
+	// libiec61850 do not recognise; those are still accepted on receipt.
+	tagConcludeRequest        = asn1.ContextPrimitive(11)
+	tagConcludeResponse       = asn1.ContextPrimitive(12)
+	tagConcludeRequestLegacy  = asn1.ContextConstructed(11)
+	tagConcludeResponseLegacy = asn1.ContextConstructed(12)
+	tagConcludeError          = asn1.ContextConstructed(13)
 )
 
 // Confirmed service CHOICE tags used within ConfirmedRequest/Response
@@ -33,6 +42,9 @@ const (
 	svcDefineNamedVarList  = 11
 	svcGetNamedVarListAttr = 12
 	svcDeleteNamedVarList  = 13
+	svcObtainFile          = 46
+	svcInitializeJournal   = 67
+	svcReportJournalStatus = 68
 	svcFileOpen            = 72
 	svcFileRead            = 73
 	svcFileClose           = 74
@@ -109,7 +121,10 @@ const (
 	ServiceDefineNamedVariableList        = 11
 	ServiceGetNamedVariableListAttributes = 12
 	ServiceDeleteNamedVariableList        = 13
+	ServiceObtainFile                     = 46
 	ServiceReadJournal                    = 65
+	ServiceInitializeJournal              = 67
+	ServiceReportJournalStatus            = 68
 	ServiceFileOpen                       = 72
 	ServiceFileRead                       = 73
 	ServiceFileClose                      = 74

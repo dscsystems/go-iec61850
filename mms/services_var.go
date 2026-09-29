@@ -2,6 +2,7 @@ package mms
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/dscsystems/go-iec61850/asn1"
@@ -224,9 +225,32 @@ func (c *Conn) DeleteNamedVariableList(ctx context.Context, domain, listName str
 	if err != nil {
 		return err
 	}
-	_ = resp
-	return nil
+	// DeleteNamedVariableList-Response ::= SEQUENCE {
+	//   numberMatched [0] Unsigned32, numberDeleted [1] Unsigned32 }
+	content, err := asn1.NewDecoder(resp).Expect(asn1.ContextConstructed(svcDeleteNamedVarList))
+	if err != nil {
+		return err
+	}
+	dec := asn1.NewDecoder(content)
+	mb, err1 := dec.Expect(asn1.ContextPrimitive(0))
+	db, err2 := dec.Expect(asn1.ContextPrimitive(1))
+	if err1 != nil || err2 != nil {
+		return fmt.Errorf("mms: malformed DeleteNamedVariableList response")
+	}
+	matched, _ := asn1.DecodeUint(mb)
+	deleted, _ := asn1.DecodeUint(db)
+	switch {
+	case deleted > 0:
+		return nil
+	case matched == 0:
+		return AccessObjectNonExistent
+	}
+	return ErrNotDeleted
 }
+
+// ErrNotDeleted is a data set the server has but would not delete: one it
+// was configured with, or one a control block uses (IEC 61850-7-2).
+var ErrNotDeleted = errors.New("mms: named variable list exists but was not deleted")
 
 // GetNamedVariableListAttributes returns the member references of a named
 // variable list (dataset).

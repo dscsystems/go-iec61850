@@ -72,7 +72,7 @@ each gap is one.
 | Unicast sampled value control (USVCB) | N | P | served read-only |
 | Control | Y | Y | all four control models |
 | Time and time synchronisation | P | P | time quality set by the application; no time synchronisation protocol |
-| File transfer | Y | P | read only; see 3.8 |
+| File transfer | Y | Y | writing needs a writable store; see 3.9 |
 | Service tracking (LTRK, 7-2 Ed 2) | Y (g) | P | the classes are templated and served; the server does not record service outcomes in them |
 
 ### 2.1 Reporting and logging options
@@ -127,9 +127,9 @@ each gap is one.
 | GetServerDirectory (LOGICAL-DEVICE) | Y | Y | MMS GetNameList of domains |
 | GetServerDirectory (FILE) | Y | P | only with `server.WithFileStore` |
 | Associate | Y | Y | |
-| Abort | P | P | neither end sends an ACSE or session abort: an association ends with Release, or by closing the transport; a peer's abort ends it |
+| Abort | Y | Y | ACSE A-ABORT in a presentation ARU in a session ABORT |
 | Release | Y | Y | MMS Conclude |
-| Authentication: password (ACSE) | Y | P | the server parses the password and gives it to the application (`OnConnection`, `ConnectionEvent.Conn.Password`), which may close the association; the server itself neither checks it nor refuses the association at the ACSE level |
+| Authentication: password (ACSE) | Y | Y | `server.WithPassword`, or `server.WithAuthenticator` for the application's own decision (it also sees the ACSE identities and the TLS peer certificates); a refusal is an ACSE rejection with the diagnostic authentication-failure or authentication-required, reported to the client as `mms.RejectedError` |
 | Authentication: certificates (IEC 62351-4) | N | N | |
 
 ### 3.2 Logical device and logical node
@@ -157,7 +157,7 @@ each gap is one.
 | SetDataSetValues | N | N | |
 | CreateDataSet (persistent, domain-specific) | Y | Y | held in memory; lost at restart |
 | CreateDataSet (non-persistent, association-specific) | N | N | |
-| DeleteDataSet | Y | P | **deviation:** the server deletes any named data set, including one configured in SCL or used by a control block, where IEC 61850-7-2 requires the request to be refused |
+| DeleteDataSet | Y | Y | a data set configured in SCL, or one a control block refers to, is not deleted; the client reports the refusal (`mms.ErrNotDeleted`) |
 | GetDataSetDirectory | Y | Y | MMS GetNamedVariableListAttributes |
 
 ### 3.5 Setting group control
@@ -217,8 +217,8 @@ each gap is one.
 | Service | Client | Server | Notes |
 |---|---|---|---|
 | GetFile | Y | Y | streamed; server needs `server.WithFileStore` |
-| SetFile | N | N | |
-| DeleteFile | N | N | |
+| SetFile | Y | Y | MMS ObtainFile: the server reads the file back from the client; server needs a writable store (`server.DirFS`); an existing file is not overwritten |
+| DeleteFile | Y | Y | server needs a writable store |
 | GetFileAttributeValues | Y | Y | MMS FileDirectory |
 
 ## 4. IEC 61850-8-1 mapping (MMS)
@@ -226,14 +226,16 @@ each gap is one.
 ### 4.1 MMS services
 
 The server advertises in its Initiate response exactly the services it
-implements: ReadJournal only when the model has logs, and the file
-services only with a file store.
+implements: the journal services only when the model has logs
+(InitializeJournal only with `server.WithDeletableLogs`), the file
+services only with a file store, and FileDelete and ObtainFile only with
+a writable one.
 
 | MMS service | Client (requests) | Server (responds) |
 |---|---|---|
 | Initiate | Y | Y |
 | Conclude | Y | Y |
-| Abort (ACSE, session) | N (receives) | N (receives) |
+| Abort (ACSE, session) | Y | Y |
 | Reject | Y | Y |
 | Identify | Y | Y |
 | GetNameList | Y | Y |
@@ -245,16 +247,17 @@ services only with a file store.
 | DeleteNamedVariableList | Y | Y |
 | GetNamedVariableListAttributes | Y | Y |
 | ReadJournal | Y | Y |
-| InitializeJournal | N | N |
-| ReportJournalStatus | N | N |
-| FileOpen | Y | Y |
-| FileRead | Y | Y |
-| FileClose | Y | Y |
+| InitializeJournal | Y | Y (with `WithDeletableLogs`) |
+| ReportJournalStatus | Y | Y |
+| FileOpen | Y | Y (and answers them during ObtainFile) |
+| FileRead | Y | Y (likewise) |
+| FileClose | Y | Y (likewise) |
 | FileDirectory | Y | Y |
-| FileDelete | N | N |
-| ObtainFile | N | N |
-| Status | N | N |
-| Cancel (MMS) | N | N |
+| FileDelete | Y | Y |
+| ObtainFile | Y | Y |
+| FileRename | N | N |
+| Status | Y | Y |
+| Cancel (MMS) | Y | Y (a request still running, an ObtainFile, is cancelled; one already answered is reported as unknown) |
 
 ### 4.2 MMS parameters
 
@@ -357,8 +360,12 @@ services only with a file store.
 | Writable functional constraints | SP, SV, SE by default; `server.WithWritableFCs` (ST, MX, OR, EX and SG are never writable) |
 | Identity (Identify service) | `server.WithIdentity` |
 | Time source | the host clock; quality stated with `Server.SetTimeQuality` |
-| File store | any `fs.FS` given to `server.WithFileStore` (read only) |
-| Dynamic data sets | persistent (domain-specific) names, kept in memory |
+| File store | any `fs.FS` given to `server.WithFileStore`; read-write when it is a `server.WritableFS` (`server.DirFS`) |
+| SetFile limits | 256 MiB per file; 2 minutes for the client to serve it |
+| Association authentication | none by default; `server.WithPassword`, `server.WithAuthenticator` |
+| Log deletion by clients | refused by default; `server.WithDeletableLogs` |
+| Status service answer | state-changes-allowed, operational; `Server.SetStatus` |
+| Dynamic data sets | persistent (domain-specific) names, kept in memory; deletable by clients; configured ones are not |
 | Platforms | pure Go, no cgo; raw Ethernet on Linux (AF_PACKET) |
 
 ## 10. Verification
@@ -366,7 +373,9 @@ services only with a file store.
 - `go test -race ./...` covers every "Y" above.
 - `interop/run.sh` runs the client against libiec61850's servers and
   libiec61850's clients against the server (MMS, control, logs, TLS), and
-  R-GOOSE and R-SV both ways in every security mode both implement.
+  R-GOOSE and R-SV both ways in every security mode both implement, and
+  the association and file services (authentication, Status, SetFile,
+  DeleteFile, release, abort) both ways.
   GDOI registrations are decrypted and dissected by Wireshark. The
   coverage table is `interop/README.md`.
 - `testdata/ed21_diverse.cid` exercises the Edition 2.1 SCL constructs.

@@ -45,6 +45,13 @@ type Server struct {
 	// WithReportBufferSize.
 	reportBufSize int
 
+	// authenticate decides on associations (WithAuthenticator).
+	authenticate func(mms.AssociationRequest) error
+	// deletableLogs lets clients delete log entries (WithDeletableLogs).
+	deletableLogs bool
+	// status is the Status service's answer: logical<<8 | physical.
+	status atomic.Uint32
+
 	// writable is the set of functional constraints clients may write
 	// with SetDataValues; see WithWritableFCs.
 	writable map[model.FC]bool
@@ -336,15 +343,22 @@ func (s *Server) initiate() mms.InitiateRequest {
 		mms.ServiceGetVariableAccessAttributes,
 		mms.ServiceDefineNamedVariableList, mms.ServiceGetNamedVariableListAttributes,
 		mms.ServiceDeleteNamedVariableList,
-		mms.ServiceInformationReport, mms.ServiceConclude,
+		mms.ServiceInformationReport, mms.ServiceConclude, mms.ServiceStatus,
+		mms.ServiceCancel,
 	}
 	// Journals are listed and read only when the model has logs.
 	if len(s.logs.journals) > 0 {
-		services = append(services, mms.ServiceReadJournal)
+		services = append(services, mms.ServiceReadJournal, mms.ServiceReportJournalStatus)
+		if s.deletableLogs {
+			services = append(services, mms.ServiceInitializeJournal)
+		}
 	}
 	if s.files != nil {
 		services = append(services, mms.ServiceFileOpen, mms.ServiceFileRead,
 			mms.ServiceFileClose, mms.ServiceFileDirectory)
+		if _, ok := s.files.fsys.(WritableFS); ok {
+			services = append(services, mms.ServiceFileDelete, mms.ServiceObtainFile)
+		}
 	}
 	init.Services = mms.NewServiceSupport(services...)
 	return init
@@ -365,7 +379,7 @@ func (s *Server) serveConn(raw net.Conn) {
 	}
 
 	init := s.initiate()
-	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init})
+	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate})
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()

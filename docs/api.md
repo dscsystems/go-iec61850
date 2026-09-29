@@ -223,6 +223,9 @@ entries, _ := c.FileDirectory(ctx, "")        // filestore root
 rc, _ := c.OpenFile(ctx, "COMTRADE/rec001.cfg")  // io.ReadCloser, streamed
 defer rc.Close()
 data, _ := c.ReadFile(ctx, "COMTRADE/rec001.dat")
+
+_ = c.SetFile(ctx, "settings/new.xml", xmlBytes)  // MMS obtainFile; the server reads it back
+_ = c.DeleteFile(ctx, "COMTRADE/rec001.dat")
 ```
 
 ### Logs
@@ -234,7 +237,24 @@ for _, e := range entries {
     fmt.Println(e.EntryID, e.OccurrenceTime, e.Variables)
 }
 more, _ := c.QueryLogAfter(ctx, "ied1LD0/LLN0.LG.EventLog", t, lastEntryID)
+
+st, _ := c.LogStatus(ctx, "ied1LD0/LLN0.LG.EventLog")      // entries, deletable
+n, _ := c.ClearLog(ctx, "ied1LD0/LLN0.LG.EventLog", time.Time{}, nil) // InitializeJournal
 ```
+
+### Association
+
+```go
+st, _ := c.ServerStatus(ctx, false) // MMS Status: st.Logical, st.Physical
+_ = c.Abort()                       // A-ABORT; Close releases in order
+
+// A refused association says why.
+_, err := client.Dial(ctx, addr, client.WithPassword("guess"))
+if errors.Is(err, mms.ErrAuthenticationFailed) { /* wrong or missing password */ }
+```
+
+`c.MMS().Start(service)` sends a request without waiting; the returned
+`*mms.Outstanding` has `InvokeID`, `Wait` and `Cancel` (MMS Cancel).
 
 ### Escape hatch
 
@@ -260,6 +280,23 @@ srv := server.New(m,
 go srv.ListenAndServe(":102")
 defer srv.Close()
 ```
+
+Association and file options:
+
+```go
+store, _ := server.DirFS("/var/iedfiles") // read-write, confined to the directory
+srv := server.New(m,
+    server.WithPassword("secret"),        // or WithAuthenticator(func(mms.AssociationRequest) error)
+    server.WithFileStore(store),          // GetFile; SetFile and DeleteFile because it is writable
+    server.WithDeletableLogs(),           // clients may InitializeJournal
+)
+srv.SetStatus(mms.LogicalStateChangesAllowed, mms.PhysicalOperational) // MMS Status answer
+```
+
+An authenticator sees the password, the ACSE identities, the peer address
+and the TLS state (`r.TLS.PeerCertificates`), so it can combine the
+IEC 62351-3 certificate with a password or an allow-list. Refusing is an
+ACSE rejection the client can read.
 
 ### Pushing values (process side)
 
