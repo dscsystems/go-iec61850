@@ -341,6 +341,15 @@ every IED's GOOSE addressing is missing.
   Refusals are counted and reported for the security event log.
 - **Keys** by identifier in a `KeyStore`: several accepted at once, one
   active for sending, so keys roll over without losing traffic.
+- **Group key distribution (IEC 62351-9)**, package `gdoi`: GDOI (RFC
+  6407) with the IEC 61850 payloads of RFC 8052, key server and group
+  member. Phase 1 is IKEv1 main mode (RFC 2409) authenticated with
+  certificates (RSA 2048+, ECDSA P-256/P-384) or a pre-shared key, with
+  AES-CBC, SHA2-256/384 and DH groups 14, 19 and 20. GROUPKEY-PULL
+  delivers a group's TEKs (named by ID_KEY_ID or ID_OID) with their
+  activation delay; the key server authorises each member per group; a
+  `gdoi.Member` keeps an `rsession.KeyStore` current through key
+  rotation and withdrawal, and removes its keys when it stops.
 - **MMS over TLS (IEC 62351-3)**, package `iec62351`: `ClientConfig` and
   `ServerConfig` for `client.WithTLS` and `server.WithTLS`. TLS 1.2 (with
   the ECDHE AES-GCM suites only) and 1.3; mutual certificate
@@ -354,17 +363,24 @@ every IED's GOOSE addressing is missing.
 
 ### Not implemented
 
-- **Key distribution (IEC 62351-9, GDOI).** Keys are put in the
-  `KeyStore` by the application. The `TimeOfCurrentKey` and
-  `TimeToNextKey` fields are carried as the key gives them, not
-  interpreted.
+- **GDOI GROUPKEY-PUSH** and the rekey SA (KEK, LKH, SEQ), aggressive
+  mode and NAT traversal. A member re-registers instead of taking pushed
+  rekeys, so a key server distributes a new key ahead of its use. The
+  group OIDs of IEC 62351-9 are the application's to supply. The
+  `TimeOfCurrentKey` and `TimeToNextKey` SPDU fields are carried as the
+  key gives them (zero from GDOI), not interpreted.
 - **AES-GMAC** authentication of SPDUs (64 and 128 bits), and a key that
   both signs and encrypts: GCM already authenticates, and the one other
   implementation's layout for both cannot be verified.
 - **IEC 62351-4** end-to-end (A-profile) security: ACSE authentication is
-  a password, not the certificate-based mechanism.
+  a password, not the certificate-based mechanism. Its mechanism OIDs and
+  ASN.1 are in the standard only, and no reference implementation exists
+  to check against; it waits for the text.
 - **IEC 62351-6 on Ethernet**, under 8-1 above.
-- **IEC 62351-8** role-based access control.
+- **IEC 62351-8** role-based access control. The access-token ASN.1 and
+  the mandatory role-to-right table are in the standard only (the
+  extension OID, 1.2.840.10070.8.1, is public; its content is not); it
+  waits for the text.
 - **Periodic session key renewal** on TLS connections. Go does not
   initiate TLS 1.3 key updates, and the profile does not renegotiate TLS
   1.2. Under TLS 1.3 the cipher suite is Go's choice among its AES-GCM
@@ -396,6 +412,11 @@ HMAC-SHA256-256 SPDUs are malformed (a 16 in the length octet before a
   build with mbedtls, R-GOOSE and R-SV in every security mode both sides
   implement and MMS over TLS. The coverage table is in
   `interop/README.md`.
+- `gdoi/wireshark_test.go` captures GDOI registrations (ECDSA, RSA and
+  pre-shared key; AES-128/256; MODP-2048, ECP-256, ECP-384) and has
+  Wireshark's IKEv1 dissector decrypt every message, deriving the IVs
+  itself from the session key, and dissect the GDOI payloads. There is no
+  open GDOI implementation to register with.
 - `rsession/spdu_test.go` decodes and verifies SPDUs libiec61850 sent
   (unsecured, HMAC-SHA256-128, AES-128-GCM), so the wire format is checked
   without the C library too, and fuzzes the decoder.

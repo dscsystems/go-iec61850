@@ -11,6 +11,8 @@
 #      R-GOOSE and R-SV (IEC 61850-90-5) both ways through
 #      interop/c/rsession_peer.c, and MMS over TLS (IEC 62351-3) both ways
 #      through the TLS client and server examples
+#   5. GDOI (IEC 62351-9): a registration captured and decrypted by
+#      Wireshark's IKEv1 dissector (tshark, or tshark in Docker)
 #
 # It builds libiec61850 from source (cached under $WORK) and drives the
 # Go interop tests, which are otherwise skipped. Usable locally and inside
@@ -144,6 +146,20 @@ echo "== security: MMS over TLS (IEC 62351-3) both ways, port 3782 =="
 IEC61850_C_TLS_CERTS="$SEC/examples" IEC61850_C_TLS_SERVER="$C_TLS_SERVER" \
 IEC61850_C_TLS_CLIENT="$C_TLS_CLIENT" \
   go test "$REPO_ROOT/iec62351/..." -run 'Interop' -v
+
+echo
+echo "== security: GDOI (IEC 62351-9) registrations dissected by Wireshark =="
+if command -v tshark >/dev/null 2>&1; then
+  IEC61850_TSHARK="$(command -v tshark)" go test "$REPO_ROOT/gdoi/..." -run 'Wireshark' -v
+elif command -v docker >/dev/null 2>&1; then
+  docker build -q -t go-iec61850-tshark - <<'DOCKERFILE' >/dev/null
+FROM alpine:latest
+RUN apk add --no-cache tshark
+DOCKERFILE
+  IEC61850_TSHARK_IMAGE=go-iec61850-tshark go test "$REPO_ROOT/gdoi/..." -run 'Wireshark' -v
+else
+  echo "no tshark and no docker: skipped"
+fi
 
 echo
 echo "== interop OK =="
