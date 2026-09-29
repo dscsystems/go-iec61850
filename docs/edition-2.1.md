@@ -149,6 +149,9 @@ every IED's GOOSE addressing is missing.
 
 ### Not implemented
 
+- **DeleteDataSet restrictions.** The server deletes any named data set it
+  is asked to, including one configured in SCL or referenced by a control
+  block; IEC 61850-7-2 requires both to be refused.
 - **Persistent logs.** A log lives in memory and starts empty with the
   server. `InitializeJournal` (clearing a log) and `ReportJournalStatus`
   are not served.
