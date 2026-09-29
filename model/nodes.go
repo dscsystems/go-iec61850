@@ -193,13 +193,15 @@ type GSEControl struct {
 	DataSet string
 	ConfRev uint32
 	Type    GSType
-	// Protocol names the transmission profile, e.g. "R-GOOSE". The
-	// routable profiles of IEC 61850-90-5 are reported here but are not
-	// implemented by this library.
+	// Protocol names the transmission profile, e.g. "R-GOOSE": the
+	// routable profile of IEC 61850-90-5, which package rsession carries.
 	Protocol string
 	// Communication parameters resolved from the SCL Communication
 	// section (zero when absent).
-	DstMAC  [6]byte
+	DstMAC [6]byte
+	// DstIP is the destination of a routable block (the IP or IPv6
+	// address parameter), nil when the address has none.
+	DstIP   net.IP
 	AppID   uint16
 	VLANID  uint16
 	VLANPri uint8
@@ -265,9 +267,11 @@ type SVControl struct {
 	// Protocol names the transmission profile, e.g. "R-SV".
 	Protocol string
 	DstMAC   [6]byte
-	AppID    uint16
-	VLANID   uint16
-	VLANPri  uint8
+	// DstIP is the destination of a routable block, as for GSEControl.
+	DstIP   net.IP
+	AppID   uint16
+	VLANID  uint16
+	VLANPri uint8
 }
 
 // LogControl is the SCL-side configuration of a log control block.

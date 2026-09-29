@@ -1369,8 +1369,8 @@ func trgOpsOf(t *TrgOps) model.TrgOps {
 
 // buildGSEControl instantiates a GOOSE control block. Type selects the
 // legacy GSSE variant, and Protocol names the transmission profile:
-// "R-GOOSE" for routable GOOSE, which this library reports but does not
-// implement.
+// "R-GOOSE" for routable GOOSE, which package rsession sends to the
+// block's IP destination.
 func (b *builder) buildGSEControl(iedName, apName, ldInst string, g *GSEControl) *model.GSEControl {
 	gc := &model.GSEControl{
 		Name:    g.Name,
@@ -1388,14 +1388,7 @@ func (b *builder) buildGSEControl(iedName, apName, ldInst string, g *GSEControl)
 		b.diag.addf("GSEControl "+g.Name, "type=%q is a legacy or vendor GOOSE variant; "+
 			"it is configured as a plain GOOSE control block", g.Type)
 	}
-	if p := protocolOf(g.Protocol); p != "" {
-		gc.Protocol = p
-		if p == "R-GOOSE" {
-			b.diag.addf("GSEControl "+g.Name, "Protocol is R-GOOSE: routable GOOSE "+
-				"requires the IEC 61850-90-5 session and security profile, which is not "+
-				"implemented; the block is treated as plain GOOSE")
-		}
-	}
+	gc.Protocol = protocolOf(g.Protocol)
 	if g.FixedOffs {
 		b.diag.addf("GSEControl "+g.Name, "fixedOffs requests the fixed-offset GOOSE "+
 			"encoding, which is not implemented; a publisher built from this block "+
@@ -1403,8 +1396,13 @@ func (b *builder) buildGSEControl(iedName, apName, ldInst string, g *GSEControl)
 	}
 	if gse := findGSE(b.scl, iedName, apName, ldInst, g.Name); gse != nil {
 		gc.DstMAC, gc.AppID, gc.VLANID, gc.VLANPri = addressOf(gse.Address)
+		gc.DstIP = ipOf(gse.Address)
 		gc.MinTime = durMS(gse.MinTime)
 		gc.MaxTime = durMS(gse.MaxTime)
+	}
+	if gc.Protocol == "R-GOOSE" && gc.DstIP == nil {
+		b.diag.addf("GSEControl "+g.Name, "Protocol is R-GOOSE but the GSE address has no "+
+			"IP or IPv6 destination; the block cannot be sent routably")
 	}
 	return gc
 }
@@ -1430,8 +1428,8 @@ func protocolOf(p *Protocol) string {
 }
 
 // buildSVControl instantiates a sampled-value control block, including the
-// Ed 2 SmvOpts optional-field set and the sample mode. R-SV is reported and
-// treated as plain multicast SV.
+// Ed 2 SmvOpts optional-field set and the sample mode. An R-SV block is
+// sent by package rsession to its IP destination.
 func (b *builder) buildSVControl(iedName, apName, ldInst string, s *SampledValueControl) *model.SVControl {
 	sc := &model.SVControl{
 		Name:      s.Name,
@@ -1444,14 +1442,7 @@ func (b *builder) buildSVControl(iedName, apName, ldInst string, s *SampledValue
 		SmpMod:    smpModOf(s.SmpMod),
 		SvType:    strings.TrimSpace(s.SvType),
 	}
-	if p := protocolOf(s.Protocol); p != "" {
-		sc.Protocol = p
-		if p == "R-SV" {
-			b.diag.addf("SampledValueControl "+s.Name, "Protocol is R-SV: routable "+
-				"sampled values require the IEC 61850-90-5 session and security profile, "+
-				"which is not implemented; the block is treated as plain SV")
-		}
-	}
+	sc.Protocol = protocolOf(s.Protocol)
 	if o := s.SmvOpts; o != nil {
 		sc.Opts.RefreshTime = boolAttr(o.RefreshTime, false)
 		sc.Opts.SampleSynchronized = boolAttr(o.SampleSynchronized, false)
@@ -1463,6 +1454,11 @@ func (b *builder) buildSVControl(iedName, apName, ldInst string, s *SampledValue
 	}
 	if smv := findSMV(b.scl, iedName, apName, ldInst, s.Name); smv != nil {
 		sc.DstMAC, sc.AppID, sc.VLANID, sc.VLANPri = addressOf(smv.Address)
+		sc.DstIP = ipOf(smv.Address)
+	}
+	if sc.Protocol == "R-SV" && sc.DstIP == nil {
+		b.diag.addf("SampledValueControl "+s.Name, "Protocol is R-SV but the SMV address has "+
+			"no IP or IPv6 destination; the block cannot be sent routably")
 	}
 	return sc
 }
@@ -1610,6 +1606,25 @@ func addressOf(a *Address) (mac [6]byte, appID, vlanID uint16, prio uint8) {
 		}
 	}
 	return
+}
+
+// ipOf is the destination IP address of a routable (R-GOOSE, R-SV)
+// control block: the IP or IPv6 parameter of its address, without a
+// prefix length. Nil when there is none or it does not parse.
+func ipOf(a *Address) net.IP {
+	for _, name := range []string{"IP", "IPv6"} {
+		s, ok := a.Param(name)
+		if !ok {
+			continue
+		}
+		if i := strings.IndexByte(s, '/'); i >= 0 {
+			s = s[:i]
+		}
+		if ip := net.ParseIP(s); ip != nil {
+			return ip
+		}
+	}
+	return nil
 }
 
 // AddressP returns the value of one address parameter, for a caller that

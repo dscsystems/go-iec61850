@@ -10,6 +10,10 @@ Bidirectional interoperability tests against
 3. libiec61850's service tracking model (`simpleIO_ltrk_tests.icd`, the
    LTRK of `server_example_service_tracking`) loaded by our SCL loader and
    compared with our IEC 61850-7-3 attribute tables
+4. security, against a second libiec61850 build with mbedtls 3.6: R-GOOSE
+   and R-SV (IEC 61850-90-5) both ways through `interop/c/rsession_peer.c`,
+   a small driver of libiec61850's session layer, and MMS over TLS
+   (IEC 62351-3) both ways through its TLS client and server examples
 
 The logging examples need SQLite (`libsqlite3-dev`), which the C server's
 log storage is built on.
@@ -55,6 +59,16 @@ pull request.
 | Logs: LogEna write, entries with data reference, value and ReasonCode | | ✓ |
 | Ed 2/2.1 classes (HST, BAC, ORG, TSG, CUG, VSG, CSG): directory, read, arrays of structures | | ✓ |
 | Service tracking (CTS, GTS) under FC SR, PhyComAddr structure | | ✓ |
+| R-GOOSE, R-SV: unsecured (C publishes) | ✓ | |
+| R-GOOSE, R-SV: HMAC-SHA256-128 | ✓ | ✓ |
+| R-GOOSE, R-SV: HMAC-SHA256-256 (libiec61850's own encoding is malformed) | | ✓ |
+| R-GOOSE, R-SV: AES-128-GCM, AES-256-GCM | ✓ | ✓ |
+| MMS over TLS, IEC 62351-3 profile, mutual authentication | ✓ | ✓ |
+
+For R-GOOSE/R-SV the first column is libiec61850 publishing to us, the
+second us publishing to libiec61850. libiec61850 refuses an unsecured
+version 2 SPDU, so that mode is tested one way. The TLS tests use port
+3782, the MMS-over-TLS port both examples are fixed to.
 
 The service tracking model of libiec61850 (CTS for a boolean, an INT32 and
 a Tcmd control, UTS, BTS, GTS, STS and LTS) is also checked, attribute by

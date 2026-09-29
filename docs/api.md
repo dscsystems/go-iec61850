@@ -97,6 +97,21 @@ c, err := client.Dial(ctx, "192.168.10.5:102",
 defer c.Close()
 ```
 
+`tlsCfg` under the IEC 62351-3 profile (mutual authentication, TLS 1.2+
+with AES-GCM, CRLs, key strength, optional pinning) comes from package
+`iec62351`; the server side is `iec62351.ServerConfig`:
+
+```go
+tlsCfg, err := iec62351.ClientConfig(iec62351.Options{
+    Certificates: []tls.Certificate{ownCert},
+    Roots:        caPool,
+    CRLs:         crls,       // optional
+    ServerName:   "IED1",     // SAN, or CN for IED certificates without one
+    OnEvent:      func(e iec62351.Event) { log.Print(e.Err) },
+})
+c, err := client.Dial(ctx, "192.168.10.5:3782", client.WithTLS(tlsCfg))
+```
+
 ### Browsing and reading
 
 ```go
@@ -465,6 +480,38 @@ defer stop()
 
 `Subscribe` (not `SubscribeLE`) delivers generic `*sv.ASDU` with the raw
 `Sample` payload for non-9-2LE datasets.
+
+---
+
+## rsession
+
+R-GOOSE and R-SV: the IEC 61850-90-5 session protocol over UDP, with its
+message security. A `Session` is an `ethernet.Interface`, so the `goose` and
+`sv` publishers and subscribers run over it unchanged.
+
+```go
+keys, _ := rsession.NewKeyStore(rsession.Key{
+    ID: 1, Material: key, Sec: rsession.SecAES128GCM, // or Sig: rsession.SigHMACSHA256_128
+})
+
+// Publisher: to the block's IP destination (model.GSEControl.DstIP).
+tx, _ := rsession.Open(rsession.Config{Remote: gc.DstIP.String(), Keys: keys, TTL: 16})
+pub, _ := goose.NewPublisherFromModel(tx, ld, ln, gc, [6]byte{})
+
+// Subscriber: join the group; refuses unsecured, unknown-key, forged and
+// replayed SPDUs, and reports them.
+rx, _ := rsession.Open(rsession.Config{
+    Groups:   []string{"239.192.0.1"},
+    Keys:     keys,
+    OnReject: func(r rsession.Reject) { log.Print(r.Err) },
+})
+stop, _ := goose.NewSubscriber(rx).Subscribe(goose.Filter{GoCbRef: ref}, handle)
+```
+
+`Session.Send`/`Receive` work with SPDUs directly, and `Marshal`/`Unmarshal`
+encode and decode them without a socket. Keys are rolled over by adding
+the new key everywhere, `SetActive` at the publisher, then `Remove` of the
+old one.
 
 ---
 

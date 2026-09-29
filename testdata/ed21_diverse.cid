@@ -48,6 +48,7 @@
         <GSE ldInst="LD0" cbName="gcb01" desc="GOOSE block">
           <Address>
             <P type="MAC-Address">01-0C-CD-03-00-01</P>
+            <P type="IP">239.192.0.1</P>
             <P type="APPID">2000</P>
             <P type="VLAN-ID">0123</P>
             <P type="VLAN-PRIORITY">4</P>
@@ -70,6 +71,7 @@
         <SMV ldInst="LD0" cbName="usvcb01" desc="unicast SV block">
           <Address>
             <P type="MAC-Address">01-0C-CD-04-00-02</P>
+            <P type="IPv6">2001:db8::10/64</P>
             <P type="APPID">4001</P>
           </Address>
         </SMV>

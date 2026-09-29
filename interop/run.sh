@@ -7,6 +7,10 @@
 #      our server (mms_utility reads the Edition 2 and 2.1 classes)
 #   3. libiec61850's own service tracking model (LTRK) loaded by our SCL
 #      loader and checked against our 7-3 attribute tables
+#   4. security, against a second libiec61850 build with mbedtls 3.6:
+#      R-GOOSE and R-SV (IEC 61850-90-5) both ways through
+#      interop/c/rsession_peer.c, and MMS over TLS (IEC 62351-3) both ways
+#      through the TLS client and server examples
 #
 # It builds libiec61850 from source (cached under $WORK) and drives the
 # Go interop tests, which are otherwise skipped. Usable locally and inside
@@ -15,6 +19,8 @@
 # Environment:
 #   LIBIEC61850_REF  git ref to build (default v1.6)
 #   WORK             build/cache directory (default ./.interop-work)
+#   MBEDTLS_REF      mbedtls release for the security build (default 3.6.0,
+#                    the version libiec61850 expects)
 #
 # The logging examples need SQLite (libsqlite3-dev), which the log storage
 # of the C server is built on.
@@ -49,6 +55,33 @@ if [ ! -x "$C_MMS_UTILITY" ]; then
   make -C "$LIB/examples/mms_utility"
 fi
 LTRK_ICD="$LIB/examples/server_example_service_tracking/simpleIO_ltrk_tests.icd"
+
+# The security build: libiec61850 with mbedtls, whose CMake build adds
+# R-GOOSE/R-SV (r_session) and the TLS examples. The plain Makefile does
+# not compile r_session, so this one uses CMake.
+MBEDTLS_REF="${MBEDTLS_REF:-3.6.0}"
+SEC="$WORK/libiec61850-sec"
+C_TLS_SERVER="$SEC/cbuild/examples/tls_server_example/tls_server_example"
+C_TLS_CLIENT="$SEC/cbuild/examples/tls_client_example/tls_client_example"
+if [ ! -x "$C_TLS_SERVER" ] || [ ! -f "$SEC/cbuild/src/libiec61850.a" ]; then
+  echo "== building libiec61850 $REF with mbedtls $MBEDTLS_REF =="
+  if [ ! -d "$SEC" ]; then
+    git clone --depth 1 --branch "$REF" https://github.com/mz-automation/libiec61850.git "$SEC"
+  fi
+  if [ ! -d "$SEC/third_party/mbedtls/mbedtls-$MBEDTLS_REF" ]; then
+    curl -sSL "https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/v$MBEDTLS_REF.tar.gz" \
+      | tar xz -C "$SEC/third_party/mbedtls"
+  fi
+  cmake -S "$SEC" -B "$SEC/cbuild" -DBUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
+  cmake --build "$SEC/cbuild" -j"$(nproc)"
+fi
+PEER="$WORK/rsession_peer"
+if [ ! -x "$PEER" ] || [ "$REPO_ROOT/interop/c/rsession_peer.c" -nt "$PEER" ]; then
+  echo "== building the R-GOOSE/R-SV peer =="
+  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
+  gcc -O1 -o "$PEER" "$REPO_ROOT/interop/c/rsession_peer.c" @"$WORK/inc.rsp" \
+    "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
+fi
 
 C_SERVER="$LIB/examples/server_example_basic_io/server_example_basic_io"
 C_CTL_SERVER="$LIB/examples/server_example_control/server_example_control"
@@ -100,6 +133,17 @@ echo
 echo "== model: libiec61850's LTRK against our 7-3 tables =="
 IEC61850_LIBIEC_LTRK_ICD="$LTRK_ICD" \
   go test "$REPO_ROOT/scl/..." -run 'LibiecServiceTracking' -v
+
+echo
+echo "== security: R-GOOSE and R-SV (IEC 61850-90-5) both ways =="
+IEC61850_C_RSESSION_PEER="$PEER" \
+  go test "$REPO_ROOT/rsession/..." -run 'Interop' -v
+
+echo
+echo "== security: MMS over TLS (IEC 62351-3) both ways, port 3782 =="
+IEC61850_C_TLS_CERTS="$SEC/examples" IEC61850_C_TLS_SERVER="$C_TLS_SERVER" \
+IEC61850_C_TLS_CLIENT="$C_TLS_CLIENT" \
+  go test "$REPO_ROOT/iec62351/..." -run 'Interop' -v
 
 echo
 echo "== interop OK =="

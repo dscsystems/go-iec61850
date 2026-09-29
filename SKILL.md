@@ -155,10 +155,12 @@ Or interop against the reference C stack via `bash interop/run.sh`.
 
 Implemented: browse, read/write, datasets, reporting (URCB + buffered BRCB
 with resync), control (all four models), setting groups, file services,
-logs (server-side logging and journal queries), GOOSE/SV pub-sub, SCL
-parsing, TLS.
-Not yet: persistent logs, R-GOOSE/R-SV, 62351-6 message
-signing, GOOSE TLV encoding. If a task needs one of these, say so rather
+logs (server-side logging and journal queries), GOOSE/SV pub-sub, R-GOOSE/
+R-SV (`rsession`, signed or encrypted, over UDP), SCL parsing, TLS under
+the IEC 62351-3 profile (`iec62351`).
+Not yet: persistent logs, key distribution (62351-9 GDOI), 62351-6
+signing on Ethernet, 62351-4 certificate ACSE authentication, GOOSE TLV
+encoding. If a task needs one of these, say so rather
 than faking it. `docs/edition-2.1.md` is the full conformance matrix.
 
 ## Edition 2.1
