@@ -6,7 +6,8 @@ A pure-Go implementation of the IEC 61850 protocol family:
 - **GOOSE** publisher and subscriber (raw Ethernet, Linux AF_PACKET)
 - **Sampled Values** (IEC 61850-9-2 / 9-2LE) publisher and subscriber
 - **R-GOOSE and R-SV** (IEC 61850-90-5) over UDP, signed (HMAC-SHA256) or
-  encrypted (AES-GCM), and MMS over TLS under the IEC 62351-3 profile
+  encrypted (AES-GCM), with their keys distributed by **GDOI** (IEC
+  62351-9, RFC 6407/8052), and MMS over TLS under the IEC 62351-3 profile
 - **SCL** (ICD/CID/SCD) parsing and runtime model instantiation
 
 No cgo. GPLv3 licensed.
@@ -62,6 +63,7 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 | `goose`, `sv` | GOOSE and Sampled Values publish/subscribe over `ethernet` |
 | `rsession` | R-GOOSE / R-SV session protocol (IEC 61850-90-5) with its message security; an `ethernet.Interface` over UDP |
 | `iec62351` | IEC 62351-3 TLS profile for the MMS client and server |
+| `gdoi` | IEC 62351-9 group key distribution: GDOI key server and group member |
 | `scl` | SCL file parsing and model building |
 | `model` | IEC 61850 object model, functional constraints, Quality/Timestamp types |
 | `mms` | Low-level MMS (ISO 9506) values, codecs and client connection |

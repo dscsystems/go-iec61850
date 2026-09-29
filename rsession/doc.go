@@ -30,9 +30,8 @@
 // Keys come from the KeyStore: the active key secures what a session
 // sends, and every key in the store is accepted on receipt, so a key
 // change is add the new key everywhere, make it active at the publisher,
-// then remove the old one. Distributing keys is the job of a group key
-// distribution center (IEC 62351-9, GDOI), which this module does not
-// implement; the KeyStore is where such a client would put them.
+// then remove the old one. Package gdoi does this from a key server (IEC
+// 62351-9, GDOI): a gdoi.Member keeps a KeyStore current.
 //
 // # The wire format
 //

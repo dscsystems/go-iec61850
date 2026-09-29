@@ -508,6 +508,30 @@ rx, _ := rsession.Open(rsession.Config{
 stop, _ := goose.NewSubscriber(rx).Subscribe(goose.Filter{GoCbRef: ref}, handle)
 ```
 
+The keys can come from a GDOI key server (package `gdoi`, IEC 62351-9)
+instead of the application:
+
+```go
+// Key server.
+g := &gdoi.Group{}
+tek, _ := gdoi.NewTEK(streamOID, nil, gdoi.AuthNone, gdoi.EncAESGCM128, 24*time.Hour)
+g.Add(tek) // rotate: Add the next with an ActivationDelay, Remove the old
+ks, _ := gdoi.NewServer(gdoi.ServerConfig{
+    Credentials: gdoi.Credentials{Certificate: chain, Key: key, Roots: roots},
+    Authorize:   func(m gdoi.Peer, grp gdoi.GroupID) bool { return allowed(m, grp) },
+})
+ks.AddGroup(gdoi.GroupID{OID: streamOID}, g)
+go ks.ListenAndServe(":848")
+
+// Group member: keeps keys current in the store rsession uses.
+m := gdoi.NewMember(gdoi.MemberConfig{
+    Server:          "ks:848",
+    Credentials:     gdoi.Credentials{Certificate: chain, Key: key, Roots: roots},
+    AuthorizeServer: func(p gdoi.Peer) error { return checkKS(p.Certificate) },
+}, gdoi.GroupID{OID: streamOID}, keys)
+go m.Run(ctx)
+```
+
 `Session.Send`/`Receive` work with SPDUs directly, and `Marshal`/`Unmarshal`
 encode and decode them without a socket. Keys are rolled over by adding
 the new key everywhere, `SetActive` at the publisher, then `Remove` of the
