@@ -155,8 +155,9 @@ Or interop against the reference C stack via `bash interop/run.sh`.
 
 Implemented: browse, read/write, datasets, reporting (URCB + buffered BRCB
 with resync), control (all four models), setting groups, file services,
-log queries, GOOSE/SV pub-sub, SCL parsing, TLS.
-Not yet: server-side journal storage, R-GOOSE/R-SV, 62351-6 message
+logs (server-side logging and journal queries), GOOSE/SV pub-sub, SCL
+parsing, TLS.
+Not yet: persistent logs, R-GOOSE/R-SV, 62351-6 message
 signing, GOOSE TLV encoding. If a task needs one of these, say so rather
 than faking it. `docs/edition-2.1.md` is the full conformance matrix.
 

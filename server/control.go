@@ -27,6 +27,10 @@ type ControlCtx struct {
 	// received it, so a handler that needs the arrival time must take it
 	// itself. It is the epoch when the client sent none.
 	T time.Time
+	// TQuality is the time quality the client stamped T with: whether its
+	// clock was synchronised, and how accurate it was. An audit trail that
+	// records T needs it to know how far to trust T.
+	TQuality mms.TimeQuality
 
 	// Conn is the association the command arrived on, nil only for a
 	// command with no association behind it. Origin and OrIdent are what
@@ -356,6 +360,7 @@ func decodeOper(ref model.ObjectReference, v *mms.Value, conn *mms.ServerConn) *
 	}
 	if t := v.Index(3); t != nil {
 		ctx.T = t.Time()
+		ctx.TQuality = t.TimeQualityFlags()
 	}
 	if t := v.Index(4); t != nil {
 		ctx.Test = t.Bool()

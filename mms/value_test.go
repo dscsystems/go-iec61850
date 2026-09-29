@@ -181,3 +181,16 @@ func FuzzDecodeTypeSpec(f *testing.F) {
 		ts.DefaultValue()
 	})
 }
+
+// A TimeOfDay counts both its fields in UTC, so the same instant encodes
+// the same whatever zone the time.Time carries.
+func TestBinaryTimeIsUTC(t *testing.T) {
+	utc := time.Date(2026, 9, 28, 23, 30, 0, 0, time.UTC)
+	local := utc.In(time.FixedZone("UTC+5", 5*3600)) // already the 29th there
+	if a, b := NewBinaryTime(utc).Bytes(), NewBinaryTime(local).Bytes(); string(a) != string(b) {
+		t.Fatalf("same instant encodes as %x in UTC and %x in UTC+5", a, b)
+	}
+	if got := NewBinaryTime(local).Time(); !got.Equal(utc) {
+		t.Errorf("round trip = %v, want %v", got, utc)
+	}
+}

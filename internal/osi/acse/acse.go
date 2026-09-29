@@ -6,7 +6,6 @@ package acse
 
 import (
 	"fmt"
-	"sync/atomic"
 
 	"github.com/dscsystems/go-iec61850/asn1"
 )
@@ -25,25 +24,14 @@ var oidMMSContext = asn1.OID{1, 0, 9506, 2, 3}
 
 // The ACSI application context name, the alternative IEC 61850-7-2 defines
 // for the association. Some servers accept only this one; most, including
-// the reference C stack, accept the plain MMS context. Neither is wrong:
-// see SetApplicationContext.
+// the reference C stack, accept the plain MMS context. Neither is wrong, so
+// the choice is per association: see ApplicationContext.
 var oidACSIContext = asn1.OID{1, 0, 61850, 4, 0, 2}
 
-// appContext is the ApplicationContext an AARQ names. It is atomic because
-// SetApplicationContext may run while other goroutines are dialling.
-var appContext atomic.Int32
-
-// SetApplicationContext selects the application-context-name an AARQ
-// names: ACSIContext for the IEC 61850 context, MMSContext for the plain
-// MMS one. It is process-wide and affects associations dialled after it.
-// The default is the MMS context, which is what interoperates with the
-// widest set of peers. A responder does not use it: an AARE echoes the
+// ApplicationContext names the application-context-name an AARQ proposes.
+// The zero value is the plain MMS context, which interoperates with the
+// widest set of peers. A responder does not choose one: an AARE echoes the
 // context the peer proposed (AAREFor).
-func SetApplicationContext(c ApplicationContext) {
-	appContext.Store(int32(c))
-}
-
-// ApplicationContext names an application context for SetApplicationContext.
 type ApplicationContext int
 
 const (
@@ -53,10 +41,9 @@ const (
 	ACSIContext
 )
 
-// ApplicationContextOID returns the OID an AARQ names, for a caller that
-// reports it to a user.
-func ApplicationContextOID() asn1.OID {
-	if ApplicationContext(appContext.Load()) == ACSIContext {
+// OID returns the object identifier the context is named by.
+func (c ApplicationContext) OID() asn1.OID {
+	if c == ACSIContext {
 		return oidACSIContext
 	}
 	return oidMMSContext
@@ -82,9 +69,14 @@ func AARQ(mmsInitiate []byte, password string) []byte {
 // AARQWithIdentity is AARQ addressing a called AE and claiming a calling one.
 // Empty identities produce the same APDU AARQ builds.
 func AARQWithIdentity(mmsInitiate []byte, password string, called, calling Identity) []byte {
+	return AARQFor(mmsInitiate, password, called, calling, MMSContext)
+}
+
+// AARQFor is AARQWithIdentity proposing the given application context.
+func AARQFor(mmsInitiate []byte, password string, called, calling Identity, appCtx ApplicationContext) []byte {
 	seq := asn1.Cons(tagAARQ,
 		// application-context-name [1] EXPLICIT OID
-		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, ApplicationContextOID())),
+		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, appCtx.OID())),
 	)
 	// called-AP-title [2] .. [5], then calling-AP-title [6] .. [9].
 	addIdentity(seq, 2, called)

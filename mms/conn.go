@@ -36,6 +36,30 @@ type Options struct {
 	// an association that omits it.
 	Called  ACSEIdentity
 	Calling ACSEIdentity
+	// ApplicationContext is the application-context-name the AARQ
+	// proposes. The zero value, ContextMMS, is what most servers expect;
+	// ContextACSI is for a server that accepts only the IEC 61850 one.
+	ApplicationContext ApplicationContext
+}
+
+// ApplicationContext names the ACSE application context an association
+// proposes (IEC 61850-8-1).
+type ApplicationContext uint8
+
+const (
+	// ContextMMS is the plain ISO 9506-2 MMS context, 1.0.9506.2.3, which
+	// interoperates with the widest set of servers.
+	ContextMMS ApplicationContext = iota
+	// ContextACSI is the IEC 61850 ACSI context, 1.0.61850.4.0.2, which
+	// some servers require.
+	ContextACSI
+)
+
+func (c ApplicationContext) acse() acse.ApplicationContext {
+	if c == ContextACSI {
+		return acse.ACSIContext
+	}
+	return acse.MMSContext
 }
 
 // Conn is an established MMS association. It is safe for concurrent use:
@@ -162,8 +186,8 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 
 	// Build ACSE AARQ wrapping the MMS InitiateRequest, wrap in
 	// presentation CP, exchange via the session CONNECT.
-	aarq := acse.AARQWithIdentity(EncodeInitiateRequest(init), opts.Password,
-		opts.Called.toACSE(), opts.Calling.toACSE())
+	aarq := acse.AARQFor(EncodeInitiateRequest(init), opts.Password,
+		opts.Called.toACSE(), opts.Calling.toACSE(), opts.ApplicationContext.acse())
 	cp := presentation.BuildCP(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aarq)
 	cpaUserData, err := session.ConnectClient(ct, nil, nil, cp)
 	if err != nil {

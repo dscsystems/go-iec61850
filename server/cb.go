@@ -1,7 +1,6 @@
 package server
 
 import (
-	"strings"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/mms"
@@ -20,9 +19,10 @@ import (
 // addresses them by name ("gcb01$GoEna"). Nothing is added that the
 // structure does not define: a component a client does not expect is
 // harmless to it, but one it looks for under the standard's name and does
-// not find is not. They are read-only. They are not a publishing
-// interface: this library has no server-side GOOSE or SV publisher, so the
-// enable flags read false and writing them is refused.
+// not find is not. The GOOSE and SV blocks are read-only: this library has
+// no server-side GOOSE or SV publisher, so their enable flags read false
+// and writing them is refused. An LCB is live: it writes the server's logs
+// (journal.go), and a client sets LogEna, DatSet, TrgOps and IntgPd.
 
 // materialiseControlBlocks adds the GOOSE, sampled-value and log control
 // blocks of each logical node to it as browsable data objects, under the
@@ -151,9 +151,10 @@ func buildSVCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, sc *model.S
 }
 
 // buildLCBObject materialises an LCB (FC LG) as IEC 61850-8-1 defines it.
-// The log holds nothing, so the entry range reads as empty: the epoch for
+// While the log holds nothing the entry range reads as empty: the epoch for
 // the times and the all-zero EntryID, which is what an empty buffered
-// report control block reports too.
+// report control block reports too. The log manager keeps the range
+// current as entries arrive.
 func buildLCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, lc *model.LogControl) *model.DataObject {
 	const fc = model.LG
 	trgOps := lc.TrgOps
@@ -176,24 +177,14 @@ func buildLCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, lc *model.Lo
 	return do
 }
 
-// logRef is the reference of the log an LCB writes to: the log's name in
-// the logical node the SCL places it in, which defaults to LLN0 of the
-// block's own device (IEC 61850-6). Empty when the block names no log.
+// logRef is the reference of the log an LCB writes to, "LD/LN$Log", or
+// empty when the block names no log. See logTarget.
 func logRef(ld *model.LogicalDevice, lc *model.LogControl) string {
-	if lc.LogName == "" {
+	domain, name, ok := logTarget(ld, lc)
+	if !ok {
 		return ""
 	}
-	ldName := ld.Name
-	if lc.LogLDInst != "" {
-		// The logical device name is the IED name followed by the
-		// instance, so another instance of the same IED swaps the suffix.
-		ldName = strings.TrimSuffix(ld.Name, ld.Inst) + lc.LogLDInst
-	}
-	lnName := lc.LogLN
-	if lnName == "" {
-		lnName = "LLN0"
-	}
-	return ldName + "/" + lnName + "$" + lc.LogName
+	return domain + "/" + name
 }
 
 // zeroBinaryTime is the entry time a log control block reports while it

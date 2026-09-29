@@ -76,6 +76,12 @@
           </Address>
         </PhysConn>
       </ConnectedAP>
+      <!-- A client IED: its address is what a ClientLN reservation resolves to. -->
+      <ConnectedAP iedName="HMI" apName="S1">
+        <Address>
+          <P type="IP">10.0.0.50</P>
+        </Address>
+      </ConnectedAP>
     </SubNetwork>
   </Communication>
 
@@ -153,7 +159,12 @@
                            datSet="Measurements" confRev="1" buffered="true" bufTime="100" intgPd="0">
               <TrgOps dchg="true" qchg="true" gi="true"/>
               <OptFields seqNum="true" timeStamp="true" reasonCode="true" bufOvfl="true" entryID="true"/>
-              <RptEnabled max="4"/>
+              <!-- Instance 01 is reserved for HMI; instance 02 names an IED
+                   the document gives no address, which cannot be enforced. -->
+              <RptEnabled max="4">
+                <ClientLN iedName="HMI" apRef="S1" ldInst="LD0" lnClass="IHMI" lnInst="1"/>
+                <ClientLN iedName="GHOST" apRef="S1" ldInst="LD0" lnClass="IHMI" lnInst="1"/>
+              </RptEnabled>
             </ReportControl>
             <GSEControl name="gcb01" desc="trip GOOSE" appID="ED21LD0/LLN0.gcb01"
                         datSet="Measurements" confRev="1" type="GOOSE" fixedOffs="true">

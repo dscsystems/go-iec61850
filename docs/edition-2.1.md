@@ -78,7 +78,7 @@ every IED's GOOSE addressing is missing.
 - `Val@sGroup` per setting group, exposed as `model.SettingGroups`, with
   `SettingControl@actSG` selecting the group the objects serve.
 - `SmvOpts`, `smpMod`, `GSEControl@type`, `Protocol` (R-GOOSE/R-SV),
-  `GSEControl@fixedOffs`, `RptEnabled/ClientLN`, `dbprefix`, `bufDepth`, the log
+  `GSEControl@fixedOffs`, `dbprefix`, `bufDepth`, the log
   control block's logical-node attributes, `resvTms`.
 - `LNodeType` identified by `(id, lnClass)`, so a document reusing an id
   across node classes resolves each to its own template.
@@ -91,7 +91,6 @@ every IED's GOOSE addressing is missing.
 | Construct | Why | Diagnostic |
 |---|---|---|
 | R-GOOSE, R-SV | Need the IEC 61850-90-5 session and security profile | yes |
-| `RptEnabled/ClientLN` reservations | Pre-reserved instances are not created | yes |
 | `Substation` topology | Decoded, not instantiated into the model | no (known) |
 | `Inputs`/`ExtRef` | Decoded, not resolved to their publisher | no (known) |
 | `Services` other than `maxBuf` | Decoded, not derived into the model | partly |
@@ -108,7 +107,21 @@ every IED's GOOSE addressing is missing.
   and quality change, integrity, buffer time, the report buffer, purge,
   resync on `EntryID`, and `BufOvfl`. `EntryID` is unique within the
   server, as 7-2 requires, and does not collide across a restart.
-- `BRCB.Owner`, kept in step with the block's holder.
+- `BRCB.Owner` (the holder's IP address, as 8-1 gives it), and
+  reservations that outlive the association: a BRCB whose client sets
+  `ResvTms` stays reserved for that client's address for that many seconds
+  after its association ends, so it can come back to its buffer.
+- Instances the configuration reserves (`RptEnabled/ClientLN`): each
+  `ClientLN` holds the instance at its position for the client IED it
+  names, identified by the IP address of that IED's access point in the
+  Communication section. The instance reports `ResvTms` -1 (BRCB) or
+  `Resv` TRUE (URCB), names its client as `Owner` from the start, and is
+  refused to every other address. A `ClientLN` whose IED has no address
+  cannot be enforced; its instance is left free and reported.
+- Time quality: the server stamps its times (`Tx.SetTimestampNow`,
+  `Tx.Now`, `SGCB.LActTm`) with the quality `Server.SetTimeQuality` states,
+  and a control handler sees the client's `T` with its quality
+  (`ControlCtx.TQuality`).
 - Control: all four control models, select-before-operate at both security
   levels, `CommandTermination` with positive and negative outcome, and
   `LastApplError`.
@@ -117,12 +130,21 @@ every IED's GOOSE addressing is missing.
   did not.
 - Setting groups: `SGCB` with edit and confirm, and per-group values. A
   device that declares its groups in SCL gets them without configuration.
-- Log, file and dataset services (see below).
+- Logs: an `LCB` writes the changes of its dataset's members that its
+  `TrgOps` asks for, and all of them each integrity period, into its log,
+  with the reason code when the block asks for reasons. The log keeps
+  `WithLogCapacity` entries. `LogEna`, `DatSet`, `TrgOps` and `IntgPd` are
+  writable, the configuration only while logging is off. A log is served
+  as an MMS journal, listed by `getNameList` (so `client.Browse` finds it
+  as an `ACSILog`) and read by `ReadJournal`, by time range, from an entry,
+  after an entry and by count, paged to the association's PDU size.
+- File and dataset services (see below).
 - Control-block objects: `GoCB`, `GsCB`, `MSVCB`, `USVCB`, `LCB` and `SGCB`
   are all materialised and browsable, with the components and names of the
   8-1 MMS structures (`GoEna`, `DstAddress`, `MsvID`/`UsvID`, `OldEntrTm`,
-  ...). They are read-only; the enable flags read false because the server
-  publishes neither GOOSE nor SV. `GsCB` carries only `GsEna` and `GsID`.
+  ...). The GOOSE and SV blocks are read-only, their enable flags reading
+  false because the server publishes neither. `GsCB` carries only `GsEna`
+  and `GsID`. The `LCB` is live (above).
 
 ### Not implemented
 
@@ -130,10 +152,9 @@ every IED's GOOSE addressing is missing.
   IEC 61850-90-5 and require a session layer and IEC 62351 key management
   that this library does not have. An SCL file that asks for them loads,
   and the control blocks are reported as plain GOOSE and SV.
-- **Server-side journal storage.** `mms` implements the client side of log
-  query (`ReadJournalByTime`, `ReadJournalAfter`); the server has no
-  storage, so a server cannot answer a log query. The `LCB` object exists
-  and is browsable, but it fronts nothing.
+- **Persistent logs.** A log lives in memory and starts empty with the
+  server. `InitializeJournal` (clearing a log) and `ReportJournalStatus`
+  are not served.
 - **The ACSI directory services** (`GetDirectory`, `DirectoryObject`,
   `GetDataObjectDefinition`) as services. `client.Browse` is a filter over
   `getNameList`, which is a faithful derivation of the class of each object
@@ -188,7 +209,8 @@ the class is reported as unknown to this library.
 - Report `OptFlds` bit assignments and the report field order.
 - Presentation context negotiation, by identifier rather than by position.
   The AARE names the MMS context by the peer's identifier and echoes the
-  application context the peer proposed (MMS or ACSI).
+  application context the peer proposed (MMS or ACSI). A client proposes
+  the ACSI context with `client.WithApplicationContext(mms.ContextACSI)`.
 
 ### Not implemented
 
@@ -214,6 +236,8 @@ the class is reported as unknown to this library.
   emitted only when the publisher's configuration asks for them, and
   `SmvOpts` from the SCL becomes the SV control block's `OptFlds` bit
   string.
+- `refrTm` carries the publisher's clock quality (`LEConfig.TimeQuality`),
+  and a parsed ASDU the quality it arrived with (`RefrTmQuality`).
 - The 9-2LE `PhsMeas1` dataset, with `SetQuality` alongside `Quality`.
 - Multi-ASDU APDUs.
 

@@ -46,7 +46,7 @@ func (m *Message) timeQuality() mms.TimeQuality {
 	if m.TimeQuality != nil {
 		return *m.TimeQuality
 	}
-	return mms.TimeAccuracy(10)
+	return mms.DefaultTimeQuality
 }
 
 // optString returns a context-primitive string element, or nil when s is

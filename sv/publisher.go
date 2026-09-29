@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/ethernet"
+	"github.com/dscsystems/go-iec61850/mms"
 )
 
 // LEConfig configures a 9-2LE publisher.
@@ -28,6 +29,12 @@ type LEConfig struct {
 	SmpMod SmpMod
 	// DatSet is the dataset name to declare when Opts.DataSet is set.
 	DatSet string
+	// TimeQuality is the quality of the publisher's clock, stamped on
+	// refrTm when Opts.RefreshTime is set. Nil stamps
+	// mms.DefaultTimeQuality. A merging unit whose time source is lost has
+	// to say so here: SmpSynch tells a receiver the samples are not
+	// synchronised, and this tells it the reference time is not either.
+	TimeQuality *mms.TimeQuality
 	// Opts selects the optional ASDU fields to include. The zero value
 	// includes none beyond the mandatory ones, which is the 9-2LE
 	// profile; set it to publish the refresh time, sample rate, dataset
@@ -136,6 +143,7 @@ func (p *LEPublisher) asdu(s *LESample) *ASDU {
 	}
 	if p.cfg.Opts.RefreshTime {
 		a.RefrTm = time.Now()
+		a.RefrTmQuality = p.cfg.TimeQuality
 	}
 	if p.cfg.Opts.DataSet && p.cfg.DatSet != "" {
 		a.DatSet = p.cfg.DatSet

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"net"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -60,8 +61,9 @@ func (rm *reportManager) checkRCBWrite(domain, item, attr string, v *mms.Value, 
 	}
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	// A block another client holds is not this one's to change.
-	if rs.owner != nil && rs.owner != conn {
+	// A block another client holds, or is held for, is not this one's to
+	// change.
+	if !rs.allowedLocked(conn) {
 		return byte(mms.AccessTemporarilyUnavailable)
 	}
 	switch {
@@ -83,7 +85,24 @@ func (rm *reportManager) checkRCBWrite(domain, item, attr string, v *mms.Value, 
 			return byte(mms.AccessTemporarilyUnavailable)
 		}
 	case attr == "Resv":
+		if !v.Bool() && rs.resvCfg {
+			// A reservation the configuration made is not the client's
+			// to give up.
+			return byte(mms.AccessObjectAccessDenied)
+		}
 		if !v.Bool() && rs.enabled {
+			return byte(mms.AccessTemporarilyUnavailable)
+		}
+	case attr == "ResvTms":
+		// -1 means reserved by configuration, which only the
+		// configuration can say; a configured block's ResvTms is fixed.
+		if rs.resvCfg {
+			return byte(mms.AccessObjectAccessDenied)
+		}
+		if v.Int64() < 0 {
+			return byte(mms.AccessObjectValueInvalid)
+		}
+		if rs.enabled {
 			return byte(mms.AccessTemporarilyUnavailable)
 		}
 	case rcbSettings[attr]:
@@ -121,20 +140,24 @@ func (rm *reportManager) onRCBWrite(domain, item, attr string, v *mms.Value, con
 	defer rs.mu.Unlock()
 	if attr == "Resv" {
 		if v.Bool() {
-			rs.owner = conn
+			rs.takeLocked(conn)
 		} else {
-			rs.owner = nil
+			rm.releaseLocked(rs)
 		}
-		rs.syncResvLocked()
 		return
 	}
 	// Writing a block reserves it for the writer (IEC 61850-7-2 implicit
 	// reservation), so a second client cannot reconfigure or take it.
 	if rs.owner == nil {
-		rs.owner = conn
-		rs.syncResvLocked()
+		rs.takeLocked(conn)
 	}
 	switch attr {
+	case "ResvTms":
+		// ResvTms 0 gives up a reservation that outlives the association;
+		// the client still holds the block while it is connected.
+		if v.Int64() == 0 {
+			rs.stopResvTimerLocked()
+		}
 	case "RptEna":
 		if v.Bool() {
 			rm.enableLocked(rs, conn)
@@ -169,34 +192,128 @@ func (rm *reportManager) onRCBWrite(domain, item, attr string, v *mms.Value, con
 // buffered block is taken: a BRCB has no Resv, so the connection that holds
 // it would otherwise be invisible (IEC 61850-7-2).
 func (rs *rcbState) syncResvLocked() {
+	held := rs.owner != nil || rs.resvIP != nil
 	if a := rs.do.Attribute("Resv"); a != nil {
-		a.Value = mms.NewBool(rs.owner != nil)
+		a.Value = mms.NewBool(held)
 	}
 	if a := rs.do.Attribute("Owner"); a != nil {
-		a.Value = mms.NewOctetString(ownerIdent(rs.owner))
+		ip := rs.resvIP
+		if rs.owner != nil {
+			ip = connIP(rs.owner)
+		}
+		a.Value = mms.NewOctetString(ipOctets(ip))
 	}
 }
 
-// ownerIdent is the octet string a BRCB's Owner attribute carries: the
-// address and association of the client holding the block, or empty when
-// the block is free. Identifying the client by its transport address is
-// what IEC 61850-8-1 leaves to the implementation, and is what a client
-// comparing Owner values needs to tell "mine" from "someone else's".
-func ownerIdent(conn *mms.ServerConn) []byte {
-	if conn == nil {
+// allowedLocked reports whether conn may use the block: it holds it, or
+// nobody does, or the block is held for conn's address.
+func (rs *rcbState) allowedLocked(conn *mms.ServerConn) bool {
+	switch {
+	case rs.owner != nil:
+		return rs.owner == conn
+	case rs.resvIP != nil:
+		ip := connIP(conn)
+		return ip != nil && ip.Equal(rs.resvIP)
+	}
+	return true
+}
+
+// takeLocked makes conn the holder of the block. A reservation that was
+// waiting for this client's return has served its purpose.
+func (rs *rcbState) takeLocked(conn *mms.ServerConn) {
+	rs.owner = conn
+	rs.stopResvTimerLocked()
+	if !rs.resvCfg {
+		rs.resvIP = nil
+	}
+	rs.syncResvLocked()
+}
+
+// releaseLocked ends the holder's claim on the block, as its association
+// ends or it disables a BRCB. A reservation by configuration stays. A BRCB
+// with a ResvTms stays reserved for the same client address for that many
+// seconds, so a client that lost its connection can come back to its
+// buffer (IEC 61850-7-2); otherwise the block is free.
+func (rm *reportManager) releaseLocked(rs *rcbState) {
+	prev := rs.owner
+	rs.owner = nil
+	if rs.resvCfg {
+		rs.syncResvLocked()
+		return
+	}
+	rs.stopResvTimerLocked()
+	rs.resvIP = nil
+	if tms := rs.resvTms(); rs.rc.Buffered && tms > 0 && prev != nil {
+		if ip := connIP(prev); ip != nil {
+			rs.resvIP = ip
+			var t *time.Timer
+			t = time.AfterFunc(time.Duration(tms)*time.Second, func() {
+				rm.s.mu.RLock()
+				defer rm.s.mu.RUnlock()
+				rs.mu.Lock()
+				defer rs.mu.Unlock()
+				if rs.resvTimer == t && rs.owner == nil {
+					rs.resvTimer = nil
+					rs.resvIP = nil
+					rs.syncResvLocked()
+				}
+			})
+			rs.resvTimer = t
+		}
+	}
+	rs.syncResvLocked()
+}
+
+func (rs *rcbState) stopResvTimerLocked() {
+	if rs.resvTimer != nil {
+		rs.resvTimer.Stop()
+		rs.resvTimer = nil
+	}
+}
+
+// resvTms is the BRCB's ResvTms in seconds: -1 reserved by configuration,
+// 0 no reservation beyond the association, otherwise how long it lasts.
+func (rs *rcbState) resvTms() int64 {
+	if v := rs.attr("ResvTms"); v != nil {
+		return v.Int64()
+	}
+	return 0
+}
+
+// connIP is the IP address a connection came from, nil when unknown.
+func connIP(conn *mms.ServerConn) net.IP {
+	if conn == nil || conn.Peer == nil {
 		return nil
 	}
-	if conn.Peer == nil {
+	switch a := conn.Peer.(type) {
+	case *net.TCPAddr:
+		return a.IP
+	}
+	host, _, err := net.SplitHostPort(conn.Peer.String())
+	if err != nil {
 		return nil
 	}
-	return []byte(conn.Peer.String())
+	return net.ParseIP(host)
+}
+
+// ipOctets is the Owner octet string for an address (IEC 61850-8-1): the
+// four octets of an IPv4 address, sixteen for IPv6, empty for none.
+func ipOctets(ip net.IP) []byte {
+	if ip == nil {
+		return nil
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return []byte(v4)
+	}
+	return []byte(ip.To16())
 }
 
 func (rm *reportManager) enableLocked(rs *rcbState, conn *mms.ServerConn) {
 	rs.enabled = true
 	rs.conn = conn
-	rs.owner = conn
-	rs.syncResvLocked()
+	if rs.owner != conn {
+		rs.takeLocked(conn)
+	}
 	rs.setSqNumLocked(0)
 	rs.stopIntegrityLocked()
 
@@ -237,7 +354,7 @@ func (rm *reportManager) disableLocked(rs *rcbState) {
 	// A buffered block keeps buffering for whoever enables it next; the
 	// reservation of an unbuffered block lasts until released.
 	if rs.rc.Buffered {
-		rs.owner = nil
+		rm.releaseLocked(rs)
 	}
 }
 
@@ -266,8 +383,7 @@ func (rm *reportManager) disableConn(conn *mms.ServerConn) {
 			rm.disableLocked(rs)
 		}
 		if rs.owner == conn {
-			rs.owner = nil
-			rs.syncResvLocked()
+			rm.releaseLocked(rs)
 		}
 		rs.mu.Unlock()
 	}

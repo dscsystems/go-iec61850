@@ -58,14 +58,19 @@ func (m SmpMod) String() string {
 
 // ASDU is one Application Service Data Unit within a sampled-value APDU.
 type ASDU struct {
-	SvID     string
-	DatSet   string
-	SmpCnt   uint16
-	ConfRev  uint32
-	RefrTm   time.Time // zero when absent
-	SmpSynch uint8
-	SmpRate  uint16 // zero when absent
-	SmpMod   SmpMod // smpMod [8]; meaningful only when HasSmpMod
+	SvID    string
+	DatSet  string
+	SmpCnt  uint16
+	ConfRev uint32
+	RefrTm  time.Time // zero when absent
+	// RefrTmQuality is the time quality of RefrTm. Nil stamps
+	// mms.DefaultTimeQuality; a parsed ASDU carries the quality it
+	// arrived with, so a merging unit whose clock lost synchronisation
+	// is visible to the receiver.
+	RefrTmQuality *mms.TimeQuality
+	SmpSynch      uint8
+	SmpRate       uint16 // zero when absent
+	SmpMod        SmpMod // smpMod [8]; meaningful only when HasSmpMod
 	// HasSmpMod reports whether smpMod [8] is present. An Edition 1 stream
 	// omits it, which a receiver reads as SmpPerPeriod.
 	HasSmpMod bool
@@ -113,7 +118,11 @@ func (a *ASDU) element() *asn1.Element {
 	el.Add(asn1.Prim(asn1.ContextPrimitive(3), []byte{
 		byte(a.ConfRev >> 24), byte(a.ConfRev >> 16), byte(a.ConfRev >> 8), byte(a.ConfRev)}))
 	if !a.RefrTm.IsZero() {
-		el.Add(asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(a.RefrTm, mms.TimeAccuracy(10)).Bytes()))
+		q := mms.DefaultTimeQuality
+		if a.RefrTmQuality != nil {
+			q = *a.RefrTmQuality
+		}
+		el.Add(asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(a.RefrTm, q).Bytes()))
 	}
 	el.Add(asn1.Prim(asn1.ContextPrimitive(5), []byte{a.SmpSynch})) // smpSynch [5]
 	if a.SmpRate != 0 {
@@ -194,6 +203,8 @@ func parseASDU(content []byte) (*ASDU, error) {
 	if b, ok, _ := d.Optional(asn1.ContextPrimitive(4)); ok {
 		if tv, err := mms.NewUTCTimeRaw(b); err == nil {
 			a.RefrTm = tv.Time()
+			q := tv.TimeQualityFlags()
+			a.RefrTmQuality = &q
 		}
 	}
 	if b, ok, _ := d.Optional(asn1.ContextPrimitive(5)); ok && len(b) > 0 {

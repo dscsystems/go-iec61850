@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/mms"
@@ -20,6 +21,10 @@ import (
 type Client struct {
 	mc  *mms.Conn
 	ctl *controlReports
+
+	// timeQuality is the quality of this client's clock plus one, zero
+	// when unset; see SetTimeQuality.
+	timeQuality atomic.Uint32
 
 	// sem holds one token per request the association allows outstanding;
 	// see ReadAsync.
@@ -46,6 +51,13 @@ func WithPassword(pw string) Option { return func(o *mms.Options) { o.Password =
 
 // WithTimeout bounds the connection handshake.
 func WithTimeout(d time.Duration) Option { return func(o *mms.Options) { o.ConnectTimeout = d } }
+
+// WithApplicationContext selects the ACSE application context the client
+// proposes. The default, mms.ContextMMS, is what most servers expect; use
+// mms.ContextACSI for a server that accepts only the IEC 61850 one.
+func WithApplicationContext(c mms.ApplicationContext) Option {
+	return func(o *mms.Options) { o.ApplicationContext = c }
+}
 
 // WithLogger sets the diagnostic logger.
 func WithLogger(l *slog.Logger) Option { return func(o *mms.Options) { o.Logger = l } }
@@ -186,4 +198,25 @@ func (c *Client) ReadValues(ctx context.Context, fc model.FC, refs ...model.Obje
 		_, items[i] = r.ToMMS(fc)
 	}
 	return c.mc.Read(ctx, domain, items...)
+}
+
+// SetTimeQuality states the quality of this client's clock, which the
+// operate timestamp T of every control carries (IEC 61850-7-2): whether
+// leap seconds are known, whether the clock has failed or is not
+// synchronised, and how many bits of the fraction are accurate. T is the
+// client's statement of when it decided to operate, and a server that
+// audits commands can only trust it as far as this says. It is safe to
+// call concurrently with controls. Until it is called the client uses
+// mms.DefaultTimeQuality. A single command can override it with
+// WithTimeQuality.
+func (c *Client) SetTimeQuality(q mms.TimeQuality) {
+	c.timeQuality.Store(uint32(q) + 1)
+}
+
+// TimeQuality returns the quality the client stamps operate times with.
+func (c *Client) TimeQuality() mms.TimeQuality {
+	if v := c.timeQuality.Load(); v != 0 {
+		return mms.TimeQuality(v - 1)
+	}
+	return mms.DefaultTimeQuality
 }

@@ -28,6 +28,7 @@ const (
 	svcDefineNamedVarList  = 11
 	svcGetNamedVarListAttr = 12
 	svcDeleteNamedVarList  = 13
+	svcReadJournal         = 65
 	svcFileOpen            = 72
 	svcFileRead            = 73
 	svcFileClose           = 74
@@ -62,6 +63,8 @@ func (h *handler) Handle(req *mms.Request) (*asn1.Element, error) {
 		return h.defineNVL(req.Content)
 	case svcDeleteNamedVarList:
 		return h.deleteNVL(req.Content)
+	case svcReadJournal:
+		return h.readJournal(req.Content, req.Conn.MaxPDU)
 	default:
 		if resp, err, handled := h.fileService(req); handled {
 			return resp, err
@@ -169,6 +172,8 @@ func (h *handler) enumerate(class int, domain string) []string {
 			}
 		}
 		return out
+	case 8: // journal (log)
+		return h.s.logs.names(domain)
 	}
 	return nil
 }
@@ -282,6 +287,7 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 	h.changes = make(changeSet)
 	defer func() {
 		h.s.reports.onUpdate(h.changes)
+		h.s.logs.onUpdate(h.changes)
 		h.changes = nil
 	}()
 	for i := 0; dd.More(); i++ {
@@ -314,15 +320,18 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 		if mgr != nil {
 			sgAttr, isSG = isSGCBWrite(t.item)
 		}
+		lcbKey, lcbAttr, isLCB := h.s.logs.lcbKey(t.domain, t.item)
 		code := byte(0xff)
 		switch {
 		case isRCB:
 			code = h.s.reports.checkRCBWrite(t.domain, t.item, rcbAttr, v, conn)
 		case isSG:
 			code = mgr.checkWrite(sgAttr, v)
+		case isLCB:
+			code = h.s.logs.checkLCBWrite(lcbKey, lcbAttr, v)
 		}
 		if code == 0xff {
-			code = h.writeOne(t.domain, t.item, v, isRCB || isSG)
+			code = h.writeOne(t.domain, t.item, v, isRCB || isSG || isLCB)
 		}
 		if code != 0xff {
 			resp.Add(accessFailureWrite(mms.DataAccessError(code)))
@@ -334,6 +343,8 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 			h.s.reports.onRCBWrite(t.domain, t.item, rcbAttr, v, conn)
 		case isSG: // ActSG, EditSG, CnfEdit
 			mgr.onSGCBWrite(sgAttr, v)
+		case isLCB: // LogEna
+			h.s.logs.onLCBWrite(lcbKey, lcbAttr)
 		}
 	}
 	return resp, nil

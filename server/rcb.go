@@ -2,6 +2,7 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -27,9 +28,16 @@ type rcbState struct {
 	// owner is the client holding the block (IEC 61850-7-2): reserved
 	// explicitly through Resv, or implicitly by the first client to write
 	// it. Nobody else may change it until the owner lets go or leaves.
-	owner    *mms.ServerConn
-	sqNum    uint32
-	intgStop chan struct{}
+	owner *mms.ServerConn
+	// resvIP is the client the block is held for while no association of
+	// its holds it: the one a ClientLN names (resvCfg), or the owner of a
+	// BRCB with a ResvTms after its association ended, until resvTimer
+	// expires. The block is then usable only from that address.
+	resvIP    net.IP
+	resvCfg   bool
+	resvTimer *time.Timer
+	sqNum     uint32
+	intgStop  chan struct{}
 
 	// pending holds the events of an open buffer-time window (BufTm).
 	pending   *reportEntry
@@ -84,14 +92,22 @@ func materialiseRCBs(m *model.Model, bufDefault int) map[string]*rcbState {
 				if rc.Buffered {
 					fc = model.BR
 				}
-				for _, instName := range rcbInstanceNames(rc) {
+				for i, instName := range rcbInstanceNames(rc) {
 					do := buildRCBObject(ld, ln, rc, fc, instName)
 					ln.Objects = append(ln.Objects, do)
 					item := ln.Name + "$" + fc.String() + "$" + instName
-					reg[ld.Name+"\x00"+item] = &rcbState{
+					rs := &rcbState{
 						domain: ld.Name, item: item, ln: ln, do: do, rc: rc,
 						maxBuffer: bufferDepth(rc, bufDefault),
 					}
+					if i < len(rc.Reservations) && rc.Reservations[i] != nil && rc.Reservations[i].IP != nil {
+						// Reserved by configuration: ResvTms -1 says so, and
+						// Owner names the client from the start.
+						rs.resvIP, rs.resvCfg = rc.Reservations[i].IP, true
+						rs.setAttr("ResvTms", mms.NewInt16(-1))
+						rs.syncResvLocked()
+					}
+					reg[ld.Name+"\x00"+item] = rs
 				}
 			}
 		}

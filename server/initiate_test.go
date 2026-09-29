@@ -47,7 +47,7 @@ func TestInitiateAnswersWithServerCapabilities(t *testing.T) {
 		{mms.ServiceInformationReport, "informationReport", true},
 		{mms.ServiceStatus, "status", false},           // not implemented
 		{mms.ServiceCancel, "cancel", false},           // not implemented
-		{mms.ServiceReadJournal, "readJournal", false}, // not implemented
+		{mms.ServiceReadJournal, "readJournal", false}, // the demo model has no logs
 		{mms.ServiceFileOpen, "fileOpen", false},       // no file store configured
 	} {
 		if has := got.Services.Has(svc.bit); has != svc.want {

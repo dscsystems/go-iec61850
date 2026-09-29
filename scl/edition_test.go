@@ -1,6 +1,7 @@
 package scl_test
 
 import (
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -625,4 +626,39 @@ func assertDiagnostic(t *testing.T, m *model.Model, substr string) {
 		all = append(all, d.String())
 	}
 	t.Errorf("no diagnostic containing %q; got:\n  %s", substr, strings.Join(all, "\n  "))
+}
+
+// A ClientLN reserves the instance at its position for the client IED it
+// names, identified by the IP address of that IED's access point. One whose
+// IED has no address cannot be enforced, so its instance stays free and
+// the document is told why.
+func TestClientLNReservations(t *testing.T) {
+	_, m := loadEd21(t)
+	ln := m.Device("ED21LD0").Node("LLN0")
+	var urcb, brcb *model.ReportControl
+	for _, rc := range ln.ReportControls {
+		switch rc.Name {
+		case "urcb01":
+			urcb = rc
+		case "brcb01":
+			brcb = rc
+		}
+	}
+	if urcb == nil || brcb == nil {
+		t.Fatal("report controls missing from the fixture")
+	}
+	if len(urcb.Reservations) != 1 || urcb.Reservations[0] == nil ||
+		!urcb.Reservations[0].IP.Equal(net.ParseIP("192.168.1.11")) {
+		t.Errorf("urcb01 reservations = %+v, want instance 1 for 192.168.1.11", urcb.Reservations)
+	}
+	if len(brcb.Reservations) != 2 {
+		t.Fatalf("brcb01 has %d reservations, want 2", len(brcb.Reservations))
+	}
+	if r := brcb.Reservations[0]; r == nil || r.IEDName != "HMI" || !r.IP.Equal(net.ParseIP("10.0.0.50")) {
+		t.Errorf("brcb01 instance 1 = %+v, want HMI at 10.0.0.50", r)
+	}
+	if r := brcb.Reservations[1]; r != nil {
+		t.Errorf("brcb01 instance 2 = %+v, want it unreserved", r)
+	}
+	assertDiagnostic(t, m, `"GHOST"`)
 }

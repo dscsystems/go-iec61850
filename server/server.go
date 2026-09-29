@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
@@ -26,6 +28,10 @@ type Server struct {
 	writeH   func(*model.DataAttribute, *mms.Value) error
 	identity Identity
 	reports  *reportManager
+	logs     *logManager
+
+	// logCapacity is how many entries each log keeps; see WithLogCapacity.
+	logCapacity int
 
 	ctlMu    sync.RWMutex
 	controls map[model.ObjectReference]ControlHandler
@@ -54,6 +60,12 @@ type Server struct {
 	open     int // slots taken: established associations and those setting up
 	maxConns int
 	connH    func(ConnectionEvent)
+
+	// timeQuality is the quality of the server's clock, stamped on every
+	// time the server produces. It holds the quality plus one, so that
+	// zero means "not set" and every quality octet, 0 included, can be
+	// stored. See SetTimeQuality.
+	timeQuality atomic.Uint32
 }
 
 // ConnectionState is what happened to a client connection.
@@ -163,6 +175,37 @@ func WithReportBufferSize(n int) Option {
 	return func(s *Server) { s.reportBufSize = n }
 }
 
+// WithTimeQuality sets the initial quality of the server's clock. See
+// SetTimeQuality.
+func WithTimeQuality(q mms.TimeQuality) Option {
+	return func(s *Server) { s.SetTimeQuality(q) }
+}
+
+// SetTimeQuality states the quality of the server's clock: whether leap
+// seconds are known, whether the clock has failed or lost synchronisation,
+// and how many bits of the fraction are accurate. Every time the server
+// stamps from then on carries it — Tx.SetTimestampNow and Tx.Now, and the
+// setting group's LActTm — so a device whose time source is lost can say so
+// rather than serve times that look synchronised. It is safe to call while
+// serving. Until it is called the server uses mms.DefaultTimeQuality.
+func (s *Server) SetTimeQuality(q mms.TimeQuality) {
+	s.timeQuality.Store(uint32(q) + 1)
+}
+
+// TimeQuality returns the quality the server stamps its times with.
+func (s *Server) TimeQuality() mms.TimeQuality {
+	if v := s.timeQuality.Load(); v != 0 {
+		return mms.TimeQuality(v - 1)
+	}
+	return mms.DefaultTimeQuality
+}
+
+// now is the current time as a UtcTime carrying the server's clock
+// quality.
+func (s *Server) now() *mms.Value {
+	return mms.NewUTCTime(time.Now(), s.TimeQuality())
+}
+
 // WithSettingGroups enables setting-group handling with numOfSG groups for
 // every logical device that has SG/SE setting attributes. An SGCB is
 // materialised into each such device's LLN0.
@@ -195,7 +238,7 @@ func (s *Server) buildSettingGroups() {
 		if n == 0 {
 			continue
 		}
-		mgr := newSGManager(ld, n, resvTms)
+		mgr := newSGManager(ld, n, resvTms, s.now)
 		if mgr == nil {
 			continue
 		}
@@ -239,6 +282,9 @@ func New(m *model.Model, opts ...Option) *Server {
 	// Materialise report control blocks into the model and prepare the
 	// report engine.
 	s.reports = newReportManager(s)
+	// Logs come after the report engine, whose dataset resolution and
+	// EntryID source they share.
+	s.logs = newLogManager(s)
 	return s
 }
 
@@ -291,6 +337,10 @@ func (s *Server) initiate() mms.InitiateRequest {
 		mms.ServiceDefineNamedVariableList, mms.ServiceGetNamedVariableListAttributes,
 		mms.ServiceDeleteNamedVariableList,
 		mms.ServiceInformationReport, mms.ServiceConclude,
+	}
+	// Journals are listed and read only when the model has logs.
+	if len(s.logs.journals) > 0 {
+		services = append(services, mms.ServiceReadJournal)
 	}
 	if s.files != nil {
 		services = append(services, mms.ServiceFileOpen, mms.ServiceFileRead,
@@ -414,6 +464,7 @@ func (s *Server) Close() error {
 		sc.Close()
 	}
 	s.connMu.Unlock()
+	s.logs.close()
 	return nil
 }
 
@@ -425,6 +476,7 @@ func (s *Server) Update(fn func(tx *Tx)) {
 	tx := &Tx{s: s, changed: make(changeSet)}
 	fn(tx)
 	s.reports.onUpdate(tx.changed)
+	s.logs.onUpdate(tx.changed)
 	s.mu.Unlock()
 }
 

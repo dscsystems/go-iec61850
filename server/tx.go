@@ -1,8 +1,6 @@
 package server
 
 import (
-	"time"
-
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
@@ -95,7 +93,14 @@ func (tx *Tx) SetQuality(ref model.ObjectReference, fc model.FC, q model.Quality
 	tx.Set(ref, fc, q.Value())
 }
 
-// SetTimestampNow sets a UTC timestamp attribute to the current time.
+// SetTimestampNow sets a UTC timestamp attribute to the current time,
+// stamped with the server's clock quality (Server.SetTimeQuality).
 func (tx *Tx) SetTimestampNow(ref model.ObjectReference, fc model.FC) {
-	tx.Set(ref, fc, mms.NewUTCTime(time.Now(), mms.TimeAccuracy(10)))
+	tx.Set(ref, fc, tx.s.now())
+}
+
+// Now returns the current time as a UtcTime value carrying the server's
+// clock quality, for a caller that sets a timestamp through Set.
+func (tx *Tx) Now() *mms.Value {
+	return tx.s.now()
 }

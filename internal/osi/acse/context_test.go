@@ -1,7 +1,6 @@
 package acse
 
 import (
-	"sync"
 	"testing"
 
 	"github.com/dscsystems/go-iec61850/asn1"
@@ -83,38 +82,24 @@ func TestAAREEchoesProposedApplicationContext(t *testing.T) {
 	}
 }
 
-// The context an AARQ proposes is what the responder reads back.
+// The context an AARQ proposes is what the responder reads back, and it is
+// the caller's per-association choice.
 func TestAARQApplicationContextRoundTrips(t *testing.T) {
-	t.Cleanup(func() { SetApplicationContext(MMSContext) })
 	for _, c := range []ApplicationContext{ACSIContext, MMSContext} {
-		SetApplicationContext(c)
-		req, err := ParseAARQFull(AARQ([]byte{0xa8, 0x00}, ""))
+		req, err := ParseAARQFull(AARQFor([]byte{0xa8, 0x00}, "", Identity{}, Identity{}, c))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !req.ApplicationContext.Equal(ApplicationContextOID()) {
-			t.Errorf("parsed context %v, want %v", req.ApplicationContext, ApplicationContextOID())
+		if !req.ApplicationContext.Equal(c.OID()) {
+			t.Errorf("parsed context %v, want %v", req.ApplicationContext, c.OID())
 		}
 	}
-}
-
-// SetApplicationContext may run while another goroutine dials; under -race
-// this fails if the setting is an unsynchronised global.
-func TestSetApplicationContextConcurrent(t *testing.T) {
-	t.Cleanup(func() { SetApplicationContext(MMSContext) })
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := range 200 {
-			SetApplicationContext(ApplicationContext(i % 2))
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for range 200 {
-			AARQ([]byte{0xa8, 0x00}, "")
-		}
-	}()
-	wg.Wait()
+	// The plain builders propose the MMS context.
+	req, err := ParseAARQFull(AARQ([]byte{0xa8, 0x00}, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !req.ApplicationContext.Equal(oidMMSContext) {
+		t.Errorf("AARQ proposes %v, want the MMS context", req.ApplicationContext)
+	}
 }

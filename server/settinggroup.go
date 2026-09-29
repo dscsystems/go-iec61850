@@ -18,6 +18,8 @@ type sgManager struct {
 	// resvTms is the reservation time in milliseconds from SCL, zero when
 	// the document declares none.
 	resvTms int
+	// now stamps LActTm with the server's clock quality.
+	now func() *mms.Value
 
 	mu     sync.Mutex
 	actSG  uint8
@@ -38,11 +40,14 @@ type sgSetting struct {
 // newSGManager scans ld for SG/SE setting attributes and materialises the
 // SGCB in LLN0. Returns nil if the device has no setting-constrained
 // attributes.
-func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int) *sgManager {
+func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int, now func() *mms.Value) *sgManager {
 	if numOfSG == 0 {
 		numOfSG = 1
 	}
-	m := &sgManager{ld: ld, numOfSG: numOfSG, actSG: 1, resvTms: resvTms}
+	if now == nil {
+		now = mms.NewUTCTimeNow
+	}
+	m := &sgManager{ld: ld, numOfSG: numOfSG, actSG: 1, resvTms: resvTms, now: now}
 
 	// Pair SG and SE attributes by their DO path within each LN.
 	for _, ln := range ld.Nodes {
@@ -68,7 +73,7 @@ func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int) *sgManage
 	if lln0 == nil {
 		return nil
 	}
-	m.sgcb = buildSGCB(numOfSG, m.resvTms)
+	m.sgcb = buildSGCB(numOfSG, m.resvTms, now())
 	lln0.Objects = append(lln0.Objects, m.sgcb)
 	return m
 }
@@ -100,7 +105,7 @@ func collectSGAttr(path model.ObjectReference, a *model.DataAttribute, sg, se ma
 // buildSGCB materialises the setting group control block of IEC 61850-7-2
 // under FC SP in LLN0. ResvTms, the reservation time, is present only when
 // the configuration declares one.
-func buildSGCB(numOfSG uint8, resvTms int) *model.DataObject {
+func buildSGCB(numOfSG uint8, resvTms int, lActTm *mms.Value) *model.DataObject {
 	attr := func(name string, v *mms.Value) *model.DataAttribute {
 		return &model.DataAttribute{Name: name, FC: model.SP, Kind: v.Type(), Value: v}
 	}
@@ -109,7 +114,7 @@ func buildSGCB(numOfSG uint8, resvTms int) *model.DataObject {
 		attr("ActSG", mms.NewUint8(1)),
 		attr("EditSG", mms.NewUint8(0)),
 		attr("CnfEdit", mms.NewBool(false)),
-		attr("LActTm", mms.NewUTCTimeNow()),
+		attr("LActTm", lActTm),
 	}}
 	if resvTms > 0 {
 		do.Attributes = append(do.Attributes, attr("ResvTms", mms.NewUint32(uint32(resvTms))))
@@ -197,7 +202,7 @@ func (m *sgManager) onSGCBWrite(attr string, v *mms.Value) {
 		if g >= 1 && g <= m.numOfSG {
 			m.actSG = g
 			m.sgcb.Attribute("ActSG").Value = mms.NewUint8(g)
-			m.sgcb.Attribute("LActTm").Value = mms.NewUTCTimeNow()
+			m.sgcb.Attribute("LActTm").Value = m.now()
 			for _, s := range m.settings {
 				s.sg.Value = s.groups[g-1].Clone()
 			}

@@ -3,6 +3,7 @@ package scl
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -468,6 +469,11 @@ func (b *builder) buildLN(iedName, apName, ldInst string, lne *LN) (*model.Logic
 	}
 	for i := range lne.LogControls {
 		ln.LogControls = append(ln.LogControls, buildLogControl(&lne.LogControls[i]))
+	}
+	for _, l := range lne.Log {
+		if name := strings.TrimSpace(l.Name); name != "" {
+			ln.Logs = append(ln.Logs, name)
+		}
 	}
 	if sg := lne.SettingControl; sg != nil {
 		ln.SettingControl = &model.SettingControl{
@@ -1189,6 +1195,76 @@ func buildDataSet(iedName, ldInst string, dse *DataSet) (*model.DataSet, error) 
 const maxRCBInstances = 99
 
 func (b *builder) buildReportControl(r *ReportControl) *model.ReportControl {
+	rc := b.reportControlOf(r)
+	if r.RptEnab != nil && len(r.RptEnab.ClientLN) > 0 {
+		b.reserveInstances(rc, r.RptEnab.ClientLN)
+	}
+	return rc
+}
+
+// reserveInstances resolves each ClientLN of a report control block to the
+// IP address of the client IED's access point, which is how the server
+// recognises that client when it connects. ClientLN i reserves instance
+// i+1. One that names an IED with no IP address in the Communication
+// section cannot be enforced, so its instance is left free and reported.
+func (b *builder) reserveInstances(rc *model.ReportControl, clients []ClientLN) {
+	n := rc.RptEnabled
+	if len(clients) > n {
+		b.diag.addf("ReportControl "+rc.Name, "%d ClientLN reservations for %d instance(s); "+
+			"the extra ones are ignored", len(clients), n)
+		clients = clients[:n]
+	}
+	rc.Reservations = make([]*model.ClientReservation, len(clients))
+	for i, cl := range clients {
+		ap := cl.APRef
+		if ap == "" {
+			ap = cl.APName
+		}
+		ip, ok := clientIP(b.scl, cl.IEDName, ap)
+		if !ok {
+			b.diag.addf("ReportControl "+rc.Name, "ClientLN %d names IED %q, which has no IP "+
+				"address in the Communication section; the instance is left unreserved", i+1, cl.IEDName)
+			continue
+		}
+		rc.Reservations[i] = &model.ClientReservation{IEDName: cl.IEDName, IP: ip}
+	}
+}
+
+// clientIP finds the IP address of an IED's access point, preferring the
+// named access point and otherwise the first one of the IED that has an
+// address.
+func clientIP(s *SCL, iedName, apName string) (net.IP, bool) {
+	if s == nil || s.Communication == nil || iedName == "" {
+		return nil, false
+	}
+	var fallback net.IP
+	for i := range s.Communication.SubNetworks {
+		sn := &s.Communication.SubNetworks[i]
+		for j := range sn.ConnectedAPs {
+			cap := &sn.ConnectedAPs[j]
+			if cap.IEDName != iedName {
+				continue
+			}
+			text, ok := cap.IP()
+			if !ok {
+				continue
+			}
+			ip := net.ParseIP(text)
+			if ip == nil {
+				continue
+			}
+			if apName == "" || cap.APName == apName {
+				return ip, true
+			}
+			if fallback == nil {
+				fallback = ip
+			}
+		}
+	}
+	return fallback, fallback != nil
+}
+
+func (b *builder) reportControlOf(r *ReportControl) *model.ReportControl {
 	rc := &model.ReportControl{
 		Name:     r.Name,
 		RptID:    r.RptID,
@@ -1213,10 +1289,6 @@ func (b *builder) buildReportControl(r *ReportControl) *model.ReportControl {
 		b.diag.addf("ReportControl "+r.Name, "RptEnabled max=%d exceeds the %d "+
 			"two-digit instance names IEC 61850-6 defines; capped", rc.RptEnabled, maxRCBInstances)
 		rc.RptEnabled = maxRCBInstances
-	}
-	if r.RptEnab != nil && len(r.RptEnab.ClientLN) > 0 {
-		b.diag.addf("ReportControl "+r.Name, "%d ClientLN reservation(s) are declared but "+
-			"pre-reserved instances are not implemented", len(r.RptEnab.ClientLN))
 	}
 	if of := r.OptFields; of != nil {
 		// bufOvfl defaults to true in the schema, so absence means on.

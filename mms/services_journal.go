@@ -24,29 +24,61 @@ type JournalVariable struct {
 }
 
 // ReadJournalByTime queries a journal (log) for entries in the inclusive
-// time range [start, end].
+// time range [start, end], following the server's continuation until the
+// range is complete.
 func (c *Conn) ReadJournalByTime(ctx context.Context, domain, item string, start, end time.Time) ([]JournalEntry, error) {
 	req := asn1.Cons(asn1.ContextConstructed(svcReadJournal),
 		journalName(domain, item),
 		asn1.Cons(asn1.ContextConstructed(1), // rangeStartSpecification [1]
 			asn1.Prim(asn1.ContextPrimitive(0), binaryTimeBytes(start))),
-		asn1.Cons(asn1.ContextConstructed(2), // rangeStopSpecification [2]
-			asn1.Prim(asn1.ContextPrimitive(0), binaryTimeBytes(end))),
+		rangeStop(end),
 	)
-	return c.readJournal(ctx, req)
+	return c.readJournalAll(ctx, domain, item, req, &end)
 }
 
 // ReadJournalAfter queries a journal for entries after the given time and
-// entry id (gap-free continuation).
+// entry id (gap-free continuation), following the server's continuation.
 func (c *Conn) ReadJournalAfter(ctx context.Context, domain, item string, after time.Time, entryID []byte) ([]JournalEntry, error) {
-	req := asn1.Cons(asn1.ContextConstructed(svcReadJournal),
-		journalName(domain, item),
-		asn1.Cons(asn1.ContextConstructed(3), // entryToStartAfter [3]
-			asn1.Prim(asn1.ContextPrimitive(0), binaryTimeBytes(after)),
-			asn1.Prim(asn1.ContextPrimitive(1), entryID),
-		),
-	)
-	return c.readJournal(ctx, req)
+	return c.readJournalAll(ctx, domain, item, afterRequest(domain, item, after, entryID, nil), nil)
+}
+
+// afterRequest is a ReadJournal continuing after one entry, up to end when
+// it is not nil. entryToStartAfter is [5] in ISO 9506-2; earlier versions
+// of this library sent [3], which no other server understands.
+func afterRequest(domain, item string, after time.Time, entryID []byte, end *time.Time) *asn1.Element {
+	req := asn1.Cons(asn1.ContextConstructed(svcReadJournal), journalName(domain, item))
+	if end != nil {
+		req.Add(rangeStop(*end))
+	}
+	req.Add(asn1.Cons(asn1.ContextConstructed(5), // entryToStartAfter [5]
+		asn1.Prim(asn1.ContextPrimitive(0), binaryTimeBytes(after)),
+		asn1.Prim(asn1.ContextPrimitive(1), entryID),
+	))
+	return req
+}
+
+// rangeStop is rangeStopSpecification [2] { endingTime [0] }.
+func rangeStop(end time.Time) *asn1.Element {
+	return asn1.Cons(asn1.ContextConstructed(2),
+		asn1.Prim(asn1.ContextPrimitive(0), binaryTimeBytes(end)))
+}
+
+// readJournalAll issues req and, while the server says more follow,
+// continues after the last entry received.
+func (c *Conn) readJournalAll(ctx context.Context, domain, item string, req *asn1.Element, end *time.Time) ([]JournalEntry, error) {
+	var all []JournalEntry
+	for {
+		entries, more, err := c.readJournal(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, entries...)
+		if !more || len(entries) == 0 {
+			return all, nil
+		}
+		last := entries[len(entries)-1]
+		req = afterRequest(domain, item, last.OccurrenceTime, last.EntryID, end)
+	}
 }
 
 func journalName(domain, item string) *asn1.Element {
@@ -62,35 +94,41 @@ func binaryTimeBytes(t time.Time) []byte {
 	return NewBinaryTime(t).Bytes()
 }
 
-func (c *Conn) readJournal(ctx context.Context, req *asn1.Element) ([]JournalEntry, error) {
+// readJournal issues one ReadJournal and returns its entries and whether
+// the server has more.
+func (c *Conn) readJournal(ctx context.Context, req *asn1.Element) ([]JournalEntry, bool, error) {
 	resp, err := c.call(ctx, req)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	dec := asn1.NewDecoder(resp)
 	content, err := dec.Expect(asn1.ContextConstructed(svcReadJournal))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	inner := asn1.NewDecoder(content)
 	listContent, err := inner.Expect(asn1.ContextConstructed(0)) // listOfJournalEntry [0]
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	var entries []JournalEntry
 	ld := asn1.NewDecoder(listContent)
 	for ld.More() {
 		entryContent, err := ld.Expect(asn1.TagSequence) // JournalEntry SEQUENCE
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		e, err := parseJournalEntry(entryContent)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		entries = append(entries, e)
 	}
-	return entries, nil
+	more := false
+	if b, ok, _ := inner.Optional(asn1.ContextPrimitive(1)); ok && len(b) > 0 { // moreFollows [1]
+		more = b[0] != 0
+	}
+	return entries, more, nil
 }
 
 func parseJournalEntry(content []byte) (JournalEntry, error) {
@@ -130,16 +168,22 @@ func parseEntryContent(content []byte, e *JournalEntry) {
 	}
 }
 
+// parseJournalVariables reads the data [2] of an entry. ISO 9506-2 puts the
+// variables in listOfVariables [1], each a SEQUENCE { variableTag [0],
+// valueSpecification [1] Data }; the variables are also accepted directly
+// in data, a shape some servers send.
 func parseJournalVariables(content []byte, e *JournalEntry) {
-	// Each journal variable is a SEQUENCE { variableTag GraphicString,
-	// valueSpecification [1] Data }.
 	dec := asn1.NewDecoder(content)
 	for dec.More() {
 		tag, c, err := dec.ReadTLV()
 		if err != nil {
 			return
 		}
-		if tag != asn1.TagSequence && tag != asn1.ContextConstructed(1) {
+		if tag == asn1.ContextConstructed(1) { // listOfVariables [1]
+			parseJournalVariables(c, e)
+			continue
+		}
+		if tag != asn1.TagSequence {
 			continue
 		}
 		var jv JournalVariable

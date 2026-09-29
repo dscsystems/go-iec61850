@@ -289,7 +289,8 @@ func TestBRCBOwnerExists(t *testing.T) {
 	}
 	defer c.Close()
 
-	v, err := c.Read(ctx, model.ObjectReference("ED21LD0/LLN0.brcb0101.Owner"), model.BR)
+	// Instance 03: 01 is reserved for a client by the configuration.
+	v, err := c.Read(ctx, model.ObjectReference("ED21LD0/LLN0.brcb0103.Owner"), model.BR)
 	if err != nil {
 		t.Fatalf("reading BRCB.Owner: %v", err)
 	}
@@ -427,5 +428,46 @@ func TestUnknownBasicTypeReadIsReportedNotFabricated(t *testing.T) {
 	}
 	if v.BitLen() != 10 {
 		t.Errorf("bit-string attribute read back with %d bits, want 10", v.BitLen())
+	}
+}
+
+// A ClientLN reservation reaches the wire: the reserved instance shows
+// ResvTms -1 and its client as Owner, and a client from any other address
+// is refused it, while the unreserved instances stay open.
+func TestClientLNReservationServed(t *testing.T) {
+	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
+	if err != nil {
+		t.Fatalf("LoadModel: %v", err)
+	}
+	addr, _ := startServerWith(t, m)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr, client.WithTimeout(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	if got := mustRead(t, c, ctx, "ED21LD0/LLN0.brcb0101.ResvTms", model.BR).Int64(); got != -1 {
+		t.Errorf("brcb0101 ResvTms = %d, want -1", got)
+	}
+	if got := mustRead(t, c, ctx, "ED21LD0/LLN0.brcb0101.Owner", model.BR).Bytes(); string(got) != "\x0a\x00\x00\x32" {
+		t.Errorf("brcb0101 Owner = %x, want HMI's 0a000032", got)
+	}
+	if got := mustRead(t, c, ctx, "ED21LD0/LLN0.brcb0102.ResvTms", model.BR).Int64(); got != 0 {
+		t.Errorf("brcb0102 ResvTms = %d, want 0: its ClientLN has no address", got)
+	}
+	write := func(item string) error {
+		res, err := c.MMS().Write(ctx, "ED21LD0", []string{item}, []*mms.Value{model.TrgGI.Value()})
+		if err != nil {
+			t.Fatalf("write %s: %v", item, err)
+		}
+		return res[0]
+	}
+	if err := write("LLN0$BR$brcb0101$TrgOps"); !errors.Is(err, mms.AccessTemporarilyUnavailable) {
+		t.Errorf("loopback client writing HMI's instance: %v, want temporarily-unavailable", err)
+	}
+	if err := write("LLN0$BR$brcb0103$TrgOps"); err != nil {
+		t.Errorf("writing a free instance: %v", err)
 	}
 }

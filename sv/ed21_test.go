@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
 
@@ -187,6 +188,29 @@ func TestPublisherOptionalFields(t *testing.T) {
 		}
 		if tc.wantTime && time.Since(a.RefrTm) > time.Minute {
 			t.Errorf("%s: RefrTm %v is not the current time", tc.name, a.RefrTm)
+		}
+	}
+}
+
+// refrTm carries the publisher's clock quality, and a parsed ASDU the
+// quality it arrived with, 0 included.
+func TestRefrTmQuality(t *testing.T) {
+	lost := mms.TimeClockNotSynchronized | mms.TimeAccuracyUnspecified
+	for _, q := range []*mms.TimeQuality{nil, &lost, new(mms.TimeQuality)} {
+		p := &LEPublisher{rate: 4000, cfg: LEConfig{
+			SvID: "MU1", ConfRev: 1, TimeQuality: q, Opts: SVOpts{RefreshTime: true},
+		}}
+		a := p.asdu(&LESample{SmpCnt: 1})
+		got, err := Parse((&PDU{AppID: 0x4000, ASDUs: []*ASDU{a}}).Marshal())
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := mms.DefaultTimeQuality
+		if q != nil {
+			want = *q
+		}
+		if tq := got.ASDUs[0].RefrTmQuality; tq == nil || *tq != want {
+			t.Errorf("refrTm quality = %v, want %08b", tq, uint8(want))
 		}
 	}
 }

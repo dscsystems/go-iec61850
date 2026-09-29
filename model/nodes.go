@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strings"
 
@@ -65,6 +66,10 @@ type LogicalNode struct {
 	SVControls     []*SVControl
 	LogControls    []*LogControl
 	SettingControl *SettingControl
+	// Logs names the logs this node holds (SCL Log elements), which a
+	// server serves as MMS journals named "LN$Name". A log a LogControl
+	// writes to is served whether or not it is declared here.
+	Logs []string
 }
 
 // DataObject is a DO or SDO.
@@ -148,6 +153,21 @@ type ReportControl struct {
 	// while no subscriber is enabled. Zero leaves it to the server's own
 	// default. It has no meaning for an unbuffered control block.
 	MaxQueueSize int
+	// Reservations are the clients the configuration reserves instances
+	// for (SCL RptEnabled/ClientLN), in instance order: Reservations[i]
+	// holds instance i+1. Only that client may use the instance, and a
+	// BRCB reports ResvTms -1 for it (IEC 61850-7-2). A nil entry leaves
+	// its instance free.
+	Reservations []*ClientReservation
+}
+
+// ClientReservation identifies the client a report control block instance
+// is reserved for. The server knows a client by its transport address
+// before anything else, so the IP address is what the reservation is
+// checked against; IEDName is informational.
+type ClientReservation struct {
+	IEDName string
+	IP      net.IP
 }
 
 // GSType is the variant of a GOOSE control block: plain GOOSE or the

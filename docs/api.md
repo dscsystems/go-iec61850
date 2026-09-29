@@ -56,7 +56,7 @@ mms.NewUint32(230)
 mms.NewFloat32(230.4)
 mms.NewVisibleString("text")
 mms.NewOctetString([]byte{1,2,3})
-mms.NewUTCTime(time.Now(), mms.TimeAccuracy(10))
+mms.NewUTCTime(time.Now(), mms.DefaultTimeQuality) // or the clock's real quality
 mms.NewStructure(a, b, c)   // members
 mms.NewArray(a, b, c)       // elements
 

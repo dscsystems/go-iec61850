@@ -42,6 +42,15 @@ type controlParams struct {
 	synchro    bool
 	forceModel model.CtlModel
 	hasModel   bool
+	// timeQuality, when set, overrides the client's clock quality for
+	// this command's T.
+	timeQuality *mms.TimeQuality
+}
+
+// WithTimeQuality states the quality of the operate timestamp T for this
+// command, overriding Client.SetTimeQuality.
+func WithTimeQuality(q mms.TimeQuality) ControlOption {
+	return func(p *controlParams) { p.timeQuality = &q }
 }
 
 // WithOriginator sets the originator category and identifier.
@@ -352,7 +361,7 @@ func (co *ControlObject) buildOper(value *mms.Value, p *controlParams, ctlNum ui
 		value,
 		origin,
 		mms.NewUint8(ctlNum),
-		mms.NewUTCTime(time.Now(), mms.TimeAccuracy(10)),
+		mms.NewUTCTime(time.Now(), co.timeQuality(p)),
 		mms.NewBool(p.test),
 		check,
 	)
@@ -385,4 +394,16 @@ func joinDollar(parts []string) string {
 		out += p
 	}
 	return out
+}
+
+// timeQuality is the quality T is stamped with: the command's own, else the
+// client's.
+func (co *ControlObject) timeQuality(p *controlParams) mms.TimeQuality {
+	if p.timeQuality != nil {
+		return *p.timeQuality
+	}
+	if co.c == nil {
+		return mms.DefaultTimeQuality
+	}
+	return co.c.TimeQuality()
 }

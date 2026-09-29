@@ -123,7 +123,7 @@ func NewUTCTime(t time.Time, q TimeQuality) *Value {
 }
 
 // NewUTCTimeNow returns the current time with 10 bits of declared accuracy.
-func NewUTCTimeNow() *Value { return NewUTCTime(time.Now(), TimeAccuracy(10)) }
+func NewUTCTimeNow() *Value { return NewUTCTime(time.Now(), DefaultTimeQuality) }
 
 // NewUTCTimeRaw wraps 8 raw UtcTime octets (copied).
 func NewUTCTimeRaw(b []byte) (*Value, error) {
@@ -136,8 +136,12 @@ func NewUTCTimeRaw(b []byte) (*Value, error) {
 }
 
 // NewBinaryTime returns an MMS TimeOfDay (6 octets: ms since midnight,
-// days since 1984-01-01).
+// days since 1984-01-01), both counted in UTC.
 func NewBinaryTime(t time.Time) *Value {
+	// Both fields are UTC. Counting the milliseconds from local midnight
+	// but the days from the UTC epoch put every time off by the zone's
+	// offset on a machine not running in UTC.
+	t = t.UTC()
 	epoch := time.Date(1984, 1, 1, 0, 0, 0, 0, time.UTC)
 	days := uint16(t.Sub(epoch).Hours() / 24)
 	midnight := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
@@ -145,6 +149,15 @@ func NewBinaryTime(t time.Time) *Value {
 	return &Value{typ: TypeBinaryTime, bytes: []byte{
 		byte(ms >> 24), byte(ms >> 16), byte(ms >> 8), byte(ms), byte(days >> 8), byte(days),
 	}}
+}
+
+// NewBinaryTimeRaw wraps the 4- or 6-octet encoding of a TimeOfDay, as it
+// appears in a service request rather than in Data.
+func NewBinaryTimeRaw(b []byte) (*Value, error) {
+	if len(b) != 4 && len(b) != 6 {
+		return nil, fmt.Errorf("mms: TimeOfDay of %d octets, want 4 or 6", len(b))
+	}
+	return &Value{typ: TypeBinaryTime, bytes: append([]byte(nil), b...)}, nil
 }
 
 func NewArray(elements ...*Value) *Value {
@@ -459,3 +472,10 @@ func TimeAccuracy(n int) TimeQuality {
 
 // TimeAccuracyUnspecified declares no fraction accuracy.
 const TimeAccuracyUnspecified TimeQuality = 0x1f
+
+// DefaultTimeQuality is the quality this library stamps a time with when
+// the caller states none: leap seconds known, clock synchronised, 10 bits
+// of fraction accuracy (about a millisecond). A device whose clock can lose
+// synchronisation should say so through the time-quality settings of the
+// server, client, GOOSE and SV publishers rather than rely on it.
+const DefaultTimeQuality = TimeLeapSecondsKnown | 10
