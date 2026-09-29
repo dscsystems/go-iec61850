@@ -77,7 +77,8 @@ every IED's GOOSE addressing is missing.
   readable and reportable.
 - `Val@sGroup` per setting group, exposed as `model.SettingGroups`, with
   `SettingControl@actSG` selecting the group the objects serve.
-- `SmvOpts`, `smpMod`, `GSEControl@type`, `Protocol` (R-GOOSE/R-SV),
+- `SmvOpts`, `smpMod`, `GSEControl@type`, `Protocol` (R-GOOSE/R-SV, with
+  the block's `IP`/`IPv6` destination as `DstIP`),
   `GSEControl@fixedOffs`, `dbprefix`, `bufDepth`, the log
   control block's logical-node attributes, `resvTms`.
 - `LNodeType` identified by `(id, lnClass)`, so a document reusing an id
@@ -90,7 +91,7 @@ every IED's GOOSE addressing is missing.
 
 | Construct | Why | Diagnostic |
 |---|---|---|
-| R-GOOSE, R-SV | Need the IEC 61850-90-5 session and security profile | yes |
+| R-GOOSE, R-SV block without an IP destination | Cannot be sent routably | yes |
 | `Substation` topology | Decoded, not instantiated into the model | no (known) |
 | `Inputs`/`ExtRef` | Decoded, not resolved to their publisher | no (known) |
 | `Services` other than `maxBuf` | Decoded, not derived into the model | partly |
@@ -148,10 +149,6 @@ every IED's GOOSE addressing is missing.
 
 ### Not implemented
 
-- **R-GOOSE and R-SV** (with 8-1/9-2). These are the routable profiles of
-  IEC 61850-90-5 and require a session layer and IEC 62351 key management
-  that this library does not have. An SCL file that asks for them loads,
-  and the control blocks are reported as plain GOOSE and SV.
 - **Persistent logs.** A log lives in memory and starts empty with the
   server. `InitializeJournal` (clearing a log) and `ReportJournalStatus`
   are not served.
@@ -279,8 +276,10 @@ every IED's GOOSE addressing is missing.
   dataset with variable lengths.
 - **GOOSE TLV encoding** (`allData` as a tagged list). Some protection
   functions use it; the data set is encoded as a flat `SEQUENCE OF Data`.
-- **62351-6 message signing.** A trailing security field is parsed past and
-  discarded; nothing is ever signed or verified.
+- **Layer-2 GOOSE and SV message authentication (IEC 62351-6).** A
+  trailing security field of an Ethernet GOOSE is parsed past and
+  discarded; nothing sent on Ethernet is signed or verified. The routable
+  profile is secured (below).
 - **IPv6.** The COTP/TPKT/transport layer is not address-family specific,
   but nothing has been tested on IPv6 and it is not claimed.
 
@@ -313,13 +312,73 @@ every IED's GOOSE addressing is missing.
 
 ### Not implemented
 
-- **R-SV**, for the reasons given under 7-2.
 - **`SmvOpts timestamp`** is loaded but not emitted, and **`SmvOpts
-  security`** is refused by the publisher (see 62351-6 under 8-1).
+  security`** is refused by the Ethernet publisher (see 62351-6 under 8-1);
+  secure sampled values over a session instead.
 - **9-2 (non-LE) dataset shapes.** Only the 9-2LE 8-channel layout is
   decodable; a wider channel set is carried as raw bytes.
 - **Sampled value control blocks on the server** exist as browsable
   objects with their configuration, but the server does not publish SV.
+
+## IEC 61850-90-5 and IEC 62351 — security
+
+### Implemented
+
+- **R-GOOSE and R-SV** (the session protocol of IEC 61850-90-5, adopted
+  by 8-1 and 9-2 Amendment 1), package `rsession`. A `Session` sends and
+  receives over UDP, unicast or multicast, IPv4 or IPv6, and is an
+  `ethernet.Interface`, so the GOOSE and SV publishers and subscribers run
+  over it unchanged: retransmission, supervision and
+  `NewPublisherFromModel` included.
+- **Message security** of the session protocol: HMAC-SHA256 truncated to
+  80, 128 or 256 bits (and the HMAC-SHA3 variants), or AES-128-GCM and
+  AES-256-GCM encryption with a random IV per SPDU. Protocol versions 1
+  (signing only, algorithms in the header, bound to the key) and 2.
+- **Receiver policy.** Unsecured SPDUs are refused unless allowed, SPDUs
+  under unknown keys or failing verification are refused, and secured
+  SPDUs are checked against a 64-number anti-replay window per sender and
+  key, which lets a restarted publisher back in after a silence.
+  Refusals are counted and reported for the security event log.
+- **Keys** by identifier in a `KeyStore`: several accepted at once, one
+  active for sending, so keys roll over without losing traffic.
+- **MMS over TLS (IEC 62351-3)**, package `iec62351`: `ClientConfig` and
+  `ServerConfig` for `client.WithTLS` and `server.WithTLS`. TLS 1.2 (with
+  the ECDHE AES-GCM suites only) and 1.3; mutual certificate
+  authentication; chain verification to configured roots; revocation
+  against CRLs, failing closed on a stale one unless allowed; RSA keys of
+  at least 2048 bits and ECDSA of at least P-256; optional pinning to a
+  set of peer certificates; the server named by a subject alternative
+  name or, for IED certificates without one, by common name. Refused
+  peers are reported for the security event log. No renegotiation, and no
+  session resumption on the server.
+
+### Not implemented
+
+- **Key distribution (IEC 62351-9, GDOI).** Keys are put in the
+  `KeyStore` by the application. The `TimeOfCurrentKey` and
+  `TimeToNextKey` fields are carried as the key gives them, not
+  interpreted.
+- **AES-GMAC** authentication of SPDUs (64 and 128 bits), and a key that
+  both signs and encrypts: GCM already authenticates, and the one other
+  implementation's layout for both cannot be verified.
+- **IEC 62351-4** end-to-end (A-profile) security: ACSE authentication is
+  a password, not the certificate-based mechanism.
+- **IEC 62351-6 on Ethernet**, under 8-1 above.
+- **IEC 62351-8** role-based access control.
+- **Periodic session key renewal** on TLS connections. Go does not
+  initiate TLS 1.3 key updates, and the profile does not renegotiate TLS
+  1.2. Under TLS 1.3 the cipher suite is Go's choice among its AES-GCM
+  and ChaCha20-Poly1305 suites; IEC 62351-3 names only the AES-GCM ones,
+  and Go does not let a configuration exclude the other.
+
+### Where the references disagree
+
+The session protocol is checked against libiec61850 1.6 and Wireshark's
+R-GOOSE dissector. They disagree on the header length fields, the SPDU
+length and the APDU length; the package doc of `rsession` says which each
+side is taken from and what is accepted on receipt. libiec61850's own
+HMAC-SHA256-256 SPDUs are malformed (a 16 in the length octet before a
+32-octet MAC) and are refused.
 
 ## Verification
 
@@ -333,8 +392,13 @@ every IED's GOOSE addressing is missing.
   set. `scl/edition_test.go` is its conformance test.
 - `interop/run.sh` runs both directions against
   [libiec61850](https://github.com/mz-automation/libiec61850) v1.6, which
-  implements Edition 2 and the R-GOOSE/R-SV profiles. The coverage table is
-  in `interop/README.md`.
+  implements Edition 2 and the R-GOOSE/R-SV profiles: MMS, and, against a
+  build with mbedtls, R-GOOSE and R-SV in every security mode both sides
+  implement and MMS over TLS. The coverage table is in
+  `interop/README.md`.
+- `rsession/spdu_test.go` decodes and verifies SPDUs libiec61850 sent
+  (unsecured, HMAC-SHA256-128, AES-128-GCM), so the wire format is checked
+  without the C library too, and fuzzes the decoder.
 - `goose/ed21_test.go` and `sv/ed21_test.go` cover the 8-1 and 9-2
   conformance claims, including the 9-2LE quality-word orientation.
 

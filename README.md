@@ -5,6 +5,8 @@ A pure-Go implementation of the IEC 61850 protocol family:
 - **MMS client and server** (IEC 61850-8-1 over TPKT/COTP/Session/Presentation/ACSE)
 - **GOOSE** publisher and subscriber (raw Ethernet, Linux AF_PACKET)
 - **Sampled Values** (IEC 61850-9-2 / 9-2LE) publisher and subscriber
+- **R-GOOSE and R-SV** (IEC 61850-90-5) over UDP, signed (HMAC-SHA256) or
+  encrypted (AES-GCM), and MMS over TLS under the IEC 62351-3 profile
 - **SCL** (ICD/CID/SCD) parsing and runtime model instantiation
 
 No cgo. GPLv3 licensed.
@@ -58,6 +60,8 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 | `client` | High-level ACSI client (browse, read/write, datasets, reports, controls, files) |
 | `server` | High-level ACSI server driven by an SCL or programmatic model |
 | `goose`, `sv` | GOOSE and Sampled Values publish/subscribe over `ethernet` |
+| `rsession` | R-GOOSE / R-SV session protocol (IEC 61850-90-5) with its message security; an `ethernet.Interface` over UDP |
+| `iec62351` | IEC 62351-3 TLS profile for the MMS client and server |
 | `scl` | SCL file parsing and model building |
 | `model` | IEC 61850 object model, functional constraints, Quality/Timestamp types |
 | `mms` | Low-level MMS (ISO 9506) values, codecs and client connection |
@@ -98,4 +102,5 @@ Implemented: MMS client/server, browse/read/write, datasets, reporting
 control (all four models: direct/SBO, normal/enhanced), setting groups
 (SGCB), file services (directory and streamed read), log queries
 (readJournal by time and after-entry), GOOSE and SV pub/sub, SCL parsing,
-TLS transport.
+R-GOOSE/R-SV with HMAC or AES-GCM message security, TLS transport under
+the IEC 62351-3 profile.

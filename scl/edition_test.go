@@ -380,11 +380,10 @@ func TestSampledValueOpts(t *testing.T) {
 	if !ucast.Opts.DataSet || !ucast.Opts.Security {
 		t.Errorf("usvcb01 SmvOpts = %+v, want dataSet and security set", ucast.Opts)
 	}
-	assertDiagnostic(t, m, "R-SV")
 }
 
 // A GSSE control block is told apart from a GOOSE one, and R-GOOSE is
-// reported rather than silently treated as plain GOOSE.
+// carried as the block's protocol.
 func TestGSEControlVariants(t *testing.T) {
 	_, m := loadEd21(t)
 	ln := m.Device("ED21LD0").Node("LLN0")
@@ -408,7 +407,6 @@ func TestGSEControlVariants(t *testing.T) {
 			byName["gcb01"].FixedOffs, byName["gscb01"].FixedOffs)
 	}
 	assertDiagnostic(t, m, "fixed-offset")
-	assertDiagnostic(t, m, "R-GOOSE")
 	assertDiagnostic(t, m, "GSSE")
 }
 
@@ -681,4 +679,60 @@ func TestClientLNReservations(t *testing.T) {
 		t.Errorf("brcb01 instance 2 = %+v, want it unreserved", r)
 	}
 	assertDiagnostic(t, m, `"GHOST"`)
+}
+
+// A routable control block's destination is the IP address of its GSE or
+// SMV address, which the model carries for opening an R-GOOSE or R-SV
+// session (package rsession).
+func TestRoutableDestination(t *testing.T) {
+	_, m := loadEd21(t)
+	lln0 := m.Device("ED21LD0").Node("LLN0")
+	var gcb *model.GSEControl
+	for _, g := range lln0.GSEControls {
+		if g.Name == "gcb01" {
+			gcb = g
+		}
+	}
+	if gcb == nil || gcb.Protocol != "R-GOOSE" || !gcb.DstIP.Equal(net.ParseIP("239.192.0.1")) {
+		t.Errorf("gcb01 = %+v, want R-GOOSE to 239.192.0.1", gcb)
+	}
+	var usv *model.SVControl
+	for _, s := range lln0.SVControls {
+		if s.Name == "usvcb01" {
+			usv = s
+		}
+	}
+	if usv == nil || !usv.DstIP.Equal(net.ParseIP("2001:db8::10")) {
+		t.Errorf("usvcb01 = %+v, want 2001:db8::10", usv)
+	}
+	for _, s := range lln0.SVControls {
+		if s.Name == "msvcb01" && s.DstIP != nil {
+			t.Errorf("msvcb01 has a destination IP %v it was not given", s.DstIP)
+		}
+	}
+}
+
+// A routable block is reported only when it cannot be sent routably: when
+// its address has no IP destination.
+func TestRoutableWithoutDestination(t *testing.T) {
+	_, m := loadEd21(t)
+	for _, d := range m.Diagnostics {
+		if strings.Contains(d.Message, "R-GOOSE") || strings.Contains(d.Message, "R-SV") {
+			t.Errorf("a routable block with a destination was reported: %s", d)
+		}
+	}
+	raw, err := os.ReadFile(ed21Fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noIP := strings.Replace(string(raw), `<P type="IP">239.192.0.1</P>`, "", 1)
+	s, err := scl.Parse(strings.NewReader(noIP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m2, err := scl.BuildModel(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDiagnostic(t, m2, "Protocol is R-GOOSE but the GSE address has no IP")
 }
