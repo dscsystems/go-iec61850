@@ -6,7 +6,7 @@
 FROM golang:1.26-bookworm
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake git \
+        build-essential cmake git libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -19,6 +19,8 @@ COPY . .
 ENV WORK=/opt/interop-work
 RUN mkdir -p "$WORK" \
     && git clone --depth 1 --branch v1.6 https://github.com/mz-automation/libiec61850.git "$WORK/libiec61850" \
-    && make -C "$WORK/libiec61850" -j"$(nproc)" examples
+    && make -C "$WORK/libiec61850" -j"$(nproc)" examples \
+    && make -C "$WORK/libiec61850/examples/server_example_logging" \
+    && make -C "$WORK/libiec61850/examples/iec61850_client_example_log"
 
 ENTRYPOINT ["bash", "interop/run.sh"]

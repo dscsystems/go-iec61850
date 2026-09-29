@@ -3,8 +3,12 @@
 Bidirectional interoperability tests against
 [libiec61850](https://github.com/mz-automation/libiec61850):
 
-1. our `client` against the C `server_example_basic_io`
-2. the C `client_example1` and control example against our `server`
+1. our `client` against the C `server_example_basic_io`, the control
+   example and the logging example
+2. the C `client_example1` and `client_example_log` against our `server`
+
+The logging examples need SQLite (`libsqlite3-dev`), which the C server's
+log storage is built on.
 
 The Go interop tests are guarded by environment variables and skipped in
 the normal `go test ./...` run, so a checkout without a C toolchain stays
@@ -43,6 +47,8 @@ pull request.
 | Reporting (URCB, GI/dchg/integrity) | ✓ | ✓ |
 | Control (direct-normal, direct-enhanced) | ✓ | ✓ |
 | Control: SBO-enhanced, CommandTermination±, LastApplError | ✓ | |
+| Logs: browse (ACSILog/LCB), LCB read, ReadJournal by time and after entry | ✓ | ✓ |
+| Logs: LogEna write, entries with data reference, value and ReasonCode | | ✓ |
 
 SBO with normal security is implemented on the server (`server/select.go`)
 and covered by the unit tests; it has no interop assertion yet.
