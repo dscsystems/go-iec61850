@@ -165,7 +165,9 @@ func TestEd21OptionBitStrings(t *testing.T) {
 }
 
 // PhyComAddr is the physical communication address of Ed 2 and is common in
-// protection IEDs. It used to fail the whole load.
+// protection IEDs. It used to fail the whole load, and then loaded as an
+// octet string; IEC 61850-8-1 maps it to the structure a GoCB's DstAddress
+// is served as.
 func TestPhyComAddrLoads(t *testing.T) {
 	_, m := loadEd21(t)
 	phy := m.Device("ED21LD0").Node("PHC1").Object("PhyCom")
@@ -173,11 +175,23 @@ func TestPhyComAddrLoads(t *testing.T) {
 		t.Fatal("PhyCom missing")
 	}
 	da := phy.Attribute("PhyComAddr")
-	if da == nil || da.Value == nil {
-		t.Fatal("PhyComAddr missing or valueless")
+	if da == nil {
+		t.Fatal("PhyComAddr missing")
 	}
-	if da.Kind != mms.TypeOctetString {
-		t.Errorf("PhyComAddr kind = %v, want an octet string", da.Kind)
+	if da.Kind != mms.TypeStructure {
+		t.Fatalf("PhyComAddr kind = %v, want a structure", da.Kind)
+	}
+	for _, c := range []struct {
+		name string
+		kind mms.Type
+	}{{"Addr", mms.TypeOctetString}, {"PRIORITY", mms.TypeUnsigned}, {"VID", mms.TypeUnsigned}, {"APPID", mms.TypeUnsigned}} {
+		m := da.Child(c.name)
+		if m == nil || m.Kind != c.kind || m.Value == nil || m.FC != model.CF {
+			t.Errorf("PhyComAddr.%s = %+v, want a valued %v [CF]", c.name, m, c.kind)
+		}
+	}
+	if addr := da.Child("Addr"); addr != nil && len(addr.Value.Bytes()) != 6 {
+		t.Errorf("PhyComAddr.Addr is %d octets, want 6", len(addr.Value.Bytes()))
 	}
 }
 

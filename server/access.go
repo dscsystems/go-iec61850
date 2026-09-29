@@ -238,7 +238,17 @@ func daValue(da *model.DataAttribute) *mms.Value {
 		}
 		members = append(members, v)
 	}
-	return mms.NewStructure(members...)
+	elem := mms.NewStructure(members...)
+	if da.Kind == mms.TypeArray {
+		// An array of a constructed type: the children are the element
+		// template, and every element starts from it.
+		elems := make([]*mms.Value, da.Count)
+		for i := range elems {
+			elems[i] = elem.Clone()
+		}
+		return mms.NewArray(elems...)
+	}
+	return elem
 }
 
 // resolveWrite finds the leaf data attribute for an item ID and sets its
@@ -400,6 +410,9 @@ func daTypeSpec(da *model.DataAttribute) *mms.TypeSpec {
 		for _, c := range da.Children {
 			ts.Components = append(ts.Components, mms.Component{Name: c.Name, Spec: daTypeSpec(c)})
 		}
+		if da.Kind == mms.TypeArray {
+			return &mms.TypeSpec{Kind: mms.TypeArray, Elements: da.Count, Element: ts}
+		}
 		return ts
 	}
 	return valueTypeSpec(da.Value)
@@ -420,6 +433,16 @@ func valueTypeSpec(v *mms.Value) *mms.TypeSpec {
 		return &mms.TypeSpec{Kind: mms.TypeVisibleString, Size: 129}
 	case mms.TypeOctetString:
 		return &mms.TypeSpec{Kind: mms.TypeOctetString, Size: 64}
+	case mms.TypeArray:
+		// The elements of an attribute's array share one type; an empty
+		// array still needs an element type to be described.
+		ts := &mms.TypeSpec{Kind: mms.TypeArray, Elements: v.Len()}
+		if v.Len() > 0 {
+			ts.Element = valueTypeSpec(v.Index(0))
+		} else {
+			ts.Element = valueTypeSpec(nil)
+		}
+		return ts
 	default:
 		return &mms.TypeSpec{Kind: v.Type()}
 	}

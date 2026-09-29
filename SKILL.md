@@ -176,8 +176,12 @@ s, _ := scl.ParseFile("device.cid")
 log.Printf("edition %s", s.Edition())                    // 2007B4
 ```
 
-`model.NewDataObject` still panics on a class it does not know; use
-`model.NewDataObjectOr` on a runtime-supplied class. An unknown FC parses
+`model.NewDataObject` builds an empty object for a class it does not know;
+use `model.NewDataObjectOr` on a runtime-supplied class to be told. Whole
+logical nodes are built from the 7-4 classes with `model.NewLogicalNode`
+(`model.KnownLNClasses()` lists them), and `m.CheckLNClasses()` reports the
+nodes of a loaded model that lack a mandatory data object or use the wrong
+class for one; the loader does not run it. An unknown FC parses
 to `model.FCUnknown` and is carried verbatim, so the object stays
 readable — use `model.ParseFCLenient` and `model.FCText` for it.
 
