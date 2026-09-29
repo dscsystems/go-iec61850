@@ -174,7 +174,7 @@
                         datSet="Measurements" confRev="1" type="GSSE"/>
             <SampledValueControl name="msvcb01" desc="multicast SV" smvID="ED21MSVCB01"
                                 datSet="Measurements" confRev="1" smpRate="50" nofASDU="1"
-                                multicast="true" smpMod="SmpPerSec">
+                                multicast="true" smpMod="SmpPerSec" svType=" MSV ">
               <SmvOpts refreshTime="true" sampleSynchronized="true" sampleRate="true"
                        dataSet="false" security="false" timestamp="true" synchSourceId="true"/>
             </SampledValueControl>

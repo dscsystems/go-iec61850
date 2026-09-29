@@ -3,6 +3,7 @@ package goose
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -21,6 +22,12 @@ var DefaultRetrans = []time.Duration{
 // ErrClosed is returned by Publish after Close.
 var ErrClosed = errors.New("goose: publisher closed")
 
+// ErrFrameTooLarge is returned by Publish and Refresh when the encoded
+// message does not fit one Ethernet frame. GOOSE has no fragmentation, so
+// such a message could only be truncated or dropped on the way; the data
+// set is too large for the control block and has to be split.
+var ErrFrameTooLarge = errors.New("goose: message exceeds the Ethernet MTU")
+
 // PublisherConfig identifies one GOOSE control block on the wire.
 type PublisherConfig struct {
 	DstMAC  [6]byte
@@ -28,6 +35,8 @@ type PublisherConfig struct {
 	VLAN    *ethernet.VLANTag
 	GoCbRef string
 	DatSet  string
+	// GoID is the goID the message carries. Empty defaults to GoCbRef, so
+	// the field on the wire always identifies the stream.
 	GoID    string
 	ConfRev uint32
 	SrcMAC  [6]byte
@@ -38,10 +47,11 @@ type PublisherConfig struct {
 	// with the doubling between them that makes the receiver back off
 	// smoothly. See NewPublisherFromModel.
 	Retrans []time.Duration
-	// Test and NdsCom set the corresponding GOOSE fields, which tell a
-	// receiver that the publisher is in test or commissioning state. A
-	// receiver is expected to act on them, so they are only set
-	// deliberately.
+	// Test and NdsCom set the initial value of the corresponding GOOSE
+	// fields, which tell a receiver that the publisher is in test or
+	// commissioning state. A receiver is expected to act on them, so they
+	// are only set deliberately. Publisher.SetTest and SetNdsCom change
+	// them later.
 	Test   bool
 	NdsCom bool
 	// TimeQuality is the quality of the time stamp in the message. Nil
@@ -64,6 +74,8 @@ type Publisher struct {
 	mu     sync.Mutex
 	stNum  uint32
 	sqNum  uint32
+	test   bool
+	ndsCom bool
 	msg    Message       // the state currently being advertised
 	stop   chan struct{} // stops the current retransmission loop
 	closed bool
@@ -89,7 +101,31 @@ func NewPublisher(iface ethernet.Interface, cfg PublisherConfig) (*Publisher, er
 			return nil, fmt.Errorf("goose: retransmission interval %v not positive", d)
 		}
 	}
-	return &Publisher{iface: iface, cfg: cfg}, nil
+	if cfg.GoID == "" {
+		cfg.GoID = cfg.GoCbRef
+	}
+	return &Publisher{iface: iface, cfg: cfg, test: cfg.Test, ndsCom: cfg.NdsCom}, nil
+}
+
+// SetTest sets the test field. It takes effect with the next Publish or
+// Refresh: the retransmissions of a state repeat the message that
+// announced it, so a receiver never sees the field change under an
+// unchanged stNum and sqNum sequence. Call Refresh to put it on the wire
+// without a state change.
+func (p *Publisher) SetTest(test bool) {
+	p.mu.Lock()
+	p.test = test
+	p.mu.Unlock()
+}
+
+// SetNdsCom sets the ndsCom field, which tells a receiver the control
+// block needs commissioning (IEC 61850-7-2: for instance, its data set is
+// missing or does not fit a frame). Like SetTest, it takes effect with the
+// next Publish or Refresh.
+func (p *Publisher) SetNdsCom(ndsCom bool) {
+	p.mu.Lock()
+	p.ndsCom = ndsCom
+	p.mu.Unlock()
 }
 
 // Publish announces a state change: stNum increments, sqNum resets to
@@ -106,12 +142,11 @@ func (p *Publisher) Publish(values []*mms.Value) error {
 	if p.closed {
 		return ErrClosed
 	}
-	p.stNum++
-	if p.stNum == 0 {
-		p.stNum = 1
+	stNum := p.stNum + 1
+	if stNum == 0 {
+		stNum = 1
 	}
-	p.sqNum = 0
-	return p.publishLocked(values, true)
+	return p.publishLocked(values, stNum, true)
 }
 
 // Refresh repeats the current state without announcing a change: stNum
@@ -127,42 +162,57 @@ func (p *Publisher) Refresh(values []*mms.Value) error {
 	if p.closed {
 		return ErrClosed
 	}
-	if p.stNum == 0 {
-		p.stNum = 1
+	stNum := p.stNum
+	if stNum == 0 {
+		stNum = 1
 	}
-	p.sqNum = 0
-	return p.publishLocked(values, false)
+	return p.publishLocked(values, stNum, false)
 }
 
-// publishLocked sends the message and starts a new retransmission loop.
-func (p *Publisher) publishLocked(values []*mms.Value, stateChange bool) error {
-	if p.stop != nil {
-		close(p.stop)
-	}
+// publishLocked sends the message for stNum and starts a new
+// retransmission loop. A message too large for a frame is refused before
+// anything changes: the counters and the state being advertised stay as
+// they were, and its retransmission carries on.
+func (p *Publisher) publishLocked(values []*mms.Value, stNum uint32, stateChange bool) error {
 	t := time.Now()
 	if !stateChange && !p.msg.T.IsZero() {
 		// A refresh keeps the timestamp of the change it repeats, so a
 		// receiver can tell how old the state is.
 		t = p.msg.T
 	}
-	p.msg = Message{
+	msg := Message{
 		GoCbRef:           p.cfg.GoCbRef,
 		DatSet:            p.cfg.DatSet,
 		GoID:              p.cfg.GoID,
 		TimeAllowedToLive: p.tatl(0),
 		T:                 t,
-		StNum:             p.stNum,
+		StNum:             stNum,
 		SqNum:             0,
 		ConfRev:           p.cfg.ConfRev,
 		NumDatSetEntries:  uint32(len(values)),
 		Values:            values,
 		AppID:             p.cfg.AppID,
-		Test:              p.cfg.Test,
-		NdsCom:            p.cfg.NdsCom,
+		Test:              p.test,
+		NdsCom:            p.ndsCom,
 		TimeQuality:       p.cfg.TimeQuality,
 	}
-	msg := p.msg
-	if err := p.send(&msg); err != nil {
+	// The retransmissions of this state differ only in sqNum and
+	// timeAllowedToLive, and grow as those gain octets. Sizing the message
+	// with both at their widest means no retransmission can outgrow the
+	// frame the first one fit in.
+	widest := msg
+	widest.SqNum, widest.TimeAllowedToLive = math.MaxUint32, math.MaxUint32
+	if n := len(widest.Marshal()); n > ethernet.MaxPayload {
+		return fmt.Errorf("%w: %d octets for %d data set members, limit %d",
+			ErrFrameTooLarge, n, len(values), ethernet.MaxPayload)
+	}
+	payload := msg.Marshal()
+	if p.stop != nil {
+		close(p.stop)
+		p.stop = nil
+	}
+	p.msg, p.stNum, p.sqNum = msg, stNum, 0
+	if err := p.send(payload); err != nil {
 		return err
 	}
 	stop := make(chan struct{})
@@ -228,7 +278,7 @@ func (p *Publisher) retransmit(msg Message, stop chan struct{}) {
 		default:
 		}
 		p.sqNum = msg.SqNum
-		err := p.send(&msg)
+		err := p.send(msg.Marshal())
 		p.mu.Unlock()
 		if err != nil {
 			return
@@ -247,12 +297,12 @@ func (p *Publisher) tatl(n int) uint32 {
 	return uint32(ms)
 }
 
-func (p *Publisher) send(msg *Message) error {
+func (p *Publisher) send(payload []byte) error {
 	return p.iface.WriteFrame(&ethernet.Frame{
 		Dst:       p.cfg.DstMAC,
 		Src:       p.cfg.SrcMAC,
 		EtherType: ethernet.EtherTypeGOOSE,
 		VLAN:      p.cfg.VLAN,
-		Payload:   msg.Marshal(),
+		Payload:   payload,
 	})
 }

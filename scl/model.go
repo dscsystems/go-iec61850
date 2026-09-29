@@ -1416,6 +1416,7 @@ func (b *builder) buildSVControl(iedName, apName, ldInst string, s *SampledValue
 		NoASDU:    s.NofASDU,
 		Multicast: boolAttr(s.Multicast, true),
 		SmpMod:    smpModOf(s.SmpMod),
+		SvType:    strings.TrimSpace(s.SvType),
 	}
 	if p := protocolOf(s.Protocol); p != "" {
 		sc.Protocol = p

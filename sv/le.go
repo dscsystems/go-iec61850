@@ -23,35 +23,54 @@ type LESample struct {
 // (int32 value, uint32 quality).
 const leSampleLen = 8 * 8
 
-// leQualityMask selects the 13 bits of the 9-2LE quality word that are the
-// IEC 61850-7-3 Quality, with the quality string's own bit 0 — the most
-// significant bit of the string, the high bit of Validity — at bit 0 of
-// the word. The word is 32 bits wide but only those 13 carry quality; the
-// rest are reserved.
+// leQualityMask selects the 13 bits of the quality word that are the
+// IEC 61850-7-3 Quality. Position i of the quality string is bit i of the
+// word, counting from the least significant bit; bit 13 is the derived
+// flag 9-2LE adds, and the bits above it are reserved.
 //
 // This orientation is easy to get backwards, and getting it backwards
 // yields plausible-looking nonsense rather than an error, so it is worth
-// stating what pins it down. 9-2LE gives the test procedures these exact
-// masks, and they are the ones this reading produces:
+// stating what pins it down. IEC 61850-9-2:2011 numbers the 32 bits of the
+// word from the most significant end, so the least significant bit is its
+// bit 31, which makes its bit table easy to misread as the reverse. The
+// masks below are the ones Wireshark's SV dissector decodes and
+// libiec61850 writes (it puts the Quality integer into the word as is):
 //
-//	validity = Invalid   0x0001   (Validity = 01, the first two bits)
-//	test                  0x0800   (detail bit 11)
-//	derived               0x2000   (9-2LE's fourteenth bit, bit 13)
+//	validity = invalid        0x0002   (positions 0-1 = 01)
+//	validity = questionable   0x0003   (positions 0-1 = 11)
+//	test                      0x0800   (position 11)
+//	derived                   0x2000   (9-2LE's bit 13)
 //
-// See also the 9-2LE Annex A figure 5, which the conformance test
-// procedures for SV publishers check a captured ASDU against.
+// A word is therefore the same integer as model.Quality, and the validity
+// values carry over unchanged.
+//
+// The first 9-2LE guideline wrote validity the other way round, with
+// invalid as 0x0001, which 9-2:2011 makes the reserved value. Merging
+// units built to it are still in service, so Quality reads 0x0001 as
+// invalid: a receiver that took it for "reserved" and used the sample
+// would be using one its source has disowned. SetQuality always writes the
+// 9-2:2011 value, so model.ValidityReserved does not survive the round
+// trip; nothing is meant to send it.
 const leQualityMask = 0x1fff
+
+// leValidityLegacyInvalid is the validity the first 9-2LE guideline used
+// for invalid, and 9-2:2011 for reserved.
+const leValidityLegacyInvalid = 0x0001
 
 // Quality returns the quality of channel i (0..3 currents, 4..7 voltages).
 func (s *LESample) Quality(i int) model.Quality {
 	if i < 0 || i >= len(s.Q) {
 		return 0
 	}
-	return model.Quality(s.Q[i] & leQualityMask)
+	q := model.Quality(s.Q[i] & leQualityMask)
+	if s.Q[i]&3 == leValidityLegacyInvalid {
+		q = q.WithValidity(model.ValidityInvalid)
+	}
+	return q
 }
 
-// SetQuality writes a 13-bit quality into channel i, leaving the reserved
-// bits of the word alone.
+// SetQuality writes a 13-bit quality into channel i, leaving the derived
+// and reserved bits of the word alone.
 func (s *LESample) SetQuality(i int, q model.Quality) {
 	if i < 0 || i >= len(s.Q) {
 		return

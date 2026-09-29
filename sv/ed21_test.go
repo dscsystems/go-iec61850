@@ -2,28 +2,37 @@ package sv
 
 import (
 	"bytes"
+	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/asn1"
+	"github.com/dscsystems/go-iec61850/ethernet"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
 
-// The 9-2LE quality word orientation is pinned by the masks the 9-2LE test
-// procedures name: validity Invalid = 0x0001, test = 0x0800, derived =
+// The quality word orientation is pinned by the masks Wireshark's SV
+// dissector decodes and libiec61850 writes under IEC 61850-9-2:2011:
+// invalid = 0x0002, questionable = 0x0003, test = 0x0800, derived =
 // 0x2000. Reading the 13 quality bits from the other end of the word
 // produces plausible nonsense rather than an error, so these are the
 // regression tests for it.
 func TestLEQualityWordOrientation(t *testing.T) {
+	invalid := model.QualityGood.WithValidity(model.ValidityInvalid)
 	for _, tc := range []struct {
 		name string
 		word uint32
 		want model.Quality
 	}{
-		{"validity invalid", 0x0001, qualityForValidity(model.ValidityInvalid)},
-		{"overflow", 0x0004, model.Quality(1 << 2)},
-		{"test", 0x0800, model.Quality(1 << 11)},
-		{"operator blocked", 0x1000, model.Quality(1 << 12)},
+		{"validity invalid", 0x0002, invalid},
+		{"validity invalid, first 9-2LE guideline", 0x0001, invalid},
+		{"validity questionable", 0x0003, model.QualityGood.WithValidity(model.ValidityQuestionable)},
+		{"overflow", 0x0004, model.QualityOverflow},
+		{"substituted", 0x0400, model.QualitySubstituted},
+		{"test", 0x0800, model.QualityTest},
+		{"operator blocked", 0x1000, model.QualityOperatorBlocked},
 		{"derived is outside the 13 bits", 0x2000, 0},
 		{"all clear", 0x0000, 0},
 	} {
@@ -34,15 +43,13 @@ func TestLEQualityWordOrientation(t *testing.T) {
 				tc.name, tc.word, uint16(got), uint16(tc.want))
 		}
 	}
-}
 
-// qualityForValidity builds the Quality word value whose Validity is v.
-// Validity occupies positions 0 and 1 of the quality string, position 0
-// being the most significant bit of the string and of Validity, so the two
-// bits of v are reversed when they become two positions of the word:
-// ValidityInvalid (10) is position 0 set, which is bit 0 of the word.
-func qualityForValidity(v model.Validity) model.Quality {
-	return model.Quality((v&1)<<1 | (v&2)>>1)
+	// And the writer puts invalid where 9-2:2011 has it.
+	s := &LESample{}
+	s.SetQuality(0, invalid|model.QualityTest)
+	if s.Q[0] != 0x0802 {
+		t.Errorf("SetQuality(invalid|test) wrote %04x, want 0802", s.Q[0])
+	}
 }
 
 // The quality round-trips through the encoder, and the reserved bits of the
@@ -211,6 +218,161 @@ func TestRefrTmQuality(t *testing.T) {
 		}
 		if tq := got.ASDUs[0].RefrTmQuality; tq == nil || *tq != want {
 			t.Errorf("refrTm quality = %v, want %08b", tq, uint8(want))
+		}
+	}
+}
+
+// frameCapture records the frames a publisher writes.
+type frameCapture struct {
+	mu     sync.Mutex
+	frames []ethernet.Frame
+}
+
+func (c *frameCapture) WriteFrame(f *ethernet.Frame) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.frames = append(c.frames, *f)
+	return nil
+}
+func (c *frameCapture) ReadFrame() (*ethernet.Frame, error) { return nil, nil }
+func (c *frameCapture) Close() error                        { return nil }
+
+// smpRate is in the unit smpMod names. Without smpMod a receiver reads it
+// as samples per period, so a publisher that sent samples per second there
+// would claim 4000 samples in each 20 ms cycle.
+func TestSmpRateFollowsSmpMod(t *testing.T) {
+	for _, tc := range []struct {
+		mod  SmpMod
+		opts SVOpts
+		want uint16
+	}{
+		{SmpPerPeriod, SVOpts{SampleRate: true}, 80},
+		{SmpPerPeriod, SVOpts{SampleRate: true, SmpMod: true}, 80},
+		{SmpPerSec, SVOpts{SampleRate: true, SmpMod: true}, 4000},
+	} {
+		p, err := NewLEPublisher(&frameCapture{}, LEConfig{
+			SvID: "MU1", SamplesPerCycle: 80, NominalHz: 50, SmpMod: tc.mod, Opts: tc.opts,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if a := p.asdu(&LESample{}); a.SmpRate != tc.want {
+			t.Errorf("%v: smpRate = %d, want %d", tc.mod, a.SmpRate, tc.want)
+		}
+	}
+	if _, err := NewLEPublisher(&frameCapture{}, LEConfig{SvID: "MU1", SmpMod: SecPerSmp}); err == nil {
+		t.Error("SecPerSmp at 4000 samples per second should be refused")
+	}
+}
+
+// gmIdentity [9] (9-2 Amendment 1) round-trips as eight octets, follows
+// SetGmIdentity, and a wrong length is an error rather than a truncation.
+func TestGmIdentity(t *testing.T) {
+	id := [8]byte{0x00, 0x1b, 0x19, 0xff, 0xfe, 0x01, 0x02, 0x03}
+	p, err := NewLEPublisher(&frameCapture{}, LEConfig{
+		SvID: "MU1", GmIdentity: id, Opts: SVOpts{SynchSourceID: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := p.asdu(&LESample{})
+	got, err := Parse((&PDU{AppID: 0x4000, ASDUs: []*ASDU{a}}).Marshal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := got.ASDUs[0]; !g.HasGmIdentity || g.GmIdentity != id {
+		t.Errorf("gmIdentity = %x (present %v), want %x", g.GmIdentity, g.HasGmIdentity, id)
+	}
+	id2 := [8]byte{8, 7, 6, 5, 4, 3, 2, 1}
+	p.SetGmIdentity(id2)
+	if a := p.asdu(&LESample{}); a.GmIdentity != id2 {
+		t.Errorf("after SetGmIdentity: %x, want %x", a.GmIdentity, id2)
+	}
+
+	off, _ := NewLEPublisher(&frameCapture{}, LEConfig{SvID: "MU1", GmIdentity: id})
+	if off.asdu(&LESample{}).HasGmIdentity {
+		t.Error("gmIdentity sent without SynchSourceID")
+	}
+
+	a.HasGmIdentity = false
+	el := a.element()
+	el.Add(asn1.Prim(asn1.ContextPrimitive(9), []byte{1, 2, 3}))
+	seq := asn1.Cons(asn1.ContextConstructed(2), el)
+	sav := asn1.Cons(savPduTag, asn1.UintElem(asn1.ContextPrimitive(0), 1), seq)
+	n := headerLen + sav.Size()
+	if _, err := Parse(sav.Append([]byte{0x40, 0, byte(n >> 8), byte(n), 0, 0, 0, 0})); err == nil {
+		t.Error("a 3-octet gmIdentity parsed")
+	}
+}
+
+// With NoASDU above 1, a frame carries that many consecutive samples,
+// oldest first.
+func TestMultipleASDUsPerFrame(t *testing.T) {
+	cap := &frameCapture{}
+	p, err := NewLEPublisher(cap, LEConfig{SvID: "MU1", SamplesPerCycle: 256, NominalHz: 50, NoASDU: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	p.Run(ctx, func(uint16, *LESample) {})
+	cap.mu.Lock()
+	defer cap.mu.Unlock()
+	if len(cap.frames) == 0 {
+		t.Fatal("no frames")
+	}
+	pdu, err := Parse(cap.frames[0].Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pdu.ASDUs) != 8 {
+		t.Fatalf("%d ASDUs, want 8", len(pdu.ASDUs))
+	}
+	for i, a := range pdu.ASDUs {
+		if a.SmpCnt != uint16(i) {
+			t.Errorf("ASDU %d has smpCnt %d", i, a.SmpCnt)
+		}
+	}
+}
+
+// The publisher built from a model follows its SmvOpts, rate, mode and
+// addressing, and refuses what it cannot honour.
+func TestNewLEPublisherFromModel(t *testing.T) {
+	ld := &model.LogicalDevice{Name: "MU01LD0"}
+	ln := &model.LogicalNode{Name: "LLN0"}
+	sc := &model.SVControl{
+		Name: "MSVCB01", SvID: "MU01", DataSet: "PhsMeas1", ConfRev: 2,
+		SmpRate: 4800, SmpMod: model.SmpPerSec, NoASDU: 2, Multicast: true,
+		Opts:   model.SVOpts{SampleRate: true, DataSet: true, SynchSourceID: true},
+		DstMAC: [6]byte{1, 0x0c, 0xcd, 4, 0, 1}, AppID: 0x4001, VLANID: 5, VLANPri: 4,
+	}
+	p, err := NewLEPublisherFromModel(&frameCapture{}, ld, ln, sc, [6]byte{}, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.SampleRate() != 4800 || p.cfg.SamplesPerCycle != 80 || p.cfg.NoASDU != 2 {
+		t.Errorf("rate %d, %d per cycle, %d ASDUs; want 4800, 80, 2",
+			p.SampleRate(), p.cfg.SamplesPerCycle, p.cfg.NoASDU)
+	}
+	if p.cfg.VLAN == nil || p.cfg.VLAN.VID != 5 || p.cfg.AppID != 0x4001 || p.cfg.DstMAC != sc.DstMAC {
+		t.Errorf("addressing = %+v", p.cfg)
+	}
+	a := p.asdu(&LESample{})
+	if a.DatSet != "MU01LD0/LLN0$PhsMeas1" || a.SmpRate != 4800 ||
+		!a.HasSmpMod || a.SmpMod != SmpPerSec || !a.HasGmIdentity || !a.RefrTm.IsZero() {
+		t.Errorf("ASDU = %+v, want datSet, smpRate 4800 SmpPerSec and gmIdentity, no refrTm", a)
+	}
+
+	for name, mutate := range map[string]func(*model.SVControl){
+		"unicast":         func(s *model.SVControl) { s.Multicast = false },
+		"security":        func(s *model.SVControl) { s.Opts.Security = true },
+		"SecPerSmp":       func(s *model.SVControl) { s.SmpMod = model.SecPerSmp },
+		"fractional rate": func(s *model.SVControl) { s.SmpRate = 4000 },
+	} {
+		bad := *sc
+		mutate(&bad)
+		if _, err := NewLEPublisherFromModel(&frameCapture{}, ld, ln, &bad, [6]byte{}, 60); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

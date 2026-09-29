@@ -17,6 +17,10 @@ const (
 	etherTypeVLAN uint16 = 0x8100
 )
 
+// MaxPayload is the largest payload an Ethernet II frame carries: the
+// 1500-octet MTU, which the 802.1Q tag does not reduce.
+const MaxPayload = 1500
+
 // VLANTag is an IEEE 802.1Q tag.
 type VLANTag struct {
 	Priority uint8  // PCP, 0..7

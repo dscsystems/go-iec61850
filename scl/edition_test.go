@@ -342,6 +342,9 @@ func TestSampledValueOpts(t *testing.T) {
 	if !mcast.Multicast {
 		t.Error("msvcb01 should be multicast")
 	}
+	if mcast.SvType != "MSV" {
+		t.Errorf("msvcb01 SvType = %q, want MSV, trimmed", mcast.SvType)
+	}
 	if !mcast.Opts.SampleSynchronized || !mcast.Opts.SynchSourceID {
 		t.Errorf("msvcb01 SmvOpts = %+v, want sampleSynchronized and synchSourceId set", mcast.Opts)
 	}
@@ -353,6 +356,9 @@ func TestSampledValueOpts(t *testing.T) {
 	ucast := byName["usvcb01"]
 	if ucast.Multicast {
 		t.Error("usvcb01 should be unicast")
+	}
+	if ucast.SvType != "" {
+		t.Errorf("usvcb01 SvType = %q, want empty for an absent attribute", ucast.SvType)
 	}
 	if ucast.Protocol != "R-SV" {
 		t.Errorf("usvcb01 Protocol = %q, want R-SV", ucast.Protocol)

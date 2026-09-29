@@ -407,7 +407,12 @@ pub, _ := goose.NewPublisher(eth, goose.PublisherConfig{
     Retrans: goose.DefaultRetrans,   // 4ms..1s, then stable
 })
 pub.Publish([]*mms.Value{mms.NewBool(true), model.QualityGood.Value()})  // stNum++
+pub.Refresh(values)   // same state again: stNum unchanged, sqNum restarts
+pub.SetTest(true)     // flags reach the wire with the next Publish or Refresh
 defer pub.Close()
+
+// Or from a loaded model: full references, MinTime/MaxTime retransmission.
+pub, _ = goose.NewPublisherFromModel(eth, ld, ln, gc, srcMAC)
 
 // Subscriber.
 sub := goose.NewSubscriber(eth)
@@ -443,7 +448,12 @@ pub, _ := sv.NewLEPublisher(eth, sv.LEConfig{
 })
 pub.Run(ctx, func(smpCnt uint16, out *sv.LESample) {
     out.I[0] = current; out.V[0] = voltage
+    out.SetQuality(0, model.QualityGood)
 })
+
+// Or from a loaded model: SmvOpts, smpRate/smpMod, nofASDU and addressing.
+pub, _ = sv.NewLEPublisherFromModel(eth, ld, ln, sc, srcMAC, 50)
+pub.SetGmIdentity(ptpGrandmaster)   // gmIdentity [9], for SmvOpts synchSourceId
 
 // Subscriber (zero-alloc 9-2LE decode; the sample is reused, copy to retain).
 sub := sv.NewSubscriber(eth)

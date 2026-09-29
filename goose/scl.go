@@ -90,6 +90,10 @@ func NewPublisherFromModel(iface ethernet.Interface, ld *model.LogicalDevice, ln
 		ConfRev: gc.ConfRev,
 		SrcMAC:  srcMAC,
 		Retrans: RetransFromSCL(gc.MinTime, gc.MaxTime),
+		// A block without a data set has nothing to publish and needs
+		// commissioning, which is what ndsCom tells a receiver
+		// (IEC 61850-7-2).
+		NdsCom: gc.DataSet == "",
 	}
 	if gc.VLANID != 0 || gc.VLANPri != 0 {
 		cfg.VLAN = &ethernet.VLANTag{VID: gc.VLANID, Priority: gc.VLANPri}

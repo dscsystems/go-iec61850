@@ -49,18 +49,17 @@ func (m *Message) timeQuality() mms.TimeQuality {
 	return mms.DefaultTimeQuality
 }
 
-// optString returns a context-primitive string element, or nil when s is
-// empty so Cons omits the field. goID [3] is OPTIONAL in 8-1: an unset
-// identifier is absent, not a zero-length VisibleString.
-func optString(tag uint32, s string) *asn1.Element {
-	if s == "" {
-		return nil
-	}
-	return asn1.Prim(asn1.ContextPrimitive(tag), []byte(s))
-}
-
 // Marshal encodes the full APDU: APPID, Length, two reserved words, then
 // the [APPLICATION 1] goosePdu.
+//
+// goID [3] is always emitted, as an empty VisibleString if need be. The
+// Edition 1 ASN.1 marks it OPTIONAL, but the Edition 2 message carries it
+// unconditionally and subscribers configured from SCL match on it, so
+// leaving it out is a stream they cannot identify. Parse still accepts its
+// absence, from an Edition 1 publisher.
+//
+// Marshal does not check the size; the Publisher refuses an APDU that does
+// not fit an Ethernet frame (ethernet.MaxPayload).
 func (m *Message) Marshal() []byte {
 	allData := asn1.Cons(asn1.ContextConstructed(11))
 	for _, v := range m.Values {
@@ -70,7 +69,7 @@ func (m *Message) Marshal() []byte {
 		asn1.Prim(asn1.ContextPrimitive(0), []byte(m.GoCbRef)),
 		asn1.UintElem(asn1.ContextPrimitive(1), uint64(m.TimeAllowedToLive)),
 		asn1.Prim(asn1.ContextPrimitive(2), []byte(m.DatSet)),
-		optString(3, m.GoID),
+		asn1.Prim(asn1.ContextPrimitive(3), []byte(m.GoID)),
 		asn1.Prim(asn1.ContextPrimitive(4), mms.NewUTCTime(m.T, m.timeQuality()).Bytes()),
 		asn1.UintElem(asn1.ContextPrimitive(5), uint64(m.StNum)),
 		asn1.UintElem(asn1.ContextPrimitive(6), uint64(m.SqNum)),
@@ -80,7 +79,7 @@ func (m *Message) Marshal() []byte {
 		asn1.UintElem(asn1.ContextPrimitive(10), uint64(m.NumDatSetEntries)),
 		allData,
 	)
-	length := headerLen + pdu.Size() // must fit the MTU in practice
+	length := headerLen + pdu.Size()
 	buf := make([]byte, 0, length)
 	buf = append(buf,
 		byte(m.AppID>>8), byte(m.AppID),

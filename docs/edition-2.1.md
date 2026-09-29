@@ -193,12 +193,20 @@ the class is reported as unknown to this library.
 
 ### Implemented
 
-- `goosePdu` encoding and decoding, including the optional `goID` and the
-  trailing fields of the Edition 2 message.
+- `goosePdu` encoding and decoding, including the trailing fields of the
+  Edition 2 message. `goID` is always emitted (a publisher without one
+  sends its `gocbRef` there); a message without it, from an Edition 1
+  publisher, still parses.
 - The retransmission state machine, with `Publish` for a state change and
   `Refresh` for re-advertising the same state. `stNum` starts at 1 and
   skips 0, which 8-1 reserves.
-- `test` and `ndsCom` are settable and reach the wire.
+- `test` and `ndsCom` are settable, at construction and with `SetTest` and
+  `SetNdsCom`, and reach the wire from the next `Publish` or `Refresh`. A
+  publisher built from a control block without a data set sets `ndsCom`.
+- A message that does not fit one Ethernet frame (1500 octets, sized with
+  `sqNum` and `timeAllowedToLive` at their widest) is refused with
+  `ErrFrameTooLarge`, and the state already being advertised is left
+  untouched.
 - The time quality of the message stamp is settable, so a publisher whose
   clock has lost synchronisation can say so. `sqNum` rolls over to 1, and a
   subscriber accepts the rollover of either counter.
@@ -232,10 +240,20 @@ the class is reported as unknown to this library.
   `smpMod [8]` field, which says whether `SmpRate` counts samples per
   period (0), per second (1), or seconds per sample (2). Presence is
   `ASDU.HasSmpMod`, since 0 is a mode and not absence.
-- The optional ASDU fields (`smpRate`, `refrTm`, `datSet`, `smpMod`) are
-  emitted only when the publisher's configuration asks for them, and
-  `SmvOpts` from the SCL becomes the SV control block's `OptFlds` bit
-  string.
+- The Amendment 1 `gmIdentity [9]` field, the grandmaster clock identity,
+  as `ASDU.GmIdentity`. The publisher emits it for `SmvOpts synchSourceId`
+  and takes the value from `SetGmIdentity`.
+- The optional ASDU fields (`smpRate`, `refrTm`, `datSet`, `smpMod`,
+  `gmIdentity`) are emitted only when the publisher's configuration asks
+  for them, and `SmvOpts` from the SCL becomes the SV control block's
+  `OptFlds` bit string. `smpRate` is expressed in the unit the sample mode
+  names: samples per period unless `smpMod` says per second.
+- `NewLEPublisherFromModel` builds a publisher from an SV control block:
+  addressing, `svID`, `datSet` as a full reference, rate, mode, `nofASDU`
+  and the `SmvOpts` fields. It refuses unicast, `SmvOpts security` and
+  `SecPerSmp` rather than publish something other than what was
+  configured. `SampledValueControl@svType` is carried to the model as
+  `SVControl.SvType`.
 - `refrTm` carries the publisher's clock quality (`LEConfig.TimeQuality`),
   and a parsed ASDU the quality it arrived with (`RefrTmQuality`).
 - The 9-2LE `PhsMeas1` dataset, with `SetQuality` alongside `Quality`.
@@ -244,6 +262,8 @@ the class is reported as unknown to this library.
 ### Not implemented
 
 - **R-SV**, for the reasons given under 7-2.
+- **`SmvOpts timestamp`** is loaded but not emitted, and **`SmvOpts
+  security`** is refused by the publisher (see 62351-6 under 8-1).
 - **9-2 (non-LE) dataset shapes.** Only the 9-2LE 8-channel layout is
   decodable; a wider channel set is carried as raw bytes.
 - **Sampled value control blocks on the server** exist as browsable
@@ -268,9 +288,17 @@ the class is reported as unknown to this library.
 ## A note on the 9-2LE quality word
 
 The 32-bit quality word of a 9-2LE sample holds 13 bits of
-IEC 61850-7-3 `Quality` and 19 reserved. Reading them from the wrong end
-produces plausible nonsense rather than an error, so the orientation is
-pinned by the masks the 9-2LE conformance test procedures name: validity
-`Invalid` is `0x0001`, test is `0x0800`, and the `derived` bit that 9-2LE
-adds is `0x2000` — which is bit 13, outside the 13. `sv/le.go` documents
-this and `sv/ed21_test.go` asserts it.
+IEC 61850-7-3 `Quality`, the `derived` bit 9-2LE adds, and 18 reserved.
+IEC 61850-9-2:2011 numbers the word from the most significant end, so its
+bit table is easy to read backwards, and reading it backwards produces
+plausible nonsense rather than an error. Position *i* of the quality string
+is bit *i* of the word counting from the least significant bit, so a word is
+the same integer as `model.Quality`: validity `invalid` is `0x0002`,
+`questionable` `0x0003`, test `0x0800`, and `derived` `0x2000`. These are
+the values Wireshark's SV dissector decodes and libiec61850 writes.
+
+The first 9-2LE guideline wrote validity the other way round, with invalid
+as `0x0001`, which 9-2:2011 makes the reserved value. Merging units built to
+it are still in service, so a received `0x0001` reads as invalid; the
+publisher always writes `0x0002`. `sv/le.go` documents this and
+`sv/ed21_test.go` asserts it.

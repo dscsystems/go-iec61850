@@ -80,41 +80,51 @@ func pduTags(t *testing.T, apdu []byte) []uint32 {
 	return tags
 }
 
-// TestGoIDOptional checks that goID [3] is omitted rather than sent as an
-// empty VisibleString when unset: 8-1 declares it OPTIONAL, and a
-// subscriber filtering on goID must see it absent, not blank.
-func TestGoIDOptional(t *testing.T) {
+// TestGoIDAlwaysEmitted checks that goID [3] is on the wire even when
+// empty, as the Edition 2 message carries it, and that Parse still accepts
+// an Edition 1 message that leaves it out.
+func TestGoIDAlwaysEmitted(t *testing.T) {
 	m := sampleMessage()
 	m.GoID = ""
 	apdu := m.Marshal()
-
-	for _, tag := range pduTags(t, apdu) {
-		if tag == 3 {
-			t.Fatal("empty GoID encoded as [3], want the field omitted")
-		}
-	}
-	got, err := Parse(apdu)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if got.GoID != "" {
-		t.Fatalf("GoID = %q, want empty", got.GoID)
-	}
-	// Every other field still decodes with the optional one absent.
-	if got.GoCbRef != m.GoCbRef || got.DatSet != m.DatSet || got.StNum != m.StNum ||
-		got.SqNum != m.SqNum || got.ConfRev != m.ConfRev ||
-		got.NumDatSetEntries != m.NumDatSetEntries || len(got.Values) != 2 {
-		t.Fatalf("field mismatch without goID: %+v", got)
-	}
-
-	// A set GoID is still present.
-	m.GoID = "events"
 	var found bool
-	for _, tag := range pduTags(t, m.Marshal()) {
+	for _, tag := range pduTags(t, apdu) {
 		found = found || tag == 3
 	}
 	if !found {
-		t.Fatal("non-empty GoID not encoded as [3]")
+		t.Fatal("empty GoID not encoded as [3]")
+	}
+
+	// Rebuild the goosePdu without [3], as an Edition 1 publisher may.
+	content, err := asn1.NewDecoder(apdu[headerLen:]).Expect(pduTag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pdu := asn1.Cons(pduTag)
+	for d := asn1.NewDecoder(content); d.More(); {
+		tag, value, err := d.ReadTLV()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tag.Number == 3 {
+			continue
+		}
+		if tag.Constructed {
+			pdu.Add(asn1.RawContent(tag, value))
+		} else {
+			pdu.Add(asn1.Prim(tag, value))
+		}
+	}
+	length := headerLen + pdu.Size()
+	legacy := pdu.Append([]byte{byte(m.AppID >> 8), byte(m.AppID), byte(length >> 8), byte(length), 0, 0, 0, 0})
+	got, err := Parse(legacy)
+	if err != nil {
+		t.Fatalf("Parse without goID: %v", err)
+	}
+	if got.GoID != "" || got.GoCbRef != m.GoCbRef || got.DatSet != m.DatSet ||
+		got.StNum != m.StNum || got.SqNum != m.SqNum || got.ConfRev != m.ConfRev ||
+		got.NumDatSetEntries != m.NumDatSetEntries || len(got.Values) != 2 {
+		t.Fatalf("field mismatch without goID: %+v", got)
 	}
 }
 

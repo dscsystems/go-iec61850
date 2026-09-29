@@ -74,7 +74,14 @@ type ASDU struct {
 	// HasSmpMod reports whether smpMod [8] is present. An Edition 1 stream
 	// omits it, which a receiver reads as SmpPerPeriod.
 	HasSmpMod bool
-	Sample    []byte // the raw dataset payload (phsMeas for 9-2LE)
+	// GmIdentity is gmIdentity [9], added by IEC 61850-9-2 Amendment 1:
+	// the PTP clock identity of the grandmaster the samples are
+	// synchronised to, so a receiver can tell whether two streams share a
+	// time source. It is present only when HasGmIdentity, which a
+	// publisher sets for SmvOpts synchSourceId.
+	GmIdentity    [8]byte
+	HasGmIdentity bool
+	Sample        []byte // the raw dataset payload (phsMeas for 9-2LE)
 }
 
 // PDU is a sampled-value APDU carrying one or more ASDUs.
@@ -136,6 +143,9 @@ func (a *ASDU) element() *asn1.Element {
 	// Like smpRate it is OCTET STRING (SIZE(2)), not a minimal INTEGER.
 	if a.HasSmpMod {
 		el.Add(asn1.Prim(asn1.ContextPrimitive(8), []byte{0, byte(a.SmpMod)}))
+	}
+	if a.HasGmIdentity {
+		el.Add(asn1.Prim(asn1.ContextPrimitive(9), a.GmIdentity[:])) // gmIdentity [9]
 	}
 	return el
 }
@@ -220,6 +230,14 @@ func parseASDU(content []byte) (*ASDU, error) {
 	if b, ok, _ := d.Optional(asn1.ContextPrimitive(8)); ok {
 		a.SmpMod = SmpMod(beUint16(b))
 		a.HasSmpMod = true
+	}
+	if b, ok, _ := d.Optional(asn1.ContextPrimitive(9)); ok {
+		if len(b) != len(a.GmIdentity) {
+			return nil, fmt.Errorf("sv: gmIdentity of %d octets, want %d: %w",
+				len(b), len(a.GmIdentity), asn1.ErrBadLength)
+		}
+		copy(a.GmIdentity[:], b)
+		a.HasGmIdentity = true
 	}
 	return a, nil
 }

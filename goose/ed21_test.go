@@ -1,6 +1,7 @@
 package goose
 
 import (
+	"errors"
 	"math"
 	"sync"
 	"testing"
@@ -306,5 +307,106 @@ func TestSqNumRollsOverToOne(t *testing.T) {
 	}
 	if msgs[0].SqNum != math.MaxUint32 || msgs[1].SqNum != 1 {
 		t.Errorf("sqNum went %d then %d, want %d then 1", msgs[0].SqNum, msgs[1].SqNum, uint32(math.MaxUint32))
+	}
+}
+
+// SetTest and SetNdsCom change the flags from the next Publish or Refresh
+// on; the state already on the wire keeps the flags it was announced with.
+func TestSetTestAndNdsCom(t *testing.T) {
+	p, cap := testPublisher(t, PublisherConfig{})
+	if err := p.Publish(nil); err != nil {
+		t.Fatal(err)
+	}
+	p.SetTest(true)
+	p.SetNdsCom(true)
+	if err := p.Refresh(nil); err != nil {
+		t.Fatal(err)
+	}
+	p.SetTest(false)
+	if err := p.Publish(nil); err != nil {
+		t.Fatal(err)
+	}
+	msgs := cap.messages()
+	if len(msgs) != 3 {
+		t.Fatalf("%d messages, want 3", len(msgs))
+	}
+	for i, want := range [][2]bool{{false, false}, {true, true}, {false, true}} {
+		if msgs[i].Test != want[0] || msgs[i].NdsCom != want[1] {
+			t.Errorf("message %d: Test/NdsCom = %v/%v, want %v/%v",
+				i, msgs[i].Test, msgs[i].NdsCom, want[0], want[1])
+		}
+	}
+	if msgs[1].StNum != msgs[0].StNum {
+		t.Error("changing a flag and refreshing announced a state change")
+	}
+}
+
+// A publisher without a goID sends the control block reference in its
+// place, so the field on the wire always identifies the stream.
+func TestGoIDDefaultsToGoCbRef(t *testing.T) {
+	p, cap := testPublisher(t, PublisherConfig{GoCbRef: "LD/LLN0$GO$gcb01"})
+	if err := p.Publish(nil); err != nil {
+		t.Fatal(err)
+	}
+	if msgs := cap.messages(); len(msgs) != 1 || msgs[0].GoID != "LD/LLN0$GO$gcb01" {
+		t.Errorf("messages = %+v, want goID LD/LLN0$GO$gcb01", msgs)
+	}
+}
+
+// A data set too large for one frame is refused, and the refusal leaves the
+// state being advertised as it was: same stNum, and its retransmission
+// carries on.
+func TestPublishRefusesOversizedFrame(t *testing.T) {
+	p, cap := testPublisher(t, PublisherConfig{Retrans: []time.Duration{5 * time.Millisecond}})
+	if err := p.Publish([]*mms.Value{mms.NewBool(true)}); err != nil {
+		t.Fatal(err)
+	}
+	big := make([]*mms.Value, 400) // 3 octets each: 1200, plus the header, fits
+	for i := range big {
+		big[i] = mms.NewBool(false)
+	}
+	if err := p.Publish(big); err != nil {
+		t.Fatalf("a %d-member data set that fits was refused: %v", len(big), err)
+	}
+	huge := make([]*mms.Value, 600)
+	for i := range huge {
+		huge[i] = mms.NewBool(false)
+	}
+	before, _ := p.State()
+	if err := p.Publish(huge); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("Publish of %d members: %v, want ErrFrameTooLarge", len(huge), err)
+	}
+	if err := p.Refresh(huge); !errors.Is(err, ErrFrameTooLarge) {
+		t.Fatalf("Refresh of %d members: %v, want ErrFrameTooLarge", len(huge), err)
+	}
+	if after, _ := p.State(); after != before {
+		t.Errorf("a refused Publish moved stNum from %d to %d", before, after)
+	}
+	time.Sleep(30 * time.Millisecond)
+	cap.mu.Lock()
+	for _, f := range cap.net {
+		if len(f.Payload) > ethernet.MaxPayload {
+			t.Errorf("a %d-octet payload went on the wire", len(f.Payload))
+		}
+	}
+	cap.mu.Unlock()
+	msgs := cap.messages()
+	if last := msgs[len(msgs)-1]; last.StNum != before || last.SqNum == 0 {
+		t.Errorf("last message stNum %d sqNum %d: the advertised state's retransmission "+
+			"did not carry on", last.StNum, last.SqNum)
+	}
+}
+
+// A control block without a data set needs commissioning, and says so.
+func TestNewPublisherFromModelWithoutDataSet(t *testing.T) {
+	ld := &model.LogicalDevice{Name: "IEDLD0"}
+	ln := &model.LogicalNode{Name: "LLN0"}
+	p, err := NewPublisherFromModel(&capture{}, ld, ln, &model.GSEControl{Name: "gcb01"}, [6]byte{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if !p.ndsCom {
+		t.Error("a block without a data set does not set ndsCom")
 	}
 }

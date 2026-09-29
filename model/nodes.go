@@ -258,6 +258,10 @@ type SVControl struct {
 	Multicast bool
 	SmpMod    SmpMod
 	Opts      SVOpts
+	// SvType is SampledValueControl@svType as the SCL gives it, empty
+	// when the attribute is absent. It is carried for tools that report
+	// the configuration; the publisher does not interpret it.
+	SvType string
 	// Protocol names the transmission profile, e.g. "R-SV".
 	Protocol string
 	DstMAC   [6]byte
