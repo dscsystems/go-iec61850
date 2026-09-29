@@ -175,7 +175,7 @@
                        dataSet="true" security="true" timestamp="true" synchSourceId="true"/>
               <Protocol>R-SV</Protocol>
             </SampledValueControl>
-            <LogControl name="lcb01" desc="event log" datSet="Measurements" logName="ED21/LLN0.EventLog"
+            <LogControl name="lcb01" desc="event log" datSet="Measurements" logName="EventLog"
                         logEna="true" reasonCode="true" bufTime="500" intgPd="0" lnClass="LLN0">
               <TrgOps dchg="true" qchg="true" gi="true"/>
             </LogControl>

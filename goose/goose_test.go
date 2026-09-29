@@ -1,6 +1,7 @@
 package goose
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -201,6 +202,20 @@ func TestSubscriberAnomalies(t *testing.T) {
 	send(3, 0) // stNum regression
 	if m := <-msgs; !m.Anomalies.StNumRegressed {
 		t.Error("expected StNumRegressed")
+	}
+	// Both counters roll over to 1, which is neither a gap nor a
+	// regression.
+	send(3, math.MaxUint32)
+	<-msgs
+	send(3, 1)
+	if m := <-msgs; m.Anomalies.SqNumGap {
+		t.Error("sqNum rollover to 1 flagged as a gap")
+	}
+	send(math.MaxUint32, 0)
+	<-msgs
+	send(1, 0)
+	if m := <-msgs; m.Anomalies.StNumRegressed {
+		t.Error("stNum rollover to 1 flagged as a regression")
 	}
 }
 

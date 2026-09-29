@@ -31,9 +31,11 @@ type Message struct {
 	NumDatSetEntries      uint32
 	Values                []*mms.Value
 	AppID                 uint16
-	// TimeQuality is the quality of T. The zero value means the library
-	// default: leap seconds known, clock synchronised, accuracy 10.
-	TimeQuality mms.TimeQuality
+	// TimeQuality is the quality of T. Nil means the library default:
+	// leap seconds known, clock synchronised, accuracy 10. It is a pointer
+	// because every value of the octet is a real quality, 0 included, and
+	// a parsed message re-marshals with the quality it arrived with.
+	TimeQuality *mms.TimeQuality
 
 	Anomalies Anomalies
 }
@@ -41,8 +43,8 @@ type Message struct {
 // timeQuality is the quality to stamp T with: the caller's, or the
 // library default when none was given.
 func (m *Message) timeQuality() mms.TimeQuality {
-	if m.TimeQuality != 0 {
-		return m.TimeQuality
+	if m.TimeQuality != nil {
+		return *m.TimeQuality
 	}
 	return mms.TimeAccuracy(10)
 }
@@ -130,7 +132,8 @@ func Parse(apdu []byte) (*Message, error) {
 		return nil, fmt.Errorf("goose: t: %w", err)
 	}
 	m.T = tv.Time()
-	m.TimeQuality = tv.TimeQualityFlags()
+	tq := tv.TimeQualityFlags()
+	m.TimeQuality = &tq
 	if m.StNum, err = expectUint32(d, 5, "stNum"); err != nil {
 		return nil, err
 	}

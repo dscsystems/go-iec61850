@@ -1,6 +1,7 @@
 package sv
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -69,21 +70,23 @@ func TestLESampleQualityRoundTrip(t *testing.T) {
 
 // smpMod [8] is the Edition 2 field that says how to read smpRate. It is
 // optional, so an Edition 1 stream without it must still parse, and one
-// with it must round-trip.
+// with it must round-trip, including mode 0, which is a mode and not
+// absence.
 func TestSmpModRoundTrip(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		mod  SmpMod
-		want string
+		name    string
+		mod     SmpMod
+		present bool
+		want    string
 	}{
-		{"absent", SmpModUnset, "unset"},
-		{"per period", SmpPerPeriod, "SmpPerPeriod"},
-		{"per second", SmpPerSec, "SmpPerSec"},
-		{"seconds per sample", SecPerSmp, "SecPerSmp"},
+		{"absent", SmpPerPeriod, false, "SmpPerPeriod"},
+		{"per period", SmpPerPeriod, true, "SmpPerPeriod"},
+		{"per second", SmpPerSec, true, "SmpPerSec"},
+		{"seconds per sample", SecPerSmp, true, "SecPerSmp"},
 	} {
 		a := &ASDU{
 			SvID: "MU1", ConfRev: 1, SmpCnt: 7, SmpSynch: SmpSynchGlobal,
-			SmpRate: 4000, SmpMod: tc.mod, Sample: make([]byte, 4),
+			SmpRate: 4000, SmpMod: tc.mod, HasSmpMod: tc.present, Sample: make([]byte, 4),
 		}
 		pdu := &PDU{AppID: 0x4000, ASDUs: []*ASDU{a}}
 		got, err := Parse(pdu.Marshal())
@@ -94,6 +97,9 @@ func TestSmpModRoundTrip(t *testing.T) {
 			t.Fatalf("%s: %d ASDUs", tc.name, len(got.ASDUs))
 		}
 		asdu := got.ASDUs[0]
+		if asdu.HasSmpMod != tc.present {
+			t.Errorf("%s: HasSmpMod = %v, want %v", tc.name, asdu.HasSmpMod, tc.present)
+		}
 		if asdu.SmpMod != tc.mod {
 			t.Errorf("%s: SmpMod = %v, want %v", tc.name, asdu.SmpMod, tc.mod)
 		}
@@ -107,13 +113,37 @@ func TestSmpModRoundTrip(t *testing.T) {
 	}
 }
 
+// The wire values are the standard's: samplesPerNominalPeriod (0),
+// samplesPerSecond (1), secondsPerSample (2), as a two-octet field after
+// the sample. A one-based numbering reads as the next mode up.
+func TestSmpModWireValues(t *testing.T) {
+	for _, tc := range []struct {
+		mod  SmpMod
+		wire []byte
+	}{
+		{SmpPerPeriod, []byte{0x88, 0x02, 0x00, 0x00}},
+		{SmpPerSec, []byte{0x88, 0x02, 0x00, 0x01}},
+		{SecPerSmp, []byte{0x88, 0x02, 0x00, 0x02}},
+	} {
+		sample := []byte{0xde, 0xad}
+		a := &ASDU{SvID: "MU1", ConfRev: 1, Sample: sample, SmpMod: tc.mod, HasSmpMod: true}
+		raw := (&PDU{AppID: 0x4000, ASDUs: []*ASDU{a}}).Marshal()
+		// smpMod is the last field of the last ASDU, so the frame ends
+		// with the sample and then smpMod.
+		tail := append([]byte{0x87, 0x02, 0xde, 0xad}, tc.wire...)
+		if !bytes.HasSuffix(raw, tail) {
+			t.Errorf("%v: APDU ends % x, want % x", tc.mod, raw[len(raw)-len(tail):], tail)
+		}
+	}
+}
+
 // smpMod follows the sample on the wire, so a stream carrying it has to be
-// one octet longer than one without.
+// longer than one without.
 func TestSmpModIsLastField(t *testing.T) {
 	base := &ASDU{SvID: "MU1", ConfRev: 1, Sample: make([]byte, 4)}
 	short := len((&PDU{AppID: 0x4000, ASDUs: []*ASDU{base}}).Marshal())
 	long := len((&PDU{AppID: 0x4000, ASDUs: []*ASDU{{
-		SvID: "MU1", ConfRev: 1, Sample: make([]byte, 4), SmpMod: SmpPerSec,
+		SvID: "MU1", ConfRev: 1, Sample: make([]byte, 4), SmpMod: SmpPerSec, HasSmpMod: true,
 	}}}).Marshal())
 	if long <= short {
 		t.Errorf("adding smpMod did not grow the APDU: %d then %d octets", short, long)
@@ -149,8 +179,11 @@ func TestPublisherOptionalFields(t *testing.T) {
 		if (a.DatSet != "") != tc.wantDS {
 			t.Errorf("%s: DatSet = %q, want dataset=%v", tc.name, a.DatSet, tc.wantDS)
 		}
-		if (a.SmpMod != SmpModUnset) != tc.wantMod {
-			t.Errorf("%s: SmpMod = %v, want mod=%v", tc.name, a.SmpMod, tc.wantMod)
+		if a.HasSmpMod != tc.wantMod {
+			t.Errorf("%s: HasSmpMod = %v, want %v", tc.name, a.HasSmpMod, tc.wantMod)
+		}
+		if tc.wantMod && a.SmpMod != SmpPerSec {
+			t.Errorf("%s: SmpMod = %v, want SmpPerSec", tc.name, a.SmpMod)
 		}
 		if tc.wantTime && time.Since(a.RefrTm) > time.Minute {
 			t.Errorf("%s: RefrTm %v is not the current time", tc.name, a.RefrTm)

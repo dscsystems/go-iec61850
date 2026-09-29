@@ -193,16 +193,9 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	if opts.Responding != nil {
 		responding = opts.Responding.toACSE()
 	}
-	aare := acse.AAREWithIdentity(initResp, responding)
-	opts.trace("tx AARE", aare)
-	// The responder's selector is the one the peer addressed, so it sees the
-	// entity it dialled answer rather than a stack default.
-	respondingPSel := cp.CalledPSel
-	if len(respondingPSel) == 0 {
-		respondingPSel = presentation.DefaultCalledPSel
-	}
-	negotiatedCtx, cpa := presentation.BuildCPA(respondingPSel, cp.Contexts, aare)
-	opts.trace("tx CPA", cpa)
+	// The contexts are settled before the AARE, which names the MMS one
+	// by the identifier the peer chose for it.
+	negotiatedCtx := presentation.Negotiate(cp.Contexts)
 	if !negotiatedCtx.HasMMS() {
 		// Without an agreed MMS context nothing sent after the
 		// association can be understood, so refuse here rather than
@@ -210,6 +203,16 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		return nil, fmt.Errorf("mms: peer proposed no usable MMS presentation "+
 			"context (%d contexts proposed)", len(cp.Contexts))
 	}
+	aare := acse.AAREFor(initResp, responding, areq.ApplicationContext, negotiatedCtx.MMS)
+	opts.trace("tx AARE", aare)
+	// The responder's selector is the one the peer addressed, so it sees the
+	// entity it dialled answer rather than a stack default.
+	respondingPSel := cp.CalledPSel
+	if len(respondingPSel) == 0 {
+		respondingPSel = presentation.DefaultCalledPSel
+	}
+	_, cpa := presentation.BuildCPA(respondingPSel, cp.Contexts, aare)
+	opts.trace("tx CPA", cpa)
 	if err := session.Reply(ct, res.CalledSSEL, cpa); err != nil {
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}

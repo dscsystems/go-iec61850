@@ -2,6 +2,7 @@ package goose
 
 import (
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -145,11 +146,18 @@ func (sub *subscription) run(iface ethernet.Interface) {
 		m.Anomalies.EntriesMismatch = int(m.NumDatSetEntries) != len(m.Values)
 		sub.mu.Lock()
 		if st, ok := sub.states[m.GoCbRef]; ok {
-			if m.StNum < st.stNum {
+			// Both counters roll over to 1, not 0, so the wrap is
+			// neither a regression nor a gap.
+			wrapped := st.stNum == math.MaxUint32 && m.StNum == 1
+			if m.StNum < st.stNum && !wrapped {
 				m.Anomalies.StNumRegressed = true
 			}
 			if m.StNum == st.stNum {
-				m.Anomalies.SqNumGap = m.SqNum != st.sqNum+1
+				next := st.sqNum + 1
+				if next == 0 {
+					next = 1
+				}
+				m.Anomalies.SqNumGap = m.SqNum != next
 			} else {
 				m.Anomalies.SqNumGap = m.SqNum != 0
 			}

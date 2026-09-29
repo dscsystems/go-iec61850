@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/asn1"
@@ -25,7 +26,9 @@ type reportManager struct {
 	// so the counter is per server and not per control block: two buffered
 	// blocks must never hand out the same identifier, or a client
 	// resyncing on EntryID cannot tell which block an entry came from.
-	entryCounter uint64
+	// It is atomic because blocks emit under their own locks, not a
+	// shared one.
+	entryCounter atomic.Uint64
 }
 
 func newReportManager(s *Server) *reportManager {
@@ -646,17 +649,19 @@ func makeEntryID(n uint64) []byte {
 // serverEntryIDSeed keeps the top four octets of a freshly started server's
 // EntryIDs away from those of a restarted one, so a client that persisted an
 // EntryID across a restart does not mistake a new entry for an old one. It
-// comes from the process start time, which moves forward across restarts
-// and is monotonic within a run.
-var serverEntryIDSeed = uint64(time.Now().UnixNano())
+// is the process start time in whole seconds, which moves forward across
+// restarts more than a second apart and fits the four octets until 2106.
+// Nanoseconds would not do: their low 32 bits wrap every 4.3 seconds, so
+// the seed would be random rather than increasing.
+var serverEntryIDSeed = uint64(time.Now().Unix())
 
 // nextEntryID returns a fresh server-wide EntryID. The low 32 bits are the
 // per-server counter; the high 32 bits are the seed, so identifiers are
 // unique across a restart as well as within a run.
 func (rm *reportManager) nextEntryID() []byte {
-	rm.entryCounter++
+	n := rm.entryCounter.Add(1)
 	high := serverEntryIDSeed & 0xFFFFFFFF
-	return makeEntryID(high<<32 | uint64(uint32(rm.entryCounter)))
+	return makeEntryID(high<<32 | uint64(uint32(n)))
 }
 
 func isZeroEntryID(id []byte) bool {

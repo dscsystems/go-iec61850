@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,8 +95,8 @@ func TestControlBlocksAreBrowseable(t *testing.T) {
 	}
 }
 
-// A GOOSE control block serves its SCL configuration: the dataset,
-// configuration revision, identity and multicast address.
+// A GOOSE control block serves its SCL configuration under the component
+// names of IEC 61850-8-1: a client addresses them by those names.
 func TestGoCBReadback(t *testing.T) {
 	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
 	if err != nil {
@@ -114,30 +115,75 @@ func TestGoCBReadback(t *testing.T) {
 		t.Helper()
 		return mustRead(t, c, ctx, ref, fc)
 	}
+	if read("ED21LD0/LLN0.gcb01.GoEna", model.GO).Bool() {
+		t.Error("GoEna = true, want false: the server publishes no GOOSE")
+	}
 	if got := read("ED21LD0/LLN0.gcb01.GoID", model.GO).Text(); got != "ED21LD0/LLN0.gcb01" {
 		t.Errorf("GoID = %q, want the SCL appID", got)
 	}
-	if got := read("ED21LD0/LLN0.gcb01.DatSet", model.GO).Text(); got != "Measurements" {
-		t.Errorf("DatSet = %q, want Measurements", got)
+	if got := read("ED21LD0/LLN0.gcb01.DatSet", model.GO).Text(); got != "ED21LD0/LLN0$Measurements" {
+		t.Errorf("DatSet = %q, want the dataset reference", got)
 	}
 	if got := read("ED21LD0/LLN0.gcb01.ConfRev", model.GO).Int64(); got != 1 {
 		t.Errorf("ConfRev = %d, want 1", got)
 	}
-	mac := read("ED21LD0/LLN0.gcb01.DstMAC", model.GO).Bytes()
+	mac := read("ED21LD0/LLN0.gcb01.DstAddress.Addr", model.GO).Bytes()
 	if len(mac) != 6 || mac[0] != 0x01 || mac[3] != 0x03 {
-		t.Errorf("DstMAC = %x, want 010ccd030001", mac)
+		t.Errorf("DstAddress.Addr = %x, want 010ccd030001", mac)
 	}
-	if got := read("ED21LD0/LLN0.gcb01.APPID", model.GO).Int64(); got != 0x2000 {
-		t.Errorf("APPID = %d, want 8192", got)
+	if got := read("ED21LD0/LLN0.gcb01.DstAddress.APPID", model.GO).Int64(); got != 0x2000 {
+		t.Errorf("DstAddress.APPID = %d, want 8192", got)
+	}
+	// The whole structure reads too, as a client that reads the block does.
+	if got := read("ED21LD0/LLN0.gcb01.DstAddress", model.GO); got.Len() != 4 {
+		t.Errorf("DstAddress has %d components, want Addr, PRIORITY, VID, APPID", got.Len())
+	}
+	if !read("ED21LD0/LLN0.gcb01.FixedOffs", model.GO).Bool() {
+		t.Error("FixedOffs = false, want the SCL fixedOffs")
 	}
 	// The GSSE variant is served under GS, not GO.
-	if got := read("ED21LD0/LLN0.gscb01.GoID", model.GS).Text(); got != "ED21LD0/LLN0.gscb01" {
-		t.Errorf("GsCB GoID = %q, want the SCL appID", got)
+	if got := read("ED21LD0/LLN0.gscb01.GsID", model.GS).Text(); got != "ED21LD0/LLN0.gscb01" {
+		t.Errorf("GsCB GsID = %q, want the SCL appID", got)
 	}
 }
 
-// The sampled-value control block serves SmvOpts as the SmvOptFlds bit
-// string, one bit per optional ASDU field.
+// The components of each control block are exactly those IEC 61850-8-1
+// defines, in its order. An invented component misleads a client, and a
+// name that is not an MMS identifier cannot be addressed at all.
+func TestControlBlockComponents(t *testing.T) {
+	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
+	if err != nil {
+		t.Fatalf("LoadModel: %v", err)
+	}
+	server.New(m)
+	lln0 := m.Devices[0].Node("LLN0")
+	for _, tc := range []struct {
+		name string
+		want []string
+	}{
+		{"gcb01", []string{"GoEna", "GoID", "DatSet", "ConfRev", "NdsCom", "DstAddress", "MinTime", "MaxTime", "FixedOffs"}},
+		{"gscb01", []string{"GsEna", "GsID"}},
+		{"msvcb01", []string{"SvEna", "MsvID", "DatSet", "ConfRev", "SmpRate", "OptFlds", "SmpMod", "DstAddress", "noASDU"}},
+		{"usvcb01", []string{"SvEna", "Resv", "UsvID", "DatSet", "ConfRev", "SmpRate", "OptFlds", "SmpMod", "DstAddress", "noASDU"}},
+		{"lcb01", []string{"LogEna", "LogRef", "DatSet", "OldEntrTm", "NewEntrTm", "OldEnt", "NewEnt", "TrgOps", "IntgPd"}},
+	} {
+		do := lln0.Object(tc.name)
+		if do == nil {
+			t.Errorf("%s not materialised", tc.name)
+			continue
+		}
+		var got []string
+		for _, a := range do.Attributes {
+			got = append(got, a.Name)
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s components = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The sampled-value control block serves SmvOpts as the OptFlds bit
+// string, one bit per optional ASDU field, and SmpMod as the enumeration.
 func TestMSVCBOptFlds(t *testing.T) {
 	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
 	if err != nil {
@@ -152,32 +198,40 @@ func TestMSVCBOptFlds(t *testing.T) {
 	}
 	defer c.Close()
 
-	v, err := c.Read(ctx, "ED21LD0/LLN0.msvcb01.SmvOptFlds", model.MS)
+	v, err := c.Read(ctx, "ED21LD0/LLN0.msvcb01.OptFlds", model.MS)
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 	if v.BitLen() != 10 {
-		t.Fatalf("SmvOptFlds bit length = %d, want 10", v.BitLen())
+		t.Fatalf("OptFlds bit length = %d, want 10", v.BitLen())
 	}
 	// refreshTime, sampleSynchronized, sampleRate, timestamp, synchSourceId
 	for _, bit := range []int{0, 1, 2, 5, 6} {
 		if !v.Bit(bit) {
-			t.Errorf("SmvOptFlds bit %d clear, want set", bit)
+			t.Errorf("OptFlds bit %d clear, want set", bit)
 		}
 	}
 	// dataSet, security
 	for _, bit := range []int{3, 4} {
 		if v.Bit(bit) {
-			t.Errorf("SmvOptFlds bit %d set, want clear", bit)
+			t.Errorf("OptFlds bit %d set, want clear", bit)
 		}
 	}
-	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.msvcb01.SmpMod"), model.MS).Text(); got != "SmpPerSec" {
-		t.Errorf("SmpMod = %q, want SmpPerSec", got)
+	// SmpPerSec is 1 in the enumeration.
+	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.msvcb01.SmpMod"), model.MS).Int64(); got != 1 {
+		t.Errorf("SmpMod = %d, want 1 (SmpPerSec)", got)
+	}
+	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.msvcb01.MsvID"), model.MS).Text(); got != "ED21MSVCB01" {
+		t.Errorf("MsvID = %q, want the SCL smvID", got)
+	}
+	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.usvcb01.UsvID"), model.US).Text(); got != "ED21USVCB01" {
+		t.Errorf("UsvID = %q, want the SCL smvID", got)
 	}
 }
 
-// A log control block serves its dataset, log reference and the buffer
-// period, and stays writable only in the sense that the standard allows.
+// A log control block serves its dataset and log reference. The reference
+// names the log in LLN0 of the block's device, the IEC 61850-6 default
+// when the LogControl places it nowhere else.
 func TestLCBReadback(t *testing.T) {
 	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
 	if err != nil {
@@ -195,14 +249,27 @@ func TestLCBReadback(t *testing.T) {
 	if !mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.LogEna"), model.LG).Bool() {
 		t.Error("LogEna should be true: the SCL enables the log")
 	}
-	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.LogRef"), model.LG).Text(); got != "ED21/LLN0.EventLog" {
-		t.Errorf("LogRef = %q, want the SCL logName", got)
+	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.LogRef"), model.LG).Text(); got != "ED21LD0/LLN0$EventLog" {
+		t.Errorf("LogRef = %q, want ED21LD0/LLN0$EventLog", got)
 	}
-	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.BufTime"), model.LG).Int64(); got != 500 {
-		t.Errorf("BufTime = %d, want 500", got)
+	if got := mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.DatSet"), model.LG).Text(); got != "ED21LD0/LLN0$Measurements" {
+		t.Errorf("DatSet = %q, want the dataset reference", got)
 	}
-	if !mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.ReasonCode"), model.LG).Bool() {
-		t.Error("ReasonCode should default to true")
+	if got := len(mustRead(t, c, ctx, model.ObjectReference("ED21LD0/LLN0.lcb01.OldEnt"), model.LG).Bytes()); got != 8 {
+		t.Errorf("OldEnt is %d octets, want an 8-octet EntryID", got)
+	}
+}
+
+// A log placed in another logical node or device is referenced there.
+func TestLCBLogRefElsewhere(t *testing.T) {
+	lc := &model.LogControl{Name: "lcb", LogName: "Events", LogLDInst: "LD1", LogLN: "PRE_GAPC1"}
+	ld := &model.LogicalDevice{Name: "IEDLD0", Inst: "LD0"}
+	ln := &model.LogicalNode{Name: "LLN0", Class: "LLN0", LogControls: []*model.LogControl{lc}}
+	ld.Nodes = []*model.LogicalNode{ln}
+	server.New(&model.Model{Name: "IED", Devices: []*model.LogicalDevice{ld}})
+	a := ln.Object("lcb").Attribute("LogRef")
+	if got := a.Value.Text(); got != "IEDLD1/PRE_GAPC1$Events" {
+		t.Errorf("LogRef = %q, want IEDLD1/PRE_GAPC1$Events", got)
 	}
 }
 

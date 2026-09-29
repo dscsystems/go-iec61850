@@ -1280,6 +1280,8 @@ func (b *builder) buildGSEControl(iedName, apName, ldInst string, g *GSEControl)
 		DataSet: g.DatSet,
 		ConfRev: g.ConfRev,
 		Type:    gsTypeOf(g.Type),
+
+		FixedOffsEncoding: g.FixedOffs,
 	}
 	if gc.GoID == "" {
 		gc.GoID = g.Name
@@ -1383,7 +1385,20 @@ func buildLogControl(l *LogControl) *model.LogControl {
 		LogEna:     boolAttr(l.LogEna, true),
 		BufTime:    l.BufTime,
 		ReasonCode: boolAttr(l.ReasonCode, true),
+		LogLDInst:  strings.TrimSpace(l.LDInst),
+		LogLN:      logLNOf(l),
 	}
+}
+
+// logLNOf is the name of the logical node holding a LogControl's log, or
+// empty for the default, LLN0. lnClass is what names a node: a prefix or
+// instance without one does not.
+func logLNOf(l *LogControl) string {
+	class := strings.TrimSpace(l.LNClass)
+	if class == "" {
+		return ""
+	}
+	return strings.TrimSpace(l.Prefix) + class + strings.TrimSpace(l.LNInst)
 }
 
 // boolAttr parses an optional boolean attribute with a schema default.

@@ -1,6 +1,7 @@
 package goose
 
 import (
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -158,21 +159,39 @@ func TestTestAndNdsComAreTransmitted(t *testing.T) {
 // publisher could not report a clock that had lost synchronisation.
 func TestTimeQualityIsTransmitted(t *testing.T) {
 	tq := mms.TimeClockFailure | mms.TimeClockNotSynchronized | mms.TimeAccuracy(3)
-	p, cap := testPublisher(t, PublisherConfig{TimeQuality: tq})
+	p, cap := testPublisher(t, PublisherConfig{TimeQuality: &tq})
 	if err := p.Publish(nil); err != nil {
 		t.Fatal(err)
 	}
 	msgs := cap.messages()
-	if got := msgs[0].TimeQuality; got != tq {
-		t.Errorf("TimeQuality = %08b, want %08b", uint8(got), uint8(tq))
+	if got := msgs[0].TimeQuality; got == nil || *got != tq {
+		t.Errorf("TimeQuality = %v, want %08b", got, uint8(tq))
 	}
 	// The default is unchanged when nothing is configured.
 	p2, cap2 := testPublisher(t, PublisherConfig{})
 	if err := p2.Publish(nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := cap2.messages()[0].TimeQuality; got != mms.TimeAccuracy(10) {
-		t.Errorf("default TimeQuality = %08b, want accuracy 10", uint8(got))
+	if got := cap2.messages()[0].TimeQuality; got == nil || *got != mms.TimeAccuracy(10) {
+		t.Errorf("default TimeQuality = %v, want accuracy 10", got)
+	}
+	// A quality of 0 is a real quality, not "use the default", and a
+	// parsed message re-marshals with the quality it arrived with.
+	var zero mms.TimeQuality
+	p3, cap3 := testPublisher(t, PublisherConfig{TimeQuality: &zero})
+	if err := p3.Publish(nil); err != nil {
+		t.Fatal(err)
+	}
+	got := cap3.messages()[0]
+	if got.TimeQuality == nil || *got.TimeQuality != 0 {
+		t.Fatalf("TimeQuality = %v, want 0", got.TimeQuality)
+	}
+	again, err := Parse(got.Marshal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *again.TimeQuality != 0 {
+		t.Errorf("re-marshalled TimeQuality = %08b, want 0", uint8(*again.TimeQuality))
 	}
 }
 
@@ -218,8 +237,10 @@ func TestNewPublisherFromModel(t *testing.T) {
 		DstMAC: [6]byte{1, 0x0c, 0xcd, 3, 0, 1}, AppID: 0x2000,
 		VLANID: 0x123, VLANPri: 4, MinTime: 20, MaxTime: 100,
 	}
+	ld := &model.LogicalDevice{Name: "IEDLD0", Inst: "LD0"}
+	ln := &model.LogicalNode{Name: "LLN0", Class: "LLN0"}
 	cap := &capture{}
-	p, err := NewPublisherFromModel(cap, gc, [6]byte{2, 0, 0, 0, 0, 1})
+	p, err := NewPublisherFromModel(cap, ld, ln, gc, [6]byte{2, 0, 0, 0, 0, 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +268,43 @@ func TestNewPublisherFromModel(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].GoID != gc.GoID || msgs[0].ConfRev != 3 {
 		t.Errorf("message = %+v, want the configured identity and revision", msgs[0])
 	}
-	if _, err := NewPublisherFromModel(cap, nil, [6]byte{}); err == nil {
+	// gocbRef and datSet are full references, which is what a subscriber
+	// configured from the same SCL filters on.
+	if msgs[0].GoCbRef != "IEDLD0/LLN0$GO$gcb01" {
+		t.Errorf("gocbRef = %q, want IEDLD0/LLN0$GO$gcb01", msgs[0].GoCbRef)
+	}
+	if msgs[0].DatSet != "IEDLD0/LLN0$Measurements" {
+		t.Errorf("datSet = %q, want IEDLD0/LLN0$Measurements", msgs[0].DatSet)
+	}
+	if !(Filter{GoCbRef: "IEDLD0/LLN0$GO$gcb01"}).match(&msgs[0]) {
+		t.Error("a subscriber filtering on the block's reference rejects the stream")
+	}
+	if _, err := NewPublisherFromModel(cap, ld, ln, nil, [6]byte{}); err == nil {
 		t.Error("a nil control block should be an error")
+	}
+	if _, err := NewPublisherFromModel(cap, nil, ln, gc, [6]byte{}); err == nil {
+		t.Error("a missing logical device should be an error")
+	}
+}
+
+// sqNum rolls over to 1, not 0: 0 marks the first transmission of a
+// state, so a wrapped 0 would read as a state change that did not happen.
+func TestSqNumRollsOverToOne(t *testing.T) {
+	p, cap := testPublisher(t, PublisherConfig{Retrans: []time.Duration{time.Millisecond}})
+	stop := make(chan struct{})
+	p.wg.Add(1)
+	go p.retransmit(Message{GoCbRef: p.cfg.GoCbRef, StNum: 1, SqNum: math.MaxUint32 - 1}, stop)
+	deadline := time.Now().Add(5 * time.Second)
+	for len(cap.messages()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	close(stop)
+	p.wg.Wait()
+	msgs := cap.messages()
+	if len(msgs) < 2 {
+		t.Fatalf("%d retransmissions, want at least 2", len(msgs))
+	}
+	if msgs[0].SqNum != math.MaxUint32 || msgs[1].SqNum != 1 {
+		t.Errorf("sqNum went %d then %d, want %d then 1", msgs[0].SqNum, msgs[1].SqNum, uint32(math.MaxUint32))
 	}
 }

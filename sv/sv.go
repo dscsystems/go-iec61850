@@ -27,20 +27,21 @@ const (
 // SmpMod is the sample mode of IEC 61850-9-2: whether SmpRate counts
 // samples per measurement period, per second, or seconds per sample. It is
 // the smpMod [8] field of the ASDU, added in Edition 2.
+//
+// The values are the ones the standard puts on the wire, starting at 0.
+// Whether the field is present is recorded separately, in ASDU.HasSmpMod:
+// 0 is a real mode, not "absent", and a receiver reading 1 as "per period"
+// would take a per-second rate for a per-period one.
 type SmpMod uint8
 
 const (
-	// SmpModUnset is the zero value: the ASDU carried no smpMod, which is
-	// every Edition 1 stream and any stream that leaves the field out.
-	SmpModUnset SmpMod = 0
-	// SmpPerPeriod: SmpRate is samples per measurement period, the
-	// Edition 1 reading and the default when the field is present but the
-	// mode is not.
-	SmpPerPeriod SmpMod = 1
+	// SmpPerPeriod: SmpRate is samples per nominal period, the Edition 1
+	// reading and the meaning of an ASDU that omits the field.
+	SmpPerPeriod SmpMod = 0
 	// SmpPerSec: SmpRate is samples per second.
-	SmpPerSec SmpMod = 2
+	SmpPerSec SmpMod = 1
 	// SecPerSmp: SmpRate is seconds per sample.
-	SecPerSmp SmpMod = 3
+	SecPerSmp SmpMod = 2
 )
 
 func (m SmpMod) String() string {
@@ -52,7 +53,7 @@ func (m SmpMod) String() string {
 	case SecPerSmp:
 		return "SecPerSmp"
 	}
-	return "unset"
+	return fmt.Sprintf("SmpMod(%d)", uint8(m))
 }
 
 // ASDU is one Application Service Data Unit within a sampled-value APDU.
@@ -64,8 +65,11 @@ type ASDU struct {
 	RefrTm   time.Time // zero when absent
 	SmpSynch uint8
 	SmpRate  uint16 // zero when absent
-	SmpMod   SmpMod // smpMod [8], zero when absent
-	Sample   []byte // the raw dataset payload (phsMeas for 9-2LE)
+	SmpMod   SmpMod // smpMod [8]; meaningful only when HasSmpMod
+	// HasSmpMod reports whether smpMod [8] is present. An Edition 1 stream
+	// omits it, which a receiver reads as SmpPerPeriod.
+	HasSmpMod bool
+	Sample    []byte // the raw dataset payload (phsMeas for 9-2LE)
 }
 
 // PDU is a sampled-value APDU carrying one or more ASDUs.
@@ -119,9 +123,10 @@ func (a *ASDU) element() *asn1.Element {
 	// smpMod [8] is the last field of the Edition 2 ASDU, after the
 	// sample. It says how to read SmpRate, so a receiver that has it and
 	// one that does not interpret the same field differently. It is
-	// omitted when unset, which is what an Edition 1 stream carries.
-	if a.SmpMod != SmpModUnset {
-		el.Add(asn1.Prim(asn1.ContextPrimitive(8), []byte{byte(a.SmpMod)}))
+	// omitted unless HasSmpMod, which is what an Edition 1 stream carries.
+	// Like smpRate it is OCTET STRING (SIZE(2)), not a minimal INTEGER.
+	if a.HasSmpMod {
+		el.Add(asn1.Prim(asn1.ContextPrimitive(8), []byte{0, byte(a.SmpMod)}))
 	}
 	return el
 }
@@ -201,8 +206,9 @@ func parseASDU(content []byte) (*ASDU, error) {
 		return nil, fmt.Errorf("sv: sample: %w", err)
 	}
 	a.Sample = append([]byte(nil), b...)
-	if b, ok, _ := d.Optional(asn1.ContextPrimitive(8)); ok && len(b) > 0 {
-		a.SmpMod = SmpMod(b[len(b)-1])
+	if b, ok, _ := d.Optional(asn1.ContextPrimitive(8)); ok {
+		a.SmpMod = SmpMod(beUint16(b))
+		a.HasSmpMod = true
 	}
 	return a, nil
 }

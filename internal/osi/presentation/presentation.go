@@ -94,6 +94,23 @@ type Negotiated struct {
 func (n Negotiated) HasACSE() bool { return n.ACSE != 0 }
 func (n Negotiated) HasMMS() bool  { return n.MMS != 0 }
 
+// Negotiate decides which of the proposed contexts this library accepts,
+// without building anything. A responder needs the outcome before the CPA:
+// the AARE inside it names the MMS context by the identifier the peer chose.
+func Negotiate(proposed []Context) Negotiated {
+	var neg Negotiated
+	for _, c := range proposed {
+		switch {
+		case !c.Acceptable():
+		case c.IsACSE():
+			neg.ACSE = c.ID
+		case c.IsMMS():
+			neg.MMS = c.ID
+		}
+	}
+	return neg
+}
+
 // Result is the per-context outcome in a CPA's result list.
 type Result int
 
@@ -121,7 +138,7 @@ const (
 // acseContextID is the identifier the peer gave the ACSE context, used to
 // wrap the AARE.
 func BuildCPA(respondingPSel []byte, proposed []Context, acseData []byte) (Negotiated, []byte) {
-	var neg Negotiated
+	neg := Negotiate(proposed)
 	normal := asn1.Cons(asn1.ContextConstructed(2))
 	if len(respondingPSel) > 0 {
 		// responding-presentation-selector [3] IMPLICIT OCTET STRING
@@ -129,15 +146,10 @@ func BuildCPA(respondingPSel []byte, proposed []Context, acseData []byte) (Negot
 	}
 	results := asn1.Cons(asn1.ContextConstructed(5))
 	for _, c := range proposed {
-		switch {
-		case !c.Acceptable():
+		if c.Acceptable() {
+			results.Add(contextResult(ResultAcceptance))
+		} else {
 			results.Add(contextResult(ResultProviderRejection))
-		case c.IsACSE():
-			neg.ACSE = c.ID
-			results.Add(contextResult(ResultAcceptance))
-		case c.IsMMS():
-			neg.MMS = c.ID
-			results.Add(contextResult(ResultAcceptance))
 		}
 	}
 	normal.Add(results)

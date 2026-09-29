@@ -44,10 +44,10 @@ type PublisherConfig struct {
 	// deliberately.
 	Test   bool
 	NdsCom bool
-	// TimeQuality is the quality of the time stamp in the message. The
-	// zero value carries the library's default: leap seconds known and an
-	// accuracy of 10.
-	TimeQuality mms.TimeQuality
+	// TimeQuality is the quality of the time stamp in the message. Nil
+	// carries the library's default: leap seconds known and an accuracy
+	// of 10.
+	TimeQuality *mms.TimeQuality
 }
 
 // Publisher sends GOOSE messages with the standard retransmission state
@@ -207,7 +207,13 @@ func (p *Publisher) retransmit(msg Message, stop chan struct{}) {
 			return
 		case <-time.After(p.cfg.Retrans[idx]):
 		}
+		// sqNum rolls over to 1, not 0: 0 marks the first transmission of
+		// a state (IEC 61850-8-1), so a receiver would read a wrapped 0 as
+		// a state change that did not happen.
 		msg.SqNum++
+		if msg.SqNum == 0 {
+			msg.SqNum = 1
+		}
 		msg.TimeAllowedToLive = p.tatl(i + 1)
 		// Send under the publisher lock and re-check stop, so a stale
 		// retransmission can never follow the next Publish on the wire.

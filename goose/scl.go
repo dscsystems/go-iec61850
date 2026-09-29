@@ -58,19 +58,34 @@ const maxRetransSteps = 16
 // configuration revision and retransmission timing from its configuration.
 // It is the SCL equivalent of NewPublisher, and it is what gives a server
 // configured from a CID the 100 ms GOOSE its MaxTime asks for.
-func NewPublisherFromModel(iface ethernet.Interface, gc *model.GSEControl, srcMAC [6]byte) (*Publisher, error) {
+//
+// ld and ln are the logical device and node the block belongs to (LLN0 in
+// practice). They are needed because gocbRef and datSet go on the wire as
+// full references, "LD/LLN0$GO$gcb01" and "LD/LLN0$DataSet": a subscriber
+// configured from the same SCL matches on those, and a bare block name
+// would be filtered out as someone else's stream.
+func NewPublisherFromModel(iface ethernet.Interface, ld *model.LogicalDevice, ln *model.LogicalNode,
+	gc *model.GSEControl, srcMAC [6]byte) (*Publisher, error) {
 	if gc == nil {
 		return nil, fmt.Errorf("goose: nil GOOSE control block")
 	}
-	ref := gc.Name
-	if ref == "" {
-		ref = gc.GoID
+	if ld == nil || ln == nil {
+		return nil, fmt.Errorf("goose: control block %s: the logical device and node are required "+
+			"to build its reference", gc.Name)
+	}
+	if gc.Type == model.GSSE {
+		return nil, fmt.Errorf("goose: control block %s is GSSE, which this library does not publish", gc.Name)
+	}
+	prefix := ld.Name + "/" + ln.Name + "$"
+	datSet := ""
+	if gc.DataSet != "" {
+		datSet = prefix + gc.DataSet
 	}
 	cfg := PublisherConfig{
 		DstMAC:  gc.DstMAC,
 		AppID:   gc.AppID,
-		GoCbRef: ref,
-		DatSet:  gc.DataSet,
+		GoCbRef: prefix + "GO$" + gc.Name,
+		DatSet:  datSet,
 		GoID:    gc.GoID,
 		ConfRev: gc.ConfRev,
 		SrcMAC:  srcMAC,

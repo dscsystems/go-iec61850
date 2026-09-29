@@ -21,10 +21,10 @@ type LEConfig struct {
 	SamplesPerCycle int
 	// NominalHz is the power system frequency (50 or 60).
 	NominalHz int
-	// SmpMod is the sample mode to declare in smpMod [8]. Zero, the
-	// default, leaves the field out, which is what an Edition 1 receiver
-	// expects. Set it when publishing to Edition 2 equipment that reads
-	// SmpRate through it.
+	// SmpMod is the sample mode to declare in smpMod [8] when Opts.SmpMod
+	// is set. Leaving the field out, the default, is what an Edition 1
+	// receiver expects; declare it when publishing to Edition 2 equipment
+	// that reads SmpRate through it.
 	SmpMod SmpMod
 	// DatSet is the dataset name to declare when Opts.DataSet is set.
 	DatSet string
@@ -142,6 +142,7 @@ func (p *LEPublisher) asdu(s *LESample) *ASDU {
 	}
 	if p.cfg.Opts.SmpMod {
 		a.SmpMod = p.cfg.SmpMod
+		a.HasSmpMod = true
 	}
 	return a
 }

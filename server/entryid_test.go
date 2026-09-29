@@ -2,8 +2,10 @@ package server
 
 import (
 	"bytes"
-	"github.com/dscsystems/go-iec61850/model"
+	"sync"
 	"testing"
+
+	"github.com/dscsystems/go-iec61850/model"
 )
 
 // An EntryID identifies a report uniquely within the server, not within one
@@ -28,6 +30,33 @@ func TestEntryIDIsUniquePerServer(t *testing.T) {
 	other := &reportManager{}
 	if bytes.Equal(rm.nextEntryID(), other.nextEntryID()) {
 		t.Error("two report managers produced the same EntryID")
+	}
+}
+
+// Buffered blocks emit under their own locks, so two of them can take an
+// EntryID at the same moment. Each must still get its own.
+func TestEntryIDConcurrentBlocks(t *testing.T) {
+	rm := &reportManager{}
+	const workers, each = 8, 500
+	ids := make(chan string, workers*each)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range each {
+				ids <- string(rm.nextEntryID())
+			}
+		}()
+	}
+	wg.Wait()
+	close(ids)
+	seen := map[string]bool{}
+	for id := range ids {
+		if seen[id] {
+			t.Fatalf("EntryID %x handed out twice", id)
+		}
+		seen[id] = true
 	}
 }
 
@@ -62,19 +91,21 @@ func TestEntryIDSurvivesRestart(t *testing.T) {
 // functional constraint IEC 61850-8-1 gives it, and a GSSE block is told
 // apart from a plain GOOSE one.
 func TestControlBlockConstraint(t *testing.T) {
-	plain := buildGoCBObject(&model.GSEControl{Name: "gcb01", GoID: "G", Type: model.GOOSE})
+	ld := &model.LogicalDevice{Name: "IEDLD0", Inst: "LD0"}
+	ln := &model.LogicalNode{Name: "LLN0", Class: "LLN0"}
+	plain := buildGoCBObject(ld, ln, &model.GSEControl{Name: "gcb01", GoID: "G", Type: model.GOOSE})
 	if got := plain.Attributes[0].FC; got != model.GO {
 		t.Errorf("a GOOSE block is served under FC %v, want GO", got)
 	}
-	legacy := buildGoCBObject(&model.GSEControl{Name: "gscb01", GoID: "G", Type: model.GSSE})
+	legacy := buildGoCBObject(ld, ln, &model.GSEControl{Name: "gscb01", GoID: "G", Type: model.GSSE})
 	if got := legacy.Attributes[0].FC; got != model.GS {
 		t.Errorf("a GSSE block is served under FC %v, want GS", got)
 	}
-	mcast := buildSVCBObject(&model.SVControl{Name: "msvcb01", Multicast: true})
+	mcast := buildSVCBObject(ld, ln, &model.SVControl{Name: "msvcb01", Multicast: true})
 	if got := mcast.Attributes[0].FC; got != model.MS {
 		t.Errorf("a multicast SV block is served under FC %v, want MS", got)
 	}
-	ucast := buildSVCBObject(&model.SVControl{Name: "usvcb01"})
+	ucast := buildSVCBObject(ld, ln, &model.SVControl{Name: "usvcb01"})
 	if got := ucast.Attributes[0].FC; got != model.US {
 		t.Errorf("a unicast SV block is served under FC %v, want US", got)
 	}

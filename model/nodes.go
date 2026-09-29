@@ -186,6 +186,9 @@ type GSEControl struct {
 	MinTime   uint32 // ms
 	MaxTime   uint32 // ms
 	FixedOffs uint32 // ms; zero when the block requests no fixed offset
+	// FixedOffsEncoding is GSEControl@fixedOffs: the block publishes with
+	// the fixed-offset (fixed-length) encoding, served as GoCB.FixedOffs.
+	FixedOffsEncoding bool
 }
 
 // SmpMod is the sample mode of a sampled-value control block: the rate is
@@ -253,6 +256,11 @@ type LogControl struct {
 	// reported with a reason for each entry.
 	BufTime    uint32
 	ReasonCode bool
+	// LogLDInst and LogLN locate the logical node holding the log
+	// (LogControl@ldInst, and prefix+lnClass+lnInst). Empty means the
+	// defaults of IEC 61850-6: the block's own device, and LLN0.
+	LogLDInst string
+	LogLN     string
 }
 
 // SettingControl describes the setting groups of a logical device.

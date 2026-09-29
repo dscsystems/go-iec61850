@@ -6,6 +6,7 @@ package acse
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/dscsystems/go-iec61850/asn1"
 )
@@ -24,23 +25,22 @@ var oidMMSContext = asn1.OID{1, 0, 9506, 2, 3}
 
 // The ACSI application context name, the alternative IEC 61850-7-2 defines
 // for the association. Some servers accept only this one; most, including
-// the reference C stack, accept the plain MMS context. Which is used is
-// therefore a per-connection choice rather than a library-wide one, and
-// neither is wrong: see SetApplicationContext.
+// the reference C stack, accept the plain MMS context. Neither is wrong:
+// see SetApplicationContext.
 var oidACSIContext = asn1.OID{1, 0, 61850, 4, 0, 2}
 
-// SetApplicationContext selects the application-context-name an association
+// appContext is the ApplicationContext an AARQ names. It is atomic because
+// SetApplicationContext may run while other goroutines are dialling.
+var appContext atomic.Int32
+
+// SetApplicationContext selects the application-context-name an AARQ
 // names: ACSIContext for the IEC 61850 context, MMSContext for the plain
-// MMS one. It is process-wide, so set it before dialling. The default is
-// the MMS context, which is what interoperates with the widest set of
-// peers.
+// MMS one. It is process-wide and affects associations dialled after it.
+// The default is the MMS context, which is what interoperates with the
+// widest set of peers. A responder does not use it: an AARE echoes the
+// context the peer proposed (AAREFor).
 func SetApplicationContext(c ApplicationContext) {
-	switch c {
-	case ACSIContext:
-		oidMMSContext = oidACSIContext
-	default:
-		oidMMSContext = asn1.OID{1, 0, 9506, 2, 3}
-	}
+	appContext.Store(int32(c))
 }
 
 // ApplicationContext names an application context for SetApplicationContext.
@@ -53,10 +53,19 @@ const (
 	ACSIContext
 )
 
-// ApplicationContextOID returns the OID in use, for a caller that reports
-// the negotiated context to a user.
+// ApplicationContextOID returns the OID an AARQ names, for a caller that
+// reports it to a user.
 func ApplicationContextOID() asn1.OID {
+	if ApplicationContext(appContext.Load()) == ACSIContext {
+		return oidACSIContext
+	}
 	return oidMMSContext
+}
+
+// knownApplicationContext reports whether oid is one of the two contexts
+// this library serves.
+func knownApplicationContext(oid asn1.OID) bool {
+	return oid.Equal(oidMMSContext) || oid.Equal(oidACSIContext)
 }
 
 // PresentationContextMMS is the presentation-context-identifier used for
@@ -75,7 +84,7 @@ func AARQ(mmsInitiate []byte, password string) []byte {
 func AARQWithIdentity(mmsInitiate []byte, password string, called, calling Identity) []byte {
 	seq := asn1.Cons(tagAARQ,
 		// application-context-name [1] EXPLICIT OID
-		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, oidMMSContext)),
+		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, ApplicationContextOID())),
 	)
 	// called-AP-title [2] .. [5], then calling-AP-title [6] .. [9].
 	addIdentity(seq, 2, called)
@@ -93,7 +102,7 @@ func AARQWithIdentity(mmsInitiate []byte, password string, called, calling Ident
 			asn1.Prim(asn1.ContextPrimitive(0), []byte(password))))
 	}
 	// user-information [30] IMPLICIT SEQUENCE OF EXTERNAL
-	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiate)))
+	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiate, PresentationContextMMS)))
 	return seq.Encode()
 }
 
@@ -181,8 +190,29 @@ func AARE(mmsInitiateResp []byte) []byte {
 // An empty identity produces the same bare acceptance AARE builds, so a
 // server that has nothing to claim is unchanged.
 func AAREWithIdentity(mmsInitiateResp []byte, responding Identity) []byte {
+	return AAREFor(mmsInitiateResp, responding, nil, 0)
+}
+
+// AAREFor is AAREWithIdentity answering a specific AARQ. proposed is the
+// application-context-name the peer proposed, which the AARE echoes when
+// it is one this library serves: answering an ACSI proposal with the MMS
+// context, or the reverse, is a mismatch a strict peer refuses. Nil or an
+// unknown context answers with the plain MMS one.
+//
+// mmsContextID is the presentation-context-identifier the peer gave the
+// MMS abstract syntax, which the user information's EXTERNAL must carry as
+// its indirect-reference: it tells the peer which syntax the
+// InitiateResponse is in, and the identifier is the proposer's choice, not
+// a constant. Zero uses the conventional PresentationContextMMS.
+func AAREFor(mmsInitiateResp []byte, responding Identity, proposed asn1.OID, mmsContextID int) []byte {
+	if !knownApplicationContext(proposed) {
+		proposed = oidMMSContext
+	}
+	if mmsContextID == 0 {
+		mmsContextID = PresentationContextMMS
+	}
 	seq := asn1.Cons(tagAARE,
-		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, oidMMSContext)),
+		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, proposed)),
 		// result [2] EXPLICIT INTEGER accepted(0)
 		asn1.Cons(asn1.ContextConstructed(2), asn1.IntElem(asn1.TagInteger, 0)),
 		// result-source-diagnostic [3] EXPLICIT CHOICE acse-service-user [1] INTEGER 0
@@ -192,7 +222,7 @@ func AAREWithIdentity(mmsInitiateResp []byte, responding Identity) []byte {
 	// responding-AP-title [4] .. responding-AE-invocation-identifier [7],
 	// which the ASN.1 places between the diagnostic and the user information.
 	addIdentity(seq, 4, responding)
-	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiateResp)))
+	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiateResp, mmsContextID)))
 	return seq.Encode()
 }
 
@@ -219,10 +249,10 @@ func RLRE() []byte {
 
 // external wraps a pre-encoded MMS PDU as an ACSE EXTERNAL using the MMS
 // presentation context indirect reference and single-ASN1-type encoding.
-func external(mmsPDU []byte) *asn1.Element {
+func external(mmsPDU []byte, contextID int) *asn1.Element {
 	return asn1.Cons(asn1.Tag{Class: asn1.ClassUniversal, Constructed: true, Number: 8}, // [UNIVERSAL 8] EXTERNAL
-		asn1.IntElem(asn1.TagInteger, PresentationContextMMS), // indirect-reference
-		asn1.RawContent(asn1.ContextConstructed(0), mmsPDU),   // single-ASN1-type [0]
+		asn1.IntElem(asn1.TagInteger, int64(contextID)),     // indirect-reference
+		asn1.RawContent(asn1.ContextConstructed(0), mmsPDU), // single-ASN1-type [0]
 	)
 }
 
@@ -285,6 +315,10 @@ type Request struct {
 	// expects the responding identity in the AARE to match.
 	Called  Identity
 	Calling Identity
+
+	// ApplicationContext is the application-context-name the peer
+	// proposed, nil when it could not be decoded.
+	ApplicationContext asn1.OID
 }
 
 // ParseAARQ parses an A-ASSOCIATE request and extracts the MMS user data
@@ -317,6 +351,12 @@ func ParseAARQFull(apdu []byte) (Request, error) {
 			continue
 		}
 		switch tag {
+		case asn1.ContextConstructed(1): // application-context-name
+			if oidBody, err := asn1.NewDecoder(c).Expect(asn1.TagOID); err == nil {
+				if oid, err := asn1.DecodeOID(oidBody); err == nil {
+					req.ApplicationContext = oid
+				}
+			}
 		case asn1.ContextConstructed(12): // calling-authentication-value
 			av := asn1.NewDecoder(c)
 			if pw, ok, _ := av.Optional(asn1.ContextPrimitive(0)); ok {

@@ -119,7 +119,10 @@ every IED's GOOSE addressing is missing.
   device that declares its groups in SCL gets them without configuration.
 - Log, file and dataset services (see below).
 - Control-block objects: `GoCB`, `GsCB`, `MSVCB`, `USVCB`, `LCB` and `SGCB`
-  are all materialised and browsable.
+  are all materialised and browsable, with the components and names of the
+  8-1 MMS structures (`GoEna`, `DstAddress`, `MsvID`/`UsvID`, `OldEntrTm`,
+  ...). They are read-only; the enable flags read false because the server
+  publishes neither GOOSE nor SV. `GsCB` carries only `GsEna` and `GsID`.
 
 ### Not implemented
 
@@ -176,12 +179,16 @@ the class is reported as unknown to this library.
   skips 0, which 8-1 reserves.
 - `test` and `ndsCom` are settable and reach the wire.
 - The time quality of the message stamp is settable, so a publisher whose
-  clock has lost synchronisation can say so.
+  clock has lost synchronisation can say so. `sqNum` rolls over to 1, and a
+  subscriber accepts the rollover of either counter.
 - `RetransFromSCL` builds the retransmission schedule from a control
   block's `MinTime` and `MaxTime`, and `NewPublisherFromModel` builds a
-  publisher from a model. This is how 100 ms GOOSE is configured.
+  publisher from a model, with `gocbRef` and `datSet` as full references
+  (`LD/LLN0$GO$gcb01`). This is how 100 ms GOOSE is configured.
 - Report `OptFlds` bit assignments and the report field order.
 - Presentation context negotiation, by identifier rather than by position.
+  The AARE names the MMS context by the peer's identifier and echoes the
+  application context the peer proposed (MMS or ACSI).
 
 ### Not implemented
 
@@ -198,10 +205,12 @@ the class is reported as unknown to this library.
 
 - `savPdu` and ASDU encoding and decoding, including the Edition 2
   `smpMod [8]` field, which says whether `SmpRate` counts samples per
-  period, per second, or seconds per sample.
+  period (0), per second (1), or seconds per sample (2). Presence is
+  `ASDU.HasSmpMod`, since 0 is a mode and not absence.
 - The optional ASDU fields (`smpRate`, `refrTm`, `datSet`, `smpMod`) are
   emitted only when the publisher's configuration asks for them, and
-  `SmvOpts` from the SCL becomes the `SmvOptFlds` bit string.
+  `SmvOpts` from the SCL becomes the SV control block's `OptFlds` bit
+  string.
 - The 9-2LE `PhsMeas1` dataset, with `SetQuality` alongside `Quality`.
 - Multi-ASDU APDUs.
 
