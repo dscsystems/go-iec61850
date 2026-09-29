@@ -78,7 +78,7 @@ every IED's GOOSE addressing is missing.
 - `Val@sGroup` per setting group, exposed as `model.SettingGroups`, with
   `SettingControl@actSG` selecting the group the objects serve.
 - `SmvOpts`, `smpMod`, `GSEControl@type`, `Protocol` (R-GOOSE/R-SV),
-  `FixedOffs`, `RptEnabled/ClientLN`, `dbprefix`, `bufDepth`, the log
+  `GSEControl@fixedOffs`, `RptEnabled/ClientLN`, `dbprefix`, `bufDepth`, the log
   control block's logical-node attributes, `resvTms`.
 - `LNodeType` identified by `(id, lnClass)`, so a document reusing an id
   across node classes resolves each to its own template.
@@ -192,6 +192,9 @@ the class is reported as unknown to this library.
 
 ### Not implemented
 
+- **Fixed-offset GOOSE encoding.** `GSEControl@fixedOffs` is loaded,
+  served as `GoCB.FixedOffs` and reported; a publisher still encodes the
+  dataset with variable lengths.
 - **GOOSE TLV encoding** (`allData` as a tagged list). Some protection
   functions use it; the data set is encoded as a flat `SEQUENCE OF Data`.
 - **62351-6 message signing.** A trailing security field is parsed past and

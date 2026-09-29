@@ -380,6 +380,13 @@ func TestGSEControlVariants(t *testing.T) {
 	if got := byName["gscb01"].Type; got != model.GSSE {
 		t.Errorf("gscb01 type = %v, want GSSE", got)
 	}
+	// fixedOffs is the encoding flag on the control block. It is carried
+	// as configured and reported, since the encoding is not implemented.
+	if !byName["gcb01"].FixedOffs || byName["gscb01"].FixedOffs {
+		t.Errorf("FixedOffs = %v/%v, want true for gcb01 only",
+			byName["gcb01"].FixedOffs, byName["gscb01"].FixedOffs)
+	}
+	assertDiagnostic(t, m, "fixed-offset")
 	assertDiagnostic(t, m, "R-GOOSE")
 	assertDiagnostic(t, m, "GSSE")
 }

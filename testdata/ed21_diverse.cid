@@ -51,7 +51,6 @@
           </Address>
           <MinTime unit="s" multiplier="m">20</MinTime>
           <MaxTime unit="s" multiplier="m">1000</MaxTime>
-          <FixedOffs unit="s" multiplier="m">0</FixedOffs>
         </GSE>
         <GSE ldInst="LD0" cbName="gscb01" desc="GSSE block">
           <Address>

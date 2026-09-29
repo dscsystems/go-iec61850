@@ -134,16 +134,13 @@ type P struct {
 }
 
 // GSE carries the multicast address and timing of one GOOSE control block.
-// FixedOffs requests a fixed offset for the GOOSE frame (IEC 61850-8-1,
-// Ed 2.1), which is how a device reserves bandwidth on a saturated link.
 type GSE struct {
-	LDInst    string    `xml:"ldInst,attr"`
-	CBName    string    `xml:"cbName,attr"`
-	Desc      string    `xml:"desc,attr"`
-	Address   *Address  `xml:"Address"`
-	MinTime   *DurUnits `xml:"MinTime"`
-	MaxTime   *DurUnits `xml:"MaxTime"`
-	FixedOffs *DurUnits `xml:"FixedOffs"`
+	LDInst  string    `xml:"ldInst,attr"`
+	CBName  string    `xml:"cbName,attr"`
+	Desc    string    `xml:"desc,attr"`
+	Address *Address  `xml:"Address"`
+	MinTime *DurUnits `xml:"MinTime"`
+	MaxTime *DurUnits `xml:"MaxTime"`
 }
 
 // SMV carries the multicast address of one sampled-value control block.
@@ -636,13 +633,16 @@ type ClientLN struct {
 // transmission profile, "R-GOOSE" for routable GOOSE (IEC 61850-8-1 and
 // IEC 61850-90-5). SecurityEnable requests IEC 62351-6 protection.
 type GSEControl struct {
-	Name           string     `xml:"name,attr"`
-	Desc           string     `xml:"desc,attr"`
-	AppID          string     `xml:"appID,attr"`
-	DatSet         string     `xml:"datSet,attr"`
-	DBPrefix       string     `xml:"dbprefix,attr"`
-	ConfRev        uint32     `xml:"confRev,attr"`
-	Type           string     `xml:"type,attr"` // "GOOSE" (default) or "GSSE"
+	Name     string `xml:"name,attr"`
+	Desc     string `xml:"desc,attr"`
+	AppID    string `xml:"appID,attr"`
+	DatSet   string `xml:"datSet,attr"`
+	DBPrefix string `xml:"dbprefix,attr"`
+	ConfRev  uint32 `xml:"confRev,attr"`
+	Type     string `xml:"type,attr"` // "GOOSE" (default) or "GSSE"
+	// FixedOffs selects the fixed-offset encoding of IEC 61850-8-1, in
+	// which every dataset member has a fixed position and length in the
+	// frame. It is a flag on the control block, not a time.
 	FixedOffs      bool       `xml:"fixedOffs,attr"`
 	SecurityEnable string     `xml:"securityEnable,attr"`
 	Protocol       *Protocol  `xml:"Protocol"`

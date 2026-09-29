@@ -179,16 +179,18 @@ type GSEControl struct {
 	Protocol string
 	// Communication parameters resolved from the SCL Communication
 	// section (zero when absent).
-	DstMAC    [6]byte
-	AppID     uint16
-	VLANID    uint16
-	VLANPri   uint8
-	MinTime   uint32 // ms
-	MaxTime   uint32 // ms
-	FixedOffs uint32 // ms; zero when the block requests no fixed offset
-	// FixedOffsEncoding is GSEControl@fixedOffs: the block publishes with
-	// the fixed-offset (fixed-length) encoding, served as GoCB.FixedOffs.
-	FixedOffsEncoding bool
+	DstMAC  [6]byte
+	AppID   uint16
+	VLANID  uint16
+	VLANPri uint8
+	MinTime uint32 // ms
+	MaxTime uint32 // ms
+	// FixedOffs is GSEControl@fixedOffs: the block asks for the
+	// fixed-offset encoding of IEC 61850-8-1, in which every dataset member
+	// has a fixed position and length in the frame. It is served as
+	// GoCB.FixedOffs. This library encodes GOOSE only with variable
+	// lengths, so the loader reports a block that sets it.
+	FixedOffs bool
 }
 
 // SmpMod is the sample mode of a sampled-value control block: the rate is

@@ -1281,7 +1281,7 @@ func (b *builder) buildGSEControl(iedName, apName, ldInst string, g *GSEControl)
 		ConfRev: g.ConfRev,
 		Type:    gsTypeOf(g.Type),
 
-		FixedOffsEncoding: g.FixedOffs,
+		FixedOffs: g.FixedOffs,
 	}
 	if gc.GoID == "" {
 		gc.GoID = g.Name
@@ -1298,11 +1298,15 @@ func (b *builder) buildGSEControl(iedName, apName, ldInst string, g *GSEControl)
 				"implemented; the block is treated as plain GOOSE")
 		}
 	}
+	if g.FixedOffs {
+		b.diag.addf("GSEControl "+g.Name, "fixedOffs requests the fixed-offset GOOSE "+
+			"encoding, which is not implemented; a publisher built from this block "+
+			"encodes its dataset with variable lengths")
+	}
 	if gse := findGSE(b.scl, iedName, apName, ldInst, g.Name); gse != nil {
 		gc.DstMAC, gc.AppID, gc.VLANID, gc.VLANPri = addressOf(gse.Address)
 		gc.MinTime = durMS(gse.MinTime)
 		gc.MaxTime = durMS(gse.MaxTime)
-		gc.FixedOffs = durMS(gse.FixedOffs)
 	}
 	return gc
 }

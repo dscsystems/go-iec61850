@@ -90,7 +90,7 @@ func buildGoCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, gc *model.G
 	add(dstAddress(fc, gc.DstMAC, gc.VLANPri, gc.VLANID, gc.AppID))
 	add(cbAttr(fc, "MinTime", mms.NewUint32(gc.MinTime)))
 	add(cbAttr(fc, "MaxTime", mms.NewUint32(gc.MaxTime)))
-	add(cbAttr(fc, "FixedOffs", mms.NewBool(gc.FixedOffsEncoding)))
+	add(cbAttr(fc, "FixedOffs", mms.NewBool(gc.FixedOffs)))
 	return do
 }
 
