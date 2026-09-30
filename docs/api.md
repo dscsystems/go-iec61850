@@ -226,6 +226,7 @@ data, _ := c.ReadFile(ctx, "COMTRADE/rec001.dat")
 
 _ = c.SetFile(ctx, "settings/new.xml", xmlBytes)  // MMS obtainFile; the server reads it back
 _ = c.DeleteFile(ctx, "COMTRADE/rec001.dat")
+_ = c.RenameFile(ctx, "settings/new.xml", "settings/active.xml") // MMS fileRename; never overwrites
 ```
 
 ### Logs
@@ -312,6 +313,22 @@ srv.Update(func(tx *server.Tx) {
 })
 
 v := srv.Read("IED1LD0/GGIO1.AnIn1.mag.f", model.MX)   // server-local snapshot
+```
+
+### Service tracking
+
+A model with an LTRK logical node (IEC 61850-7-2 Edition 2) gets its
+tracking objects kept by the server: every control service and every write
+to a report, log, GOOSE, sampled-value or setting group control block is
+recorded in the matching object (`SpcTrk`, `BrcbTrk`, `SgcbTrk`, …) with
+`objRef`, `serviceType` (`model.ServiceType`), `errorCode`
+(`model.ServiceError`), `t` and the block's state or the command, as
+libiec61850 records them. `objRef` raises data-update, so a report control
+block over a data set of tracking objects reports each service.
+
+```go
+v, _ := c.Read(ctx, "IED1LD0/LTRK1.SpcTrk.serviceType", model.SR)
+if model.ServiceType(v.Int64()) == model.ServiceOperate { /* ... */ }
 ```
 
 ### Write access control
@@ -542,6 +559,7 @@ srv.OnSVControl(func(ev server.SVControlEvent) {
 // Client side.
 _ = c.ReserveUSVCB(ctx, "MU01LD0/LLN0.usvcb01", true)
 _ = c.EnableSVCB(ctx, "MU01LD0/LLN0.usvcb01", true /* unicast */, true)
+cb, _ := c.GetSVCB(ctx, "MU01LD0/LLN0.usvcb01") // cb.Unicast, cb.SvEna, cb.SvID, cb.DstAddress...
 ```
 
 ---

@@ -20,6 +20,7 @@ const (
 	svcObtainFile          = 46
 	svcInitializeJournal   = 67
 	svcReportJournalStatus = 68
+	svcFileRename          = 75
 	svcFileDelete          = 76
 )
 
@@ -99,6 +100,25 @@ func (r *rootFS) Create(name string) (io.WriteCloser, error) {
 
 func (r *rootFS) Remove(name string) error { return r.root.Remove(name) }
 
+// Rename links the file under its new name, which fails if that name is
+// taken, and then removes the old one: an existing file is never
+// replaced, as a plain rename would on POSIX.
+func (r *rootFS) Rename(oldname, newname string) error {
+	if err := r.root.Link(oldname, newname); err != nil {
+		return err
+	}
+	return r.root.Remove(oldname)
+}
+
+// RenameFS is a WritableFS that can also rename a file: with one,
+// WithFileStore also serves MMS fileRename. Rename fails with an error
+// matching fs.ErrExist when the new name is taken, and fs.ErrNotExist when
+// the old one is missing. DirFS makes one.
+type RenameFS interface {
+	WritableFS
+	Rename(oldname, newname string) error
+}
+
 // fsName maps an MMS file name to an fs.FS path: separators become
 // slashes, a leading one is dropped, and a name that would leave the store
 // is refused.
@@ -153,6 +173,38 @@ func (h *handler) fileDelete(content []byte) (*asn1.Element, error) {
 	}
 	h.s.log.Info("server: file deleted", "file", name)
 	return asn1.Prim(asn1.ContextPrimitive(svcFileDelete), nil), nil
+}
+
+func (h *handler) fileRename(content []byte) (*asn1.Element, error) {
+	var r RenameFS
+	if w, ok := h.writable(); ok {
+		r, ok = w.(RenameFS)
+		if !ok {
+			return nil, fileErr(fileAccessDenied)
+		}
+	} else {
+		return nil, fileErr(fileAccessDenied)
+	}
+	rawOld, rawNew, err := mms.ParseFileRename(content)
+	if err != nil {
+		return nil, fileErr(fileNameSyntaxError)
+	}
+	oldName, ok1 := fsName(rawOld)
+	newName, ok2 := fsName(rawNew)
+	if !ok1 || !ok2 {
+		return nil, fileErr(fileNameSyntaxError)
+	}
+	if err := r.Rename(oldName, newName); err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil, fileErr(fileNonExistent)
+		case errors.Is(err, fs.ErrExist):
+			return nil, fileErr(fileDuplicateName)
+		}
+		return nil, fileErr(fileAccessDenied)
+	}
+	h.s.log.Info("server: file renamed", "from", oldName, "to", newName)
+	return asn1.Prim(asn1.ContextPrimitive(svcFileRename), nil), nil
 }
 
 // maxObtainedFile bounds a file SetFile may write.

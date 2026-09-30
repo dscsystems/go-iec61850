@@ -17,9 +17,9 @@ import (
 
 // TestCMMSPeerServices runs libiec61850's client (interop/c/mms_peer.c)
 // against the server: password authentication, Status, SetFile (the
-// server reads the file back from the C client with obtainFile), the file
-// directory, DeleteFile, release and abort. Set IEC61850_C_MMS_PEER to the
-// mms_peer binary to enable it.
+// server reads the file back from the C client with obtainFile), MMS
+// fileRename, the file directory, DeleteFile, release and abort. Set
+// IEC61850_C_MMS_PEER to the mms_peer binary to enable it.
 func TestCMMSPeerServices(t *testing.T) {
 	bin := os.Getenv("IEC61850_C_MMS_PEER")
 	if bin == "" {
@@ -58,19 +58,22 @@ func TestCMMSPeerServices(t *testing.T) {
 		return string(out), err
 	}
 
-	out, err := run("-p", "s3cret", "status", "setfile", "upload.src", "upload.bin", "dir", "deletefile", "upload.bin", "release")
+	out, err := run("-p", "s3cret", "status", "setfile", "upload.src", "upload.bin", "rename", "upload.bin", "renamed.bin",
+		"dir", "deletefile", "renamed.bin", "release")
 	t.Logf("mms_peer:\n%s", out)
 	if err != nil {
 		t.Fatalf("mms_peer: %v", err)
 	}
 	for _, want := range []string{"connect err=0", "status logical=0 physical=0 err=0", "setfile err=0",
-		"file upload.bin 60000", "deletefile err=0", "release err=0"} {
+		"rename err=0", "file renamed.bin 60000", "deletefile err=0", "release err=0"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("mms_peer output lacks %q", want)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(storeDir, "upload.bin")); !os.IsNotExist(err) {
-		t.Error("upload.bin is still in the store after DeleteFile")
+	for _, name := range []string{"upload.bin", "renamed.bin"} {
+		if _, err := os.Stat(filepath.Join(storeDir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still in the store after the rename and DeleteFile", name)
+		}
 	}
 
 	// A wrong password is refused.

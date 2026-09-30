@@ -12,7 +12,10 @@ Bidirectional interoperability tests against
    `server_example_files`
 3. libiec61850's service tracking model (`simpleIO_ltrk_tests.icd`, the
    LTRK of `server_example_service_tracking`) loaded by our SCL loader and
-   compared with our IEC 61850-7-3 attribute tables
+   compared with our IEC 61850-7-3 attribute tables; and, on port 102 in a
+   network namespace, that server against ours loaded with the same ICD:
+   the same services on both, and their LTRK values and tracking reports
+   compared. Our client against libiec61850's 9-2LE SV control block too
 4. security, against a second libiec61850 build with mbedtls 3.6: R-GOOSE
    and R-SV (IEC 61850-90-5) both ways through `interop/c/rsession_peer.c`,
    a small driver of libiec61850's session layer, and MMS over TLS
@@ -70,9 +73,12 @@ pull request.
 | MMS Status | ✓ | ✓ |
 | SetFile (MMS obtainFile, the server reading back from the client) | ✓ | ✓ |
 | DeleteFile, including the server's refusal | ✓ | ✓ |
+| MMS fileRename | ✓ | ✓ |
+| SV control blocks: GetSVCB, Resv, SvEna, exclusivity, stream received | ✓ | ✓ |
 | Release (Conclude), Abort | ✓ | ✓ |
 | Ed 2/2.1 classes (HST, BAC, ORG, TSG, CUG, VSG, CSG): directory, read, arrays of structures | | ✓ |
 | Service tracking (CTS, GTS) under FC SR, PhyComAddr structure | | ✓ |
+| Service tracking kept by the server, compared with libiec61850's (values and reports) | n/a | n/a |
 | R-GOOSE, R-SV: unsecured (C publishes) | ✓ | |
 | R-GOOSE, R-SV: HMAC-SHA256-128 | ✓ | ✓ |
 | R-GOOSE, R-SV: HMAC-SHA256-256 (libiec61850's own encoding is malformed) | | ✓ |
@@ -89,7 +95,20 @@ The service tracking model of libiec61850 (CTS for a boolean, an INT32 and
 a Tcmd control, UTS, BTS, GTS, STS and LTS) is also checked, attribute by
 attribute and in order within each functional constraint, against the
 templates of `model.NewDataObject`. `server_example_service_tracking`
-itself listens on port 102 only, so it is not run.
+and the 9-2LE example listen on port 102 only, and the 9-2LE one publishes
+on a raw socket: `run.sh` runs them, with the tests, in an unprivileged
+user and network namespace (`unshare -rn`), or directly as root.
+
+The comparison skips what differs by nature (timestamps, report
+counters) and three values libiec61850 records wrongly or differently:
+it writes a URCB's Resv into `UrcbTrk.rptEna` instead of `resv`; it
+records a `BrcbTrk.resvTms` its BRCB does not serve; and its LCB ignores
+the SCL default `TrgOps@gi="true"`, so each server's `LocbTrk.trgOps` is
+checked against its own LCB. Two libiec61850 client quirks are worked
+around in `mms_peer.c` (`ClientSVControlBlock_setResv` writes SvEna, and
+`getMsvID` reads MsvID of a USVCB), and its model generator defaults
+`SampledValueControl@multicast` to false, so the 9-2LE example serves
+its MSVCB01 as a USVCB.
 
 SBO with normal security is implemented on the server (`server/select.go`)
 and covered by the unit tests; it has no interop assertion yet.

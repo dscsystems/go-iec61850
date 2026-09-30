@@ -54,6 +54,7 @@ func TestInitiateAnswersWithServerCapabilities(t *testing.T) {
 		{mms.ServiceFileOpen, "fileOpen", false},                       // no file store configured
 		{mms.ServiceFileDelete, "fileDelete", false},                   // likewise
 		{mms.ServiceObtainFile, "obtainFile", false},                   // likewise
+		{mms.ServiceFileRename, "fileRename", false},                   // likewise
 	} {
 		if has := got.Services.Has(svc.bit); has != svc.want {
 			t.Errorf("server advertises %s = %v, want %v", svc.name, has, svc.want)

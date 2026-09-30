@@ -33,6 +33,12 @@ func (c *Client) SetFileFrom(ctx context.Context, fsys fs.FS, src, name string) 
 	return c.mc.ObtainFile(ctx, fsys, src, name)
 }
 
+// RenameFile renames a file in the server's file store (MMS fileRename).
+// A server refuses it when the new name is taken.
+func (c *Client) RenameFile(ctx context.Context, current, renamed string) error {
+	return c.mc.FileRename(ctx, current, renamed)
+}
+
 // DeleteFile deletes a file of the server's file store (IEC 61850
 // DeleteFile).
 func (c *Client) DeleteFile(ctx context.Context, name string) error {

@@ -100,8 +100,19 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	ctlItem := base + "$" + phase
 	ctx := decodeOper(ref, v, conn)
 	ctx.Select = phase == "SBOw"
+	svc := model.ServiceOperate
+	switch phase {
+	case "SBOw":
+		svc = model.ServiceSelectWithValue
+	case "Cancel":
+		svc = model.ServiceCancel
+	}
+	track := func(serr model.ServiceError, cause model.AddCause) {
+		h.s.trackControl(h.changes, ref, svc, serr, ctx, v, cause)
+	}
 	refuse := func(cause model.AddCause) (bool, byte) {
 		h.sendLastApplError(conn, domain, ctlItem, ctx, cause)
+		track(serviceErrorOf(byte(mms.AccessObjectAccessDenied)), cause)
 		return true, byte(mms.AccessObjectAccessDenied)
 	}
 
@@ -131,6 +142,7 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 			return refuse(cause)
 		}
 		h.s.clearSelection(ref)
+		track(model.ServiceErrorNone, model.AddCauseNone)
 		return true, 0xff
 	}
 
@@ -151,6 +163,13 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	if phase == "Oper" && declared && cm.Enhanced() && conn != nil {
 		term = h.newTermination(conn, domain, ctlItem, ctx, v)
 		ctx.term = term
+		// A deferred termination is tracked when it is sent, after the
+		// request that operated has been answered.
+		term.onDeferred = func(cause model.AddCause) {
+			h.s.trackAsync(func(cs changeSet) {
+				h.s.trackControl(cs, ref, model.ServiceCommandTermination, terminationError(cause), ctx, v, cause)
+			})
+		}
 	}
 
 	h.s.ctlMu.RLock()
@@ -175,17 +194,20 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 		if !h.s.selectWithValue(ref, conn, ctx.CtlNum) {
 			return refuse(model.AddCauseObjectAlreadySelected)
 		}
+		track(model.ServiceErrorNone, model.AddCauseNone)
 		return true, 0xff
 	}
 	// Apply the operate: set the sibling stVal under FC ST.
 	h.applyControl(ref, ctx.Value)
 	h.s.clearSelection(ref)
+	track(model.ServiceErrorNone, model.AddCauseNone)
 	if term != nil {
 		if term.isDeferred() {
 			term.supervise(h.s.operTimeout(ref))
 		} else {
 			// Sent now, it is held until the operate's response is out.
 			term.finish(model.AddCauseNone)
+			h.s.trackControl(h.changes, ref, model.ServiceCommandTermination, model.ServiceErrorNone, ctx, v, model.AddCauseNone)
 		}
 	}
 	return true, 0xff
@@ -224,11 +246,13 @@ func (h *handler) isEnhanced(ref model.ObjectReference) bool {
 // operate. It is sent exactly once: by the server as soon as the operate
 // is accepted, or by a handler that deferred it, or on operTimeout.
 type termination struct {
-	once     sync.Once
-	send     func(model.AddCause)
-	mu       sync.Mutex
-	deferred bool
-	timer    *time.Timer
+	once sync.Once
+	send func(model.AddCause)
+	// onDeferred is told of a deferred termination once it is sent.
+	onDeferred func(model.AddCause)
+	mu         sync.Mutex
+	deferred   bool
+	timer      *time.Timer
 }
 
 func (h *handler) newTermination(conn *mms.ServerConn, domain, ctlItem string, ctx *ControlCtx, oper *mms.Value) *termination {
@@ -253,9 +277,23 @@ func (t *termination) finish(cause model.AddCause) {
 		if t.timer != nil {
 			t.timer.Stop()
 		}
+		deferred := t.deferred
 		t.mu.Unlock()
 		t.send(cause)
+		if deferred && t.onDeferred != nil {
+			t.onDeferred(cause)
+		}
 	})
+}
+
+// terminationError is the service error a CommandTermination is tracked
+// with: none for a positive one, and, as libiec61850 records it, failed
+// due to a server constraint for a negative one.
+func terminationError(cause model.AddCause) model.ServiceError {
+	if cause == model.AddCauseNone {
+		return model.ServiceErrorNone
+	}
+	return model.ServiceErrorFailedDueToServerConstraint
 }
 
 // discard drops the termination of an operate that was refused: a
