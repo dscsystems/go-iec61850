@@ -147,3 +147,19 @@ checkout can be supplied with `IEC61850_RUST_ROOT=/absolute/path`.
 See [the verification report](../docs/rust-interoperability.md) for coverage,
 Go fixes and the two reference-side failures that currently leave this suite
 red. These tests are skipped in normal Go runs without that environment variable.
+
+## open_server reference
+
+Live MMS, controls, GOOSE and SV checks against
+[robidev/iec61850_open_server](https://github.com/robidev/iec61850_open_server):
+
+```sh
+bash interop/run-open-server.sh
+```
+
+Requires Linux with user/network namespaces, GCC, Make, Python 3 and iproute2.
+The script pins new reference clones, builds locally and isolates raw Ethernet
+traffic in a network namespace. See [the verification report](../docs/open-server-interoperability.md)
+for coverage, the Cancel fix and two reference-side SV inconsistencies that
+currently leave this suite red. The tests are skipped in normal Go runs unless
+`IEC61850_OPEN_SERVER_ROOT` and `IEC61850_OPEN_SERVER_BUILD` are set.
