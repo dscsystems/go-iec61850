@@ -24,8 +24,15 @@ import (
 // the power system frequency, needed to turn a per-second rate into
 // samples per cycle; zero means 50.
 //
+// A unicast block (a USVCB, IEC 61850-9-2 unicast SV) is published to its
+// DstAddress like a multicast one; the frame format is the same. Its
+// destination must then be an individual MAC address, not a group one,
+// unless the block is R-SV, whose frames iface — an rsession.Session
+// opened with the block's DstIP as Remote — carries over UDP instead.
+// Publish it while the server reports it enabled (server.OnSVControl).
+//
 // A block this publisher cannot honour is refused rather than published
-// differently from its configuration: unicast SV, SmvOpts security (the
+// differently from its configuration: SmvOpts security (the
 // frames would go out unsigned), the SecPerSmp mode, and a per-second rate
 // that is not a whole number of samples per cycle. SmvOpts timestamp is
 // not implemented and is ignored.
@@ -38,8 +45,9 @@ func NewLEPublisherFromModel(iface ethernet.Interface, ld *model.LogicalDevice, 
 		return nil, fmt.Errorf("sv: control block %s: the logical device and node are required "+
 			"to build its reference", sc.Name)
 	}
-	if !sc.Multicast {
-		return nil, fmt.Errorf("sv: control block %s is unicast, which this library does not publish", sc.Name)
+	if !sc.Multicast && sc.Protocol != "R-SV" && sc.DstMAC[0]&1 != 0 {
+		return nil, fmt.Errorf("sv: control block %s is unicast, but its destination %x is a group address",
+			sc.Name, sc.DstMAC[:])
 	}
 	if sc.Opts.Security {
 		return nil, fmt.Errorf("sv: control block %s asks for SmvOpts security, "+

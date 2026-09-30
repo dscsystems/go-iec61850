@@ -19,9 +19,10 @@ import (
 // addresses them by name ("gcb01$GoEna"). Nothing is added that the
 // structure does not define: a component a client does not expect is
 // harmless to it, but one it looks for under the standard's name and does
-// not find is not. The GOOSE and SV blocks are read-only: this library has
-// no server-side GOOSE or SV publisher, so their enable flags read false
-// and writing them is refused. An LCB is live: it writes the server's logs
+// not find is not. The GOOSE blocks are read-only: this library has no
+// server-side GOOSE publisher, so their enable flags read false and writing
+// them is refused. The SV blocks take SvEna and, for a USVCB, Resv
+// (svcb.go); the application publishes. An LCB is live: it writes the server's logs
 // (journal.go), and a client sets LogEna, DatSet, TrgOps and IntgPd.
 
 // materialiseControlBlocks adds the GOOSE, sampled-value and log control

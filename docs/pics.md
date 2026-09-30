@@ -45,9 +45,9 @@ each gap is one.
 | SCSM: IEC 61850-9-2 (sampled values) | Y | Y | 9-2LE dataset layout; see 6 |
 | SCSM: IEC 61850-9-1 | N | N | withdrawn |
 | GSE model: GOOSE | Y (subscriber) | Y (publisher) | package `goose`; not driven by the server's GoCB, see 5 |
-| GSE model: GSSE | N | N | a GSSE control block loads from SCL and is served as a GsCB object |
-| Sampled values: multicast | Y (subscriber) | Y (publisher) | package `sv`; not driven by the server's MSVCB |
-| Sampled values: unicast | N | N | a USVCB is served as an object only |
+| GSE model: GSSE | N | N | withdrawn in Ed 2; a GSSE control block loads from SCL and is served as a GsCB object. The GSSE message has no public reference to verify an encoding against, see 9 |
+| Sampled values: multicast | Y (subscriber) | Y (publisher) | package `sv`; the server reports MSVCB SvEna for the application to publish on, see 6 |
+| Sampled values: unicast | Y (subscriber) | Y (publisher) | package `sv`, to an individual MAC, or over R-SV to the block's IP; the server runs USVCB reservation, see 6 |
 | Routable GOOSE / SV (IEC 61850-90-5) | Y | Y | package `rsession`; see 8 |
 
 ## 2. ACSI models
@@ -68,8 +68,8 @@ each gap is one.
 | Log | Y | Y | in memory, `server.WithLogCapacity` |
 | GOOSE control (GoCB) | Y (g) | P | served read-only; see 5 |
 | GSSE control | N | P | served read-only |
-| Multicast sampled value control (MSVCB) | Y (g) | P | served read-only |
-| Unicast sampled value control (USVCB) | N | P | served read-only |
+| Multicast sampled value control (MSVCB) | Y | Y | `Client.EnableSVCB`; `Server.OnSVControl` |
+| Unicast sampled value control (USVCB) | Y | Y | `Client.ReserveUSVCB`, `Client.EnableSVCB`; `Server.OnSVControl` |
 | Control | Y | Y | all four control models |
 | Time and time synchronisation | P | P | time quality set by the application; no time synchronisation protocol |
 | File transfer | Y | Y | writing needs a writable store; see 3.9 |
@@ -198,8 +198,10 @@ each gap is one.
 | GSSE services | N | N | |
 | SendMSVMessage | Y (receive) | Y (send) | package `sv` |
 | GetMSVCBValues | Y (g) | Y | |
-| SetMSVCBValues | Y (g) | N | served read-only |
-| SendUSVMessage, GetUSVCBValues, SetUSVCBValues | N | N | a USVCB is readable with GetDataValues |
+| SetMSVCBValues | Y | P | SvEna; the rest is configuration, as in the 9-2 mapping |
+| SendUSVMessage | Y (receive) | Y (send) | package `sv` |
+| GetUSVCBValues | Y (g) | Y | |
+| SetUSVCBValues | Y | P | Resv and SvEna; the rest is configuration, as in the 9-2 mapping. A reservation is exclusive to one association and ends with it, disabling the block |
 
 ### 3.8 Control
 
@@ -315,8 +317,8 @@ a writable one.
 | Other dataset layouts | P | N | raw sample bytes |
 | SmvOpts timestamp | N | N | |
 | SmvOpts security (on Ethernet) | N | N | refused by the publisher |
-| Unicast SV | N | N | |
-| Publishing driven by the server's MSVCB | — | N | |
+| Unicast SV | Y | Y | `NewLEPublisherFromModel` sends a USVCB's stream to its individual DstAddress, or over R-SV through an `rsession.Session` to its IP |
+| Publishing driven by the server's MSVCB / USVCB | — | P | the server reports SvEna and Resv through `Server.OnSVControl`; the application starts and stops the publisher, since it owns the samples and the clock |
 
 ## 7. SCL (IEC 61850-6)
 
@@ -367,6 +369,8 @@ a writable one.
 | Status service answer | state-changes-allowed, operational; `Server.SetStatus` |
 | Dynamic data sets | persistent (domain-specific) names, kept in memory; deletable by clients; configured ones are not |
 | Platforms | pure Go, no cgo; raw Ethernet on Linux (AF_PACKET) |
+| Sampled-value control blocks | SvEna and, on a USVCB, Resv are writable; a reserved USVCB refuses other associations with temporarily-unavailable and is released and disabled when its association ends; the application publishes on `Server.OnSVControl` |
+| GSSE | not implemented. GSSE (IEC 61850-8-1 Ed 1, from UCA 2.0) was withdrawn in Edition 2; its message is not in any public specification, and neither libiec61850 nor Wireshark decodes it, so there is nothing to verify an encoding against |
 
 ## 10. Verification
 
@@ -375,7 +379,8 @@ a writable one.
   libiec61850's clients against the server (MMS, control, logs, TLS), and
   R-GOOSE and R-SV both ways in every security mode both implement, and
   the association and file services (authentication, Status, SetFile,
-  DeleteFile, release, abort) both ways.
+  DeleteFile, release, abort) both ways, and libiec61850's
+  `ClientSVControlBlock` against the server's MSVCB and USVCB.
   GDOI registrations are decrypted and dissected by Wireshark. The
   coverage table is `interop/README.md`.
 - `testdata/ed21_diverse.cid` exercises the Edition 2.1 SCL constructs.

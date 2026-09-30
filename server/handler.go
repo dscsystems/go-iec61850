@@ -290,6 +290,9 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 
 	resp := asn1.Cons(asn1.ContextConstructed(svcWrite))
 	dd := asn1.NewDecoder(dataContent)
+	// Sampled-value control block changes are reported once the model
+	// lock is released.
+	defer h.s.flushSV()
 	h.s.mu.Lock()
 	defer h.s.mu.Unlock()
 	// Written data and operated controls report like any other change
@@ -331,6 +334,7 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 			sgAttr, isSG = isSGCBWrite(t.item)
 		}
 		lcbKey, lcbAttr, isLCB := h.s.logs.lcbKey(t.domain, t.item)
+		svcb, svAttr, isSVCB := h.s.svcbKey(t.domain, t.item)
 		code := byte(0xff)
 		switch {
 		case isRCB:
@@ -339,9 +343,18 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 			code = mgr.checkWrite(sgAttr, v)
 		case isLCB:
 			code = h.s.logs.checkLCBWrite(lcbKey, lcbAttr, v)
+		case isSVCB:
+			code = svcb.checkWrite(svAttr, v, conn)
+		}
+		var svOld bool
+		if isSVCB && code == 0xff {
+			svOld = svcb.event().Enabled
+			if svAttr == "Resv" {
+				svOld = svcb.event().Reserved
+			}
 		}
 		if code == 0xff {
-			code = h.writeOne(t.domain, t.item, v, isRCB || isSG || isLCB)
+			code = h.writeOne(t.domain, t.item, v, isRCB || isSG || isLCB || isSVCB)
 		}
 		if code != 0xff {
 			resp.Add(accessFailureWrite(mms.DataAccessError(code)))
@@ -355,6 +368,10 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 			mgr.onSGCBWrite(sgAttr, v)
 		case isLCB: // LogEna
 			h.s.logs.onLCBWrite(lcbKey, lcbAttr)
+		case isSVCB: // SvEna, Resv
+			if ev, changed := svcb.onWrite(svAttr, svOld, conn); changed {
+				h.s.queueSV(ev)
+			}
 		}
 	}
 	return resp, nil

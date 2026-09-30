@@ -518,6 +518,32 @@ defer stop()
 `Subscribe` (not `SubscribeLE`) delivers generic `*sv.ASDU` with the raw
 `Sample` payload for non-9-2LE datasets.
 
+A unicast block (USVCB) publishes the same way, to its individual
+`DstAddress`, or, for R-SV, through an `rsession.Session` opened with the
+block's IP as `Remote`. The server's MSVCB and USVCB take `SvEna` and, on a
+USVCB, `Resv` (exclusive to one association, released and disabled when it
+ends); the application publishes while the server says so:
+
+```go
+var running = map[*model.SVControl]context.CancelFunc{}
+srv.OnSVControl(func(ev server.SVControlEvent) {
+    if stop := running[ev.Block]; stop != nil && !ev.Enabled {
+        stop(); delete(running, ev.Block)
+    }
+    if ev.Enabled && running[ev.Block] == nil {
+        pub, err := sv.NewLEPublisherFromModel(eth, ev.Device, ev.Node, ev.Block, srcMAC, 50)
+        if err != nil { return }
+        ctx, stop := context.WithCancel(context.Background())
+        running[ev.Block] = stop
+        go pub.Run(ctx, fill)
+    }
+})
+
+// Client side.
+_ = c.ReserveUSVCB(ctx, "MU01LD0/LLN0.usvcb01", true)
+_ = c.EnableSVCB(ctx, "MU01LD0/LLN0.usvcb01", true /* unicast */, true)
+```
+
 ---
 
 ## rsession

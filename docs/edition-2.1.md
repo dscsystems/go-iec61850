@@ -321,9 +321,17 @@ every IED's GOOSE addressing is missing.
   names: samples per period unless `smpMod` says per second.
 - `NewLEPublisherFromModel` builds a publisher from an SV control block:
   addressing, `svID`, `datSet` as a full reference, rate, mode, `nofASDU`
-  and the `SmvOpts` fields. It refuses unicast, `SmvOpts security` and
+  and the `SmvOpts` fields. A unicast block goes to its individual
+  `DstAddress`, or, for R-SV, through an `rsession.Session` to its IP. It
+  refuses a unicast block addressed to a group MAC, `SmvOpts security` and
   `SecPerSmp` rather than publish something other than what was
-  configured. `SampledValueControl@svType` is carried to the model as
+  configured.
+- The server's MSVCB and USVCB are live: `SvEna` is writable, and `Resv`
+  on a USVCB, whose reservation is exclusive to one association and is
+  released — the block disabled — when that association ends. Everything
+  else is configuration, as the 9-2 mapping has it. `Server.OnSVControl`
+  reports each change for the application to start or stop its publisher;
+  `Client.ReserveUSVCB` and `Client.EnableSVCB` are the client's side. `SampledValueControl@svType` is carried to the model as
   `SVControl.SvType`.
 - `refrTm` carries the publisher's clock quality (`LEConfig.TimeQuality`),
   and a parsed ASDU the quality it arrived with (`RefrTmQuality`).
