@@ -7,7 +7,8 @@ Bidirectional interoperability tests against
    example and the logging example
 2. the C `client_example1`, `client_example_log`, `mms_utility` and
    `interop/c/mms_peer.c` (authentication, Status, SetFile, DeleteFile,
-   release, abort) against our `server`; and our client against the C
+   release, abort, and `ClientSVControlBlock` on the MSVCB and USVCB:
+   reservation, exclusivity, SvEna) against our `server`; and our client against the C
    `server_example_files`
 3. libiec61850's service tracking model (`simpleIO_ltrk_tests.icd`, the
    LTRK of `server_example_service_tracking`) loaded by our SCL loader and

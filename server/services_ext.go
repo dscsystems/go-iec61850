@@ -405,4 +405,3 @@ func (h *handler) dataSetInUse(domain, ln, ds string) bool {
 	}
 	return false
 }
-

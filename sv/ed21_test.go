@@ -364,10 +364,10 @@ func TestNewLEPublisherFromModel(t *testing.T) {
 	}
 
 	for name, mutate := range map[string]func(*model.SVControl){
-		"unicast":         func(s *model.SVControl) { s.Multicast = false },
-		"security":        func(s *model.SVControl) { s.Opts.Security = true },
-		"SecPerSmp":       func(s *model.SVControl) { s.SmpMod = model.SecPerSmp },
-		"fractional rate": func(s *model.SVControl) { s.SmpRate = 4000 },
+		"unicast to a group": func(s *model.SVControl) { s.Multicast = false },
+		"security":           func(s *model.SVControl) { s.Opts.Security = true },
+		"SecPerSmp":          func(s *model.SVControl) { s.SmpMod = model.SecPerSmp },
+		"fractional rate":    func(s *model.SVControl) { s.SmpRate = 4000 },
 	} {
 		bad := *sc
 		mutate(&bad)

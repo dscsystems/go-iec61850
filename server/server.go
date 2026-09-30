@@ -29,6 +29,12 @@ type Server struct {
 	identity Identity
 	reports  *reportManager
 	logs     *logManager
+	// svcbs are the sampled-value control blocks (svcb.go).
+	svcbs     map[string]*svcbState
+	svMu      sync.Mutex // guards svH and svQueue
+	svH       func(SVControlEvent)
+	svQueue   []SVControlEvent
+	svDeliver sync.Mutex // serialises OnSVControl calls
 
 	// logCapacity is how many entries each log keeps; see WithLogCapacity.
 	logCapacity int
@@ -292,6 +298,7 @@ func New(m *model.Model, opts ...Option) *Server {
 	// Logs come after the report engine, whose dataset resolution and
 	// EntryID source they share.
 	s.logs = newLogManager(s)
+	s.svcbs = buildSVCBStates(m)
 	return s
 }
 
@@ -396,6 +403,10 @@ func (s *Server) serveConn(raw net.Conn) {
 		open := s.releaseSlot()
 		s.reports.disableConn(sc)
 		s.releaseSelections(sc)
+		s.mu.Lock()
+		s.releaseSVCBs(sc)
+		s.mu.Unlock()
+		s.flushSV()
 		sc.Close() // closes the transport and the unconfirmed writer
 		s.notifyConn(ConnectionEvent{Peer: peer, Addr: addr, State: ConnectionClosed, Open: open, Conn: sc})
 	}()

@@ -11,6 +11,13 @@
  *   dir                 file directory              -> "file NAME SIZE" per file
  *   release             release (MMS conclude)      -> "release err=E"
  *   abort               abort                       -> "abort err=E"
+ *   svcb REF            SV control block state      -> "svcb REF multicast=M svena=S resv=R id=ID err=E"
+ *   svena REF 0|1       write SvEna                 -> "svena err=E"
+ *   svresv REF 0|1      write Resv (FC US)          -> "svresv err=E"
+ *
+ * svcb and svena go through ClientSVControlBlock, which tells an MSVCB
+ * from a USVCB by reading the block under FC MS, then US. svresv writes
+ * Resv directly: ClientSVControlBlock_setResv writes SvEna instead.
  *
  * The connection result is printed first, "connect err=E". E is the
  * IedClientError (0 is success). The peer exits 0 when every step it ran
@@ -100,6 +107,61 @@ main(int argc, char** argv)
             IedConnection_abort(con, &err);
             printf("abort err=%d\n", err);
             failed |= err != IED_ERROR_OK;
+        }
+        else if (strcmp(cmd, "svcb") == 0 && i + 1 < argc) {
+            ClientSVControlBlock cb = ClientSVControlBlock_create(con, argv[i + 1]);
+            if (cb == NULL) {
+                printf("svcb %s err=-1\n", argv[i + 1]);
+                failed = 1;
+            }
+            else {
+                bool mc = ClientSVControlBlock_isMulticast(cb);
+                IedClientError e = IED_ERROR_OK;
+                bool ena = ClientSVControlBlock_getSvEna(cb);
+                e = e ? e : ClientSVControlBlock_getLastComError(cb);
+                bool resv = false;
+                char* id;
+                if (mc) {
+                    id = ClientSVControlBlock_getMsvID(cb);
+                    e = e ? e : ClientSVControlBlock_getLastComError(cb);
+                }
+                else {
+                    /* ClientSVControlBlock_getMsvID reads MsvID, which a USVCB calls UsvID. */
+                    char ref[130];
+                    resv = ClientSVControlBlock_getResv(cb);
+                    e = e ? e : ClientSVControlBlock_getLastComError(cb);
+                    snprintf(ref, sizeof(ref), "%s.UsvID", argv[i + 1]);
+                    id = IedConnection_readStringValue(con, &err, ref, IEC61850_FC_US);
+                    e = e ? e : err;
+                }
+                err = e;
+                printf("svcb %s multicast=%d svena=%d resv=%d id=%s err=%d\n", argv[i + 1], mc, ena, resv,
+                       id ? id : "", err);
+                failed |= err != IED_ERROR_OK;
+                free(id);
+                ClientSVControlBlock_destroy(cb);
+            }
+            i += 1;
+        }
+        else if (strcmp(cmd, "svena") == 0 && i + 2 < argc) {
+            ClientSVControlBlock cb = ClientSVControlBlock_create(con, argv[i + 1]);
+            err = IED_ERROR_OBJECT_DOES_NOT_EXIST;
+            if (cb) {
+                ClientSVControlBlock_setSvEna(cb, atoi(argv[i + 2]) != 0);
+                err = ClientSVControlBlock_getLastComError(cb);
+                ClientSVControlBlock_destroy(cb);
+            }
+            printf("svena err=%d\n", err);
+            failed |= err != IED_ERROR_OK;
+            i += 2;
+        }
+        else if (strcmp(cmd, "svresv") == 0 && i + 2 < argc) {
+            char ref[130];
+            snprintf(ref, sizeof(ref), "%s.Resv", argv[i + 1]);
+            IedConnection_writeBooleanValue(con, &err, ref, IEC61850_FC_US, atoi(argv[i + 2]) != 0);
+            printf("svresv err=%d\n", err);
+            failed |= err != IED_ERROR_OK;
+            i += 2;
         }
         else {
             fprintf(stderr, "unknown command %s\n", cmd);
