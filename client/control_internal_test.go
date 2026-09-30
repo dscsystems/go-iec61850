@@ -38,3 +38,16 @@ func TestOperCheckWireBits(t *testing.T) {
 		}
 	}
 }
+
+// Oper and SBOw carry Check, but Cancel ends after Test. A permissive Go
+// server used to hide this distinction; open_server rejects the sixth field.
+func TestCancelStructureOmitsCheck(t *testing.T) {
+	co := &ControlObject{c: &Client{}}
+	value := co.buildCancel(&controlParams{orCat: 3, orIdent: []byte("operator"), test: true}, 42)
+	if value.Len() != 5 {
+		t.Fatalf("Cancel has %d fields, want 5", value.Len())
+	}
+	if value.Index(0).Type() != mms.TypeBoolean || value.Index(1).Type() != mms.TypeStructure || value.Index(2).Uint64() != 42 || value.Index(3).Type() != mms.TypeUTCTime || !value.Index(4).Bool() {
+		t.Fatalf("Cancel=%v", value)
+	}
+}

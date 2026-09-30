@@ -226,7 +226,7 @@ func (co *ControlObject) doOperate(ctx context.Context, value *mms.Value, p *con
 // the sequence being cancelled, which is how the server identifies it.
 func (co *ControlObject) Cancel(ctx context.Context, opts ...ControlOption) error {
 	num := co.beginSequence()
-	oper := co.buildOper(mms.NewBool(false), co.params(opts), num)
+	oper := co.buildCancel(co.params(opts), num)
 	defer co.endSequence()
 	results, err := co.c.mc.Write(ctx, co.domain, []string{co.do + "$Cancel"}, []*mms.Value{oper})
 	if err != nil {
@@ -365,6 +365,12 @@ func (co *ControlObject) buildOper(value *mms.Value, p *controlParams, ctlNum ui
 		mms.NewBool(p.test),
 		check,
 	)
+}
+
+// Cancel has the same fields as Oper except Check (IEC 61850-7-2).
+func (co *ControlObject) buildCancel(p *controlParams, ctlNum uint8) *mms.Value {
+	oper := co.buildOper(mms.NewBool(false), p, ctlNum)
+	return mms.NewStructure(oper.Children()[:5]...)
 }
 
 // lastApplError returns the additional cause the server gave for refusing
