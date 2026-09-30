@@ -6,7 +6,9 @@
 #   2. the C client_example1, client_example_log and mms_utility against
 #      our server (mms_utility reads the Edition 2 and 2.1 classes)
 #   3. libiec61850's own service tracking model (LTRK) loaded by our SCL
-#      loader and checked against our 7-3 attribute tables
+#      loader and checked against our 7-3 attribute tables, and the LTRK
+#      our server keeps compared with libiec61850's service tracking
+#      server; our client against its 9-2LE SV control block
 #   4. security, against a second libiec61850 build with mbedtls 3.6:
 #      R-GOOSE and R-SV (IEC 61850-90-5) both ways through
 #      interop/c/rsession_peer.c, and MMS over TLS (IEC 62351-3) both ways
@@ -92,6 +94,22 @@ if [ ! -x "$PEER" ] || [ "$REPO_ROOT/interop/c/rsession_peer.c" -nt "$PEER" ]; t
     "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
 fi
 
+# server_example_files with MMS fileRename: libiec61850 compiles the
+# service out by default (MMS_RENAME_FILE_SERVICE 0) and the example
+# refuses renames, so a copy is built with both changed.
+RENAME="$WORK/libiec61850-rename"
+C_RENAME_SERVER="$RENAME/examples/server_example_files/server_example_files"
+if [ ! -x "$C_RENAME_SERVER" ]; then
+  echo "== building libiec61850's file server with fileRename =="
+  rm -rf "$RENAME"
+  cp -a "$LIB" "$RENAME"
+  sed -i 's/^#define MMS_RENAME_FILE_SERVICE 0.*/#define MMS_RENAME_FILE_SERVICE 1/' "$RENAME/config/stack_config.h"
+  sed -i '/Don.t allow client to rename files/,+2d' "$RENAME/examples/server_example_files/server_example_files.c"
+  make -C "$RENAME" clean >/dev/null
+  make -C "$RENAME" -j"$(nproc)" lib >/dev/null
+  make -C "$RENAME/examples/server_example_files" >/dev/null
+fi
+
 C_SERVER="$LIB/examples/server_example_basic_io/server_example_basic_io"
 C_CTL_SERVER="$LIB/examples/server_example_control/server_example_control"
 C_CLIENT="$LIB/examples/iec61850_client_example1/client_example1"
@@ -133,16 +151,36 @@ kill "$SRV_PID" 2>/dev/null || true
 SRV_PID=""
 
 echo
-echo "== direction 1d: our client -> C file server (Status, SetFile, DeleteFile, abort) =="
+echo "== direction 1d: our client -> C file server (Status, SetFile, DeleteFile, fileRename, abort) =="
 IEC61850_C_FILE_SERVER="$LIB/examples/server_example_files/server_example_files" \
+IEC61850_C_RENAME_FILE_SERVER="$C_RENAME_SERVER" \
 IEC61850_C_FILE_SERVER_STORE="$LIB/examples/server_example_files/vmd-filestore" \
-  go test "$REPO_ROOT/client/..." -run 'FilesInterop' -v
+  go test "$REPO_ROOT/client/..." -run 'FilesInterop|RenameInterop' -v
 
 echo
 echo "== direction 2: C clients -> our server =="
 IEC61850_C_CLIENT="$C_CLIENT" IEC61850_C_LOG_CLIENT="$C_LOG_CLIENT" \
 IEC61850_C_MMS_UTILITY="$C_MMS_UTILITY" IEC61850_C_MMS_PEER="$MMS_PEER" \
   go test "$REPO_ROOT/server/..." -run 'CClient|CLogClient|CMMSUtility|CMMSPeer' -v
+
+echo
+echo "== port 102: SV control blocks and service tracking, in a network namespace =="
+# libiec61850's 9-2LE and service tracking examples listen on port 102,
+# and the 9-2LE one publishes on a raw socket. Unprivileged, both run in a
+# user and network namespace of their own (unshare -rn), with the tests,
+# on its loopback; as root (the interop container) they run as they are.
+go test -c -o "$WORK/client.test" "$REPO_ROOT/client"
+go test -c -o "$WORK/server.test" "$REPO_ROOT/server"
+NS_RUN="IEC61850_C_SV_SERVER='$LIB/examples/iec61850_9_2_LE_example/sv_9_2LE_example' \
+  '$WORK/client.test' -test.run 'SVCBInterop' -test.v && \
+  IEC61850_C_LTRK_SERVER='$SEC/cbuild/examples/server_example_service_tracking/server_example_service_tracking' \
+  IEC61850_C_LTRK_ICD='$SEC/examples/server_example_service_tracking/simpleIO_ltrk_tests.icd' \
+  '$WORK/server.test' -test.run 'LTRKAgainst' -test.v"
+if [ "$(id -u)" = 0 ]; then
+  sh -c "$NS_RUN"
+else
+  unshare -rn sh -c "ip link set lo up && $NS_RUN"
+fi
 
 echo
 echo "== model: libiec61850's LTRK against our 7-3 tables =="

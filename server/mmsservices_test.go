@@ -263,3 +263,56 @@ func TestDeleteDataSetRules(t *testing.T) {
 		t.Error("deleting a data set that does not exist succeeded")
 	}
 }
+
+// fileRename renames within the store, never over an existing file nor
+// outside the store, and a read-only store refuses it.
+func TestRenameFile(t *testing.T) {
+	dir := t.TempDir()
+	store, err := server.DirFS(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"a.cfg": "A", "b.cfg": "B"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addr, _ := startServerWith(t, simpleIO(t), server.WithFileStore(store))
+	c := dialDemo(t, addr)
+	ctx := testCtx(t)
+	var se *mms.ServiceError
+	if !c.MMS().Negotiated().Services.Has(mms.ServiceFileRename) {
+		t.Error("fileRename not advertised with a DirFS store")
+	}
+
+	if err := c.RenameFile(ctx, "a.cfg", "c.cfg"); err != nil {
+		t.Fatalf("RenameFile: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "c.cfg")); err != nil || string(got) != "A" {
+		t.Errorf("c.cfg = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.cfg")); !os.IsNotExist(err) {
+		t.Error("a.cfg is still there")
+	}
+	if err := c.RenameFile(ctx, "c.cfg", "b.cfg"); !errors.As(err, &se) || se.Class != 11 || se.Code != 8 {
+		t.Errorf("rename over an existing file: %v, want file/duplicate-filename", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "b.cfg")); string(got) != "B" {
+		t.Errorf("b.cfg was overwritten: %q", got)
+	}
+	if err := c.RenameFile(ctx, "missing.cfg", "d.cfg"); !errors.As(err, &se) || se.Class != 11 || se.Code != 7 {
+		t.Errorf("rename of a missing file: %v, want file/file-non-existent", err)
+	}
+	if err := c.RenameFile(ctx, "c.cfg", "../escape.cfg"); err == nil {
+		t.Error("a file was renamed out of the store")
+	}
+
+	addr2, _ := startServerWith(t, simpleIO(t), server.WithFileStore(fstest.MapFS{"a.txt": {Data: []byte("a")}}))
+	c2 := dialDemo(t, addr2)
+	if c2.MMS().Negotiated().Services.Has(mms.ServiceFileRename) {
+		t.Error("fileRename advertised with a read-only store")
+	}
+	if err := c2.RenameFile(ctx, "a.txt", "b.txt"); err == nil {
+		t.Error("RenameFile succeeded on a read-only store")
+	}
+}

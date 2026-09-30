@@ -30,7 +30,9 @@ type Server struct {
 	reports  *reportManager
 	logs     *logManager
 	// svcbs are the sampled-value control blocks (svcb.go).
-	svcbs     map[string]*svcbState
+	svcbs map[string]*svcbState
+	// tracker finds the LTRK service tracking objects (tracking.go).
+	tracker   *tracker
 	svMu      sync.Mutex // guards svH and svQueue
 	svH       func(SVControlEvent)
 	svQueue   []SVControlEvent
@@ -251,7 +253,7 @@ func (s *Server) buildSettingGroups() {
 		if n == 0 {
 			continue
 		}
-		mgr := newSGManager(ld, n, resvTms, s.now)
+		mgr := newSGManager(ld, n, resvTms, s.now, declared != nil)
 		if mgr == nil {
 			continue
 		}
@@ -299,6 +301,7 @@ func New(m *model.Model, opts ...Option) *Server {
 	// EntryID source they share.
 	s.logs = newLogManager(s)
 	s.svcbs = buildSVCBStates(m)
+	s.tracker = buildTracker(m)
 	return s
 }
 
@@ -365,6 +368,9 @@ func (s *Server) initiate() mms.InitiateRequest {
 			mms.ServiceFileClose, mms.ServiceFileDirectory)
 		if _, ok := s.files.fsys.(WritableFS); ok {
 			services = append(services, mms.ServiceFileDelete, mms.ServiceObtainFile)
+		}
+		if _, ok := s.files.fsys.(RenameFS); ok {
+			services = append(services, mms.ServiceFileRename)
 		}
 	}
 	init.Services = mms.NewServiceSupport(services...)

@@ -292,6 +292,40 @@ func ParseFileName(content []byte) (string, error) {
 	return name, nil
 }
 
+// FileRename renames a file of the server's file store (MMS fileRename).
+// IEC 61850 maps no ACSI service to it; a server that implements it
+// advertises it in its Initiate response.
+func (c *Conn) FileRename(ctx context.Context, current, renamed string) error {
+	_, err := c.call(ctx, asn1.Cons(asn1.ContextConstructed(svcFileRename),
+		fileName(asn1.ContextConstructed(0), current),
+		fileName(asn1.ContextConstructed(1), renamed)))
+	return err
+}
+
+// ParseFileRename decodes the content of a FileRename-Request.
+func ParseFileRename(content []byte) (current, renamed string, err error) {
+	dec := asn1.NewDecoder(content)
+	for i := uint32(0); i < 2; i++ {
+		t, v, err := dec.ReadTLV()
+		if err != nil {
+			return "", "", err
+		}
+		if t != asn1.ContextConstructed(i) {
+			return "", "", fmt.Errorf("mms: FileRename-Request element %d has tag %v", i, t)
+		}
+		name, err := ParseFileName(v)
+		if err != nil {
+			return "", "", err
+		}
+		if i == 0 {
+			current = name
+		} else {
+			renamed = name
+		}
+	}
+	return current, renamed, nil
+}
+
 // FileDelete deletes a file of the server's file store (MMS fileDelete,
 // IEC 61850 DeleteFile).
 func (c *Conn) FileDelete(ctx context.Context, name string) error {

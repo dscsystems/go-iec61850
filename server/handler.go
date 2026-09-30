@@ -42,6 +42,26 @@ type handler struct {
 	// changes collects what a write request changed in the process image,
 	// reported once the request's writes are all applied.
 	changes changeSet
+	// readTracking holds the service tracking a read request owes (a
+	// select by reading SBO), applied once its read lock is released.
+	readTracking []func(changeSet)
+}
+
+// flushReadTracking applies the tracking a read request queued, under the
+// write lock, and reports what it changed.
+func (h *handler) flushReadTracking() {
+	if len(h.readTracking) == 0 {
+		return
+	}
+	h.s.mu.Lock()
+	cs := make(changeSet)
+	for _, fn := range h.readTracking {
+		fn(cs)
+	}
+	h.readTracking = nil
+	h.s.reports.onUpdate(cs)
+	h.s.logs.onUpdate(cs)
+	h.s.mu.Unlock()
 }
 
 func (h *handler) Handle(req *mms.Request) (*asn1.Element, error) {
@@ -73,6 +93,8 @@ func (h *handler) Handle(req *mms.Request) (*asn1.Element, error) {
 		return h.initializeJournal(req.Content)
 	case svcFileDelete:
 		return h.fileDelete(req.Content)
+	case svcFileRename:
+		return h.fileRename(req.Content)
 	case svcObtainFile:
 		return h.obtainFile(req)
 	default:
@@ -190,6 +212,8 @@ func (h *handler) enumerate(class int, domain string) []string {
 
 func (h *handler) read(content []byte, conn *mms.ServerConn) (*asn1.Element, error) {
 	h.readConn = conn
+	// A select by reading SBO is tracked once the read lock is released.
+	defer h.flushReadTracking()
 	dec := asn1.NewDecoder(content)
 	// Optional specificationWithResult [0] BOOLEAN precedes the access
 	// specification; clients commonly set it when reading datasets.
@@ -248,6 +272,16 @@ func (h *handler) readOne(domain, item string) *asn1.Element {
 	if base, phase, ok := splitControl(item); ok && phase == "SBO" {
 		ref := controlRef(domain, base)
 		name := h.s.selectSBO(ref, h.readConn)
+		serr := model.ServiceErrorNone
+		if name == "" {
+			serr = model.ServiceErrorInstanceInUse
+			if cm, declared := h.ctlModel(ref); declared && cm != model.CtlSBONormal {
+				serr = model.ServiceErrorAccessViolation
+			}
+		}
+		h.readTracking = append(h.readTracking, func(cs changeSet) {
+			h.s.trackControl(cs, ref, model.ServiceSelect, serr, nil, nil, model.AddCauseNone)
+		})
 		return mms.DataElement(mms.NewVisibleString(name))
 	}
 	ln, itemRest := splitLN(ld, item)
@@ -358,6 +392,7 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 		}
 		if code != 0xff {
 			resp.Add(accessFailureWrite(mms.DataAccessError(code)))
+			h.trackCBWrite(h.changes, t.domain, t.item, v, code)
 			continue
 		}
 		resp.Add(asn1.Prim(asn1.ContextPrimitive(1), nil)) // success [1] NULL
@@ -373,6 +408,7 @@ func (h *handler) write(content []byte, conn *mms.ServerConn) (*asn1.Element, er
 				h.s.queueSV(ev)
 			}
 		}
+		h.trackCBWrite(h.changes, t.domain, t.item, v, code)
 	}
 	return resp, nil
 }

@@ -73,7 +73,7 @@ each gap is one.
 | Control | Y | Y | all four control models |
 | Time and time synchronisation | P | P | time quality set by the application; no time synchronisation protocol |
 | File transfer | Y | Y | writing needs a writable store; see 3.9 |
-| Service tracking (LTRK, 7-2 Ed 2) | Y (g) | P | the classes are templated and served; the server does not record service outcomes in them |
+| Service tracking (LTRK, 7-2 Ed 2) | Y (g) | Y | the server records each control and control block service in its LTRK (see 9); compared with libiec61850's service tracking server |
 
 ### 2.1 Reporting and logging options
 
@@ -197,10 +197,10 @@ each gap is one.
 | SetGoCBValues | Y (g) | N | the GoCB is served read-only |
 | GSSE services | N | N | |
 | SendMSVMessage | Y (receive) | Y (send) | package `sv` |
-| GetMSVCBValues | Y (g) | Y | |
+| GetMSVCBValues | Y | Y | `Client.GetSVCB` |
 | SetMSVCBValues | Y | P | SvEna; the rest is configuration, as in the 9-2 mapping |
 | SendUSVMessage | Y (receive) | Y (send) | package `sv` |
-| GetUSVCBValues | Y (g) | Y | |
+| GetUSVCBValues | Y | Y | `Client.GetSVCB`, which tells a USVCB from an MSVCB by its FC |
 | SetUSVCBValues | Y | P | Resv and SvEna; the rest is configuration, as in the 9-2 mapping. A reservation is exclusive to one association and ends with it, disabling the block |
 
 ### 3.8 Control
@@ -257,7 +257,7 @@ a writable one.
 | FileDirectory | Y | Y |
 | FileDelete | Y | Y |
 | ObtainFile | Y | Y |
-| FileRename | N | N |
+| FileRename | Y | Y (with a store that is a `server.RenameFS`, as `server.DirFS` is; never over an existing file) |
 | Status | Y | Y |
 | Cancel (MMS) | Y | Y (a request still running, an ObtainFile, is cancelled; one already answered is reported as unknown) |
 
@@ -369,6 +369,8 @@ a writable one.
 | Status service answer | state-changes-allowed, operational; `Server.SetStatus` |
 | Dynamic data sets | persistent (domain-specific) names, kept in memory; deletable by clients; configured ones are not |
 | Platforms | pure Go, no cgo; raw Ethernet on Linux (AF_PACKET) |
+| Service tracking | an LTRK in the addressed object's device, else the server's first, records: Select, SelectWithValue, Operate, Cancel and CommandTermination in the tracking object of the control's CDC (SpcTrk … BacTrk); SetBRCBValues, SetURCBValues, SetLCBValues, SetGoCBValues, SetMSVCBValues and SetUSVCBValues, one per attribute written, refused or not; SelectActiveSG, SelectEditSG and ConfirmEditSGValues. The block's state is copied after the service (a report block's written attribute with the value asked for), references in ACSI notation, and data access errors mapped to service errors as libiec61850 maps them. objRef raises data-update, so a data set holding a tracking object reports every service |
+| Setting group control block | served for a device with SG/SE settings, or one whose SCL declares a SettingControl |
 | Sampled-value control blocks | SvEna and, on a USVCB, Resv are writable; a reserved USVCB refuses other associations with temporarily-unavailable and is released and disabled when its association ends; the application publishes on `Server.OnSVControl` |
 | GSSE | not implemented. GSSE (IEC 61850-8-1 Ed 1, from UCA 2.0) was withdrawn in Edition 2; its message is not in any public specification, and neither libiec61850 nor Wireshark decodes it, so there is nothing to verify an encoding against |
 
@@ -379,8 +381,12 @@ a writable one.
   libiec61850's clients against the server (MMS, control, logs, TLS), and
   R-GOOSE and R-SV both ways in every security mode both implement, and
   the association and file services (authentication, Status, SetFile,
-  DeleteFile, release, abort) both ways, and libiec61850's
-  `ClientSVControlBlock` against the server's MSVCB and USVCB.
+  DeleteFile, fileRename, release, abort) both ways, and libiec61850's
+  `ClientSVControlBlock` against the server's MSVCB and USVCB. The
+  client reads, reserves and enables libiec61850's 9-2LE SV control block
+  and receives its stream. The server's LTRK is compared, value by value
+  and report by report, with libiec61850's service tracking server
+  running the same services on the same ICD.
   GDOI registrations are decrypted and dissected by Wireshark. The
   coverage table is `interop/README.md`.
 - `testdata/ed21_diverse.cid` exercises the Edition 2.1 SCL constructs.

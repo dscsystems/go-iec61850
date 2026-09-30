@@ -189,7 +189,10 @@ every IED's GOOSE addressing is missing.
 - The service tracking classes of IEC 61850-7-2 Edition 2 (`CST`, `BTS`,
   `UTS`, `LTS`, `GTS`, `MTS`, `NTS`, `STS`, `CTS`), served under FC `SR`.
   `WithTrackedControl` gives a `CTS` the `ctlVal` type of the control it
-  tracks.
+  tracks. The server keeps them: an LTRK records every control service
+  and every write to a report, log, GOOSE, sampled-value or setting group
+  control block, as libiec61850 does (`model.ServiceType`,
+  `model.ServiceError`); `server/tracking.go` lists what it records.
 - Arrays: `WithMaxPts` sizes the array attributes and sub-objects of `HST`,
   `CSG`, `CSD`, `HMV`, `HWYE` and `HDEL` and sets `maxPts`. An array of a
   constructed type (`hstRangeC`, `crvPts`) is served as an array of

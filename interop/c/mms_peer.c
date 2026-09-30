@@ -8,6 +8,7 @@
  *   status              MMS Status                  -> "status logical=L physical=P err=E"
  *   setfile LOCAL NAME  IEC 61850 SetFile (obtainFile) -> "setfile err=E"
  *   deletefile NAME     IEC 61850 DeleteFile        -> "deletefile err=E"
+ *   rename OLD NEW      MMS fileRename              -> "rename err=E" (an MmsError)
  *   dir                 file directory              -> "file NAME SIZE" per file
  *   release             release (MMS conclude)      -> "release err=E"
  *   abort               abort                       -> "abort err=E"
@@ -83,6 +84,13 @@ main(int argc, char** argv)
             printf("deletefile err=%d\n", err);
             failed |= err != IED_ERROR_OK;
             i += 1;
+        }
+        else if (strcmp(cmd, "rename") == 0 && i + 2 < argc) {
+            MmsError merr;
+            MmsConnection_fileRename(IedConnection_getMmsConnection(con), &merr, argv[i + 1], argv[i + 2]);
+            printf("rename err=%d\n", merr);
+            failed |= merr != MMS_ERROR_NONE;
+            i += 2;
         }
         else if (strcmp(cmd, "dir") == 0) {
             LinkedList files = IedConnection_getFileDirectory(con, &err, NULL);

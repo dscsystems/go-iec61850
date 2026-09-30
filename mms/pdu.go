@@ -48,6 +48,7 @@ const (
 	svcFileOpen            = 72
 	svcFileRead            = 73
 	svcFileClose           = 74
+	svcFileRename          = 75
 	svcFileDelete          = 76
 	svcFileDirectory       = 77
 )
@@ -128,6 +129,7 @@ const (
 	ServiceFileOpen                       = 72
 	ServiceFileRead                       = 73
 	ServiceFileClose                      = 74
+	ServiceFileRename                     = 75
 	ServiceFileDelete                     = 76
 	ServiceFileDirectory                  = 77
 	ServiceInformationReport              = 79

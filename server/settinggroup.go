@@ -39,8 +39,8 @@ type sgSetting struct {
 
 // newSGManager scans ld for SG/SE setting attributes and materialises the
 // SGCB in LLN0. Returns nil if the device has no setting-constrained
-// attributes.
-func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int, now func() *mms.Value) *sgManager {
+// attributes and declared, the SCL declaring its setting groups, is false.
+func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int, now func() *mms.Value, declared bool) *sgManager {
 	if numOfSG == 0 {
 		numOfSG = 1
 	}
@@ -65,7 +65,10 @@ func newSGManager(ld *model.LogicalDevice, numOfSG uint8, resvTms int, now func(
 			m.settings = append(m.settings, s)
 		}
 	}
-	if len(m.settings) == 0 {
+	// A device the SCL declares setting groups for has an SGCB even with
+	// no settings behind it, as libiec61850 serves one: a client selects
+	// its groups, and service tracking records the selection.
+	if len(m.settings) == 0 && !declared {
 		return nil
 	}
 

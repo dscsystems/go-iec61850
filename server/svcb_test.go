@@ -164,3 +164,54 @@ func TestMSVCBEnable(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 }
+
+// GetSVCB reads a block's configuration in one request, telling a USVCB
+// from an MSVCB by its functional constraint.
+func TestGetSVCB(t *testing.T) {
+	m, err := scl.LoadModel("../testdata/ed21_diverse.cid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, _ := startServerWith(t, m)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	lln0 := m.Devices[0].Node("LLN0")
+	for _, name := range []string{"msvcb01", "usvcb01"} {
+		var sc *model.SVControl
+		for _, s := range lln0.SVControls {
+			if s.Name == name {
+				sc = s
+			}
+		}
+		ref := model.ObjectReference("ED21LD0/LLN0." + name)
+		if name == "usvcb01" {
+			if err := c.ReserveUSVCB(ctx, ref, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cb, err := c.GetSVCB(ctx, ref)
+		if err != nil {
+			t.Fatalf("GetSVCB %s: %v", name, err)
+		}
+		unicast := name == "usvcb01"
+		if cb.Unicast != unicast || cb.Resv != unicast || cb.SvEna || cb.SvID != sc.SvID ||
+			cb.ConfRev != sc.ConfRev || cb.SmpRate != uint32(sc.SmpRate) || cb.SmpMod != sc.SmpMod ||
+			cb.OptFlds.SampleRate != sc.Opts.SampleRate || cb.OptFlds.RefreshTime != sc.Opts.RefreshTime ||
+			cb.DstAddress.Addr != sc.DstMAC || cb.DstAddress.AppID != sc.AppID || cb.DstAddress.VID != sc.VLANID ||
+			cb.NoASDU != uint32(sc.NoASDU) {
+			t.Errorf("%s = %+v, want the configuration %+v", name, cb, sc)
+		}
+		if sc.DataSet != "" && cb.DataSet != "ED21LD0/LLN0$"+sc.DataSet {
+			t.Errorf("%s DataSet = %q", name, cb.DataSet)
+		}
+	}
+	if _, err := c.GetSVCB(ctx, "ED21LD0/LLN0.nosuch"); err == nil {
+		t.Error("GetSVCB of a missing block succeeded")
+	}
+}
