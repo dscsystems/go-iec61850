@@ -30,8 +30,10 @@ type ServerConn struct {
 	Password string // ACSE authentication value presented by the client
 	Peer     net.Addr
 
-	unconf    chan []byte // async queue for unconfirmed PDUs (reports)
-	closeOnce sync.Once
+	unconf       chan []byte // async queue for unconfirmed PDUs (reports)
+	closeOnce    sync.Once
+	unconfMu     sync.Mutex // serializes enqueue with queue closure
+	unconfClosed bool
 
 	// MaxPDU is the negotiated maximum MMS PDU size in octets (the
 	// localDetail of the Initiate exchange). Nothing this end sends may
@@ -538,6 +540,11 @@ func (sc *ServerConn) SendUnconfirmedFirst(service *asn1.Element) error {
 }
 
 func (sc *ServerConn) enqueue(pdu []byte) error {
+	sc.unconfMu.Lock()
+	defer sc.unconfMu.Unlock()
+	if sc.unconfClosed {
+		return net.ErrClosed
+	}
 	select {
 	case sc.unconf <- pdu:
 	default:
@@ -559,7 +566,10 @@ func (sc *ServerConn) send(pdu []byte) error {
 // Close closes the transport and stops the unconfirmed writer.
 func (sc *ServerConn) Close() error {
 	sc.closeOnce.Do(func() {
+		sc.unconfMu.Lock()
+		sc.unconfClosed = true
 		close(sc.unconf)
+		sc.unconfMu.Unlock()
 		sc.stop()
 	})
 	return sc.raw.Close()

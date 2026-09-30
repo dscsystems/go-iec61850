@@ -143,6 +143,11 @@ func (c *Client) EnableReporting(ctx context.Context, rcb *RCB, cb func(*Report)
 	members, _ := c.datasetMembersForRCB(ctx, rcb)
 
 	// Reserve the RCB (unbuffered) and push configuration.
+	if !rcb.Buffered {
+		if err := c.writeRCB(ctx, rcb, "Resv", mms.NewBool(true)); err != nil {
+			return nil, err
+		}
+	}
 	if rcb.OptFlds != 0 {
 		if err := c.writeRCB(ctx, rcb, "OptFlds", rcb.OptFlds.Value()); err != nil {
 			return nil, err
@@ -290,17 +295,22 @@ func decodeReport(ir *mms.InformationReport, rcb *RCB, members []mms.VarRef) *Re
 	}
 
 	// Optional data-reference strings precede the values.
+	var dataRefs []string
 	if opt&model.OptDataRef != 0 {
 		for range included {
-			next() // skip data-reference; positions are known from members
+			dataRefs = append(dataRefs, next().Text())
 		}
 	}
 	// Values, one per included member.
 	entries := make([]ReportEntry, 0, len(included))
-	for _, idx := range included {
+	for k, idx := range included {
 		e := ReportEntry{Index: idx, Value: next()}
 		if idx < len(members) {
 			e.Ref, e.FC = model.FromMMS(members[idx].Domain, members[idx].Item)
+		} else if k < len(dataRefs) {
+			if domain, item, ok := strings.Cut(dataRefs[k], "/"); ok {
+				e.Ref, e.FC = model.FromMMS(domain, item)
+			}
 		}
 		entries = append(entries, e)
 	}

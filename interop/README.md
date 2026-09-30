@@ -131,3 +131,19 @@ GOOSE state and timing semantics, time quality — are covered by
 
 Adding interop assertions for the wire-format changes is the obvious next
 step and needs no harness change.
+
+## Rust reference
+
+A separate harness tests against
+[csp0924/iec61850-rust](https://github.com/csp0924/iec61850-rust):
+
+```sh
+bash interop/run-rust.sh
+```
+
+It checks MMS in both directions using the same SCL model, plus bidirectional
+GOOSE and SV codec fixtures. The default Rust revision is pinned; an existing
+checkout can be supplied with `IEC61850_RUST_ROOT=/absolute/path`.
+See [the verification report](../docs/rust-interoperability.md) for coverage,
+Go fixes and the two reference-side failures that currently leave this suite
+red. These tests are skipped in normal Go runs without that environment variable.
