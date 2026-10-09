@@ -255,45 +255,13 @@ var ErrNotDeleted = errors.New("mms: named variable list exists but was not dele
 // GetNamedVariableListAttributes returns the member references of a named
 // variable list (dataset).
 func (c *Conn) GetNamedVariableListAttributes(ctx context.Context, domain, listName string) ([]VarRef, error) {
-	req := asn1.Cons(asn1.ContextConstructed(svcGetNamedVarListAttr),
-		objectName(domain, listName),
-	)
-	resp, err := c.call(ctx, req)
+	members, _, err := c.GetNamedVariableListMembers(ctx, domain, listName)
 	if err != nil {
 		return nil, err
 	}
-	dec := asn1.NewDecoder(resp)
-	content, err := dec.Expect(asn1.ContextConstructed(svcGetNamedVarListAttr))
-	if err != nil {
-		return nil, err
-	}
-	inner := asn1.NewDecoder(content)
-	// GetNamedVariableListAttributes-Response ::= SEQUENCE {
-	//   mmsDeletable [0] BOOLEAN, listOfVariable [1] SEQUENCE OF ... }
-	if _, _, err := inner.Optional(asn1.ContextPrimitive(0)); err != nil {
-		return nil, err
-	}
-	listContent, err := inner.Expect(asn1.ContextConstructed(1))
-	if err != nil {
-		return nil, err
-	}
-	var refs []VarRef
-	ld := asn1.NewDecoder(listContent)
-	for ld.More() {
-		entry, err := ld.Expect(asn1.TagSequence)
-		if err != nil {
-			return nil, err
-		}
-		ed := asn1.NewDecoder(entry)
-		specContent, err := ed.Expect(asn1.ContextConstructed(0)) // variableSpecification name [0]
-		if err != nil {
-			return nil, err
-		}
-		ref, err := parseObjectName(specContent)
-		if err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
+	refs := make([]VarRef, len(members))
+	for i, m := range members {
+		refs[i] = m.VarRef
 	}
 	return refs, nil
 }
