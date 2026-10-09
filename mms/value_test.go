@@ -194,3 +194,23 @@ func TestBinaryTimeIsUTC(t *testing.T) {
 		t.Errorf("round trip = %v, want %v", got, utc)
 	}
 }
+
+// libiec61850 nests a DataAccessError inside a structure for an element it
+// cannot serve (a setting group's SE attribute outside an edit session). The
+// whole read must decode, and the error must re-encode to the same octets.
+func TestNestedDataAccessError(t *testing.T) {
+	raw := []byte{0xa2, 0x09, 0x83, 0x01, 0x00, 0x80, 0x01, 0x02, 0x85, 0x01, 0x07}
+	v, err := DecodeData(asn1.NewDecoder(raw))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if v.Len() != 3 {
+		t.Fatalf("structure of %d elements", v.Len())
+	}
+	if code, ok := v.Index(1).AccessError(); !ok || code != DataAccessError(2) {
+		t.Fatalf("element 1 = %v", v.Index(1))
+	}
+	if got := AppendData(nil, v); string(got) != string(raw) {
+		t.Fatalf("re-encoded % x, want % x", got, raw)
+	}
+}

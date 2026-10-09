@@ -59,6 +59,10 @@ func knownApplicationContext(oid asn1.OID) bool {
 // MMS in the EXTERNAL indirect reference.
 const PresentationContextMMS = 3
 
+// PasswordMechanism is the ACSE password authentication mechanism, 2.2.3.1
+// (ISO/IEC 8650-1, IEC 61850-8-1 clause 21).
+var PasswordMechanism = asn1.OID{2, 2, 3, 1}
+
 // AARQ builds an A-ASSOCIATE request APDU carrying mmsInitiate (an MMS
 // InitiateRequestPDU) as user information. If password is non-empty an
 // ACSE authentication-value (mechanism-name password) is included.
@@ -86,8 +90,10 @@ func AARQFor(mmsInitiate []byte, password string, called, calling Identity, appC
 		bs := asn1.NewBitString(1)
 		bs.SetBit(0, true)
 		seq.Add(asn1.BitStringElem(asn1.ContextPrimitive(10), bs))
-		// mechanism-name [11] OID: {joint-iso-itu-t...} password mechanism 2.2.3.0.1
-		seq.Add(asn1.OIDElem(asn1.ContextPrimitive(11), asn1.OID{2, 2, 3, 0, 1}))
+		// mechanism-name [11] OID: password-1, {joint-iso-itu-t(2)
+		// association-control(2) authentication-mechanism(3) password-1(1)}.
+		// libiec61850 drops an association naming any other mechanism.
+		seq.Add(asn1.OIDElem(asn1.ContextPrimitive(11), PasswordMechanism))
 		// calling-authentication-value [12] EXPLICIT AuthenticationValue
 		//   charstring [0] IMPLICIT GraphicString
 		seq.Add(asn1.Cons(asn1.ContextConstructed(12),

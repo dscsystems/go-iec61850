@@ -170,6 +170,22 @@ func decodeDataTLV(tag asn1.Tag, content []byte, depth int) (*Value, error) {
 		return NewMMSString(string(content)), nil
 	case tagDataUTCTime:
 		return NewUTCTimeRaw(content)
+	case 0:
+		// A DataAccessError nested inside a structure or array. ISO 9506
+		// Data has no [0] alternative, but libiec61850 servers encode an
+		// element they cannot serve this way — a setting-group-editable
+		// (SE) attribute outside an edit session reads as
+		// temporarily-unavailable inside its logical node — and
+		// libiec61850 clients accept it. Refusing it failed the whole read.
+		// DataElement encodes the value back as [0], so it round-trips.
+		if tag.Constructed {
+			return nil, fmt.Errorf("mms: constructed data tag [0]: %w", asn1.ErrUnexpected)
+		}
+		n, err := asn1.DecodeUint(content)
+		if err != nil {
+			return nil, err
+		}
+		return NewDataAccessError(DataAccessError(n)), nil
 	default:
 		return nil, fmt.Errorf("mms: unsupported data tag [%d]: %w", tag.Number, asn1.ErrUnexpected)
 	}
