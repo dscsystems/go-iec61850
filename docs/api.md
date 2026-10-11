@@ -112,6 +112,37 @@ tlsCfg, err := iec62351.ClientConfig(iec62351.Options{
 c, err := client.Dial(ctx, "192.168.10.5:3782", client.WithTLS(tlsCfg))
 ```
 
+#### IEC 62351-4 end-to-end security (native mode)
+
+Package `iec62351/e2e` implements the E2E application security of IEC
+62351-4: a signed handshake carrying the MMS Initiate, an integrity check
+value (HMAC-SHA-256 or AES-GMAC) on every MMS PDU with time and sequence
+replay protection, rekeying, signed release and the security aborts. It is
+independent of TLS and can run with or without it (the E2E certificate must
+not be the TLS one). Each end is an AE title (AP-title + AE-qualifier), and
+its certificate subject is that AE title as an object identifier
+(`pki.OIDName`; `cmd/e2e-pki` issues test credentials and CSRs).
+
+```go
+l, err := e2efile.Load(e2efile.Files{Cert: "client.pem", Key: "client.key", CA: []string{"ca.pem"}},
+    e2e.AETitle{APTitle: asn1.OID{1, 3, 9999, 10}, AEQualifier: 1}, pki.Warn)
+cfg := &e2e.ClientConfig{
+    Local:  l.Identity,
+    Policy: e2e.Policy{Trust: l.Trust, Revocation: l.Revocation},
+    Peer:   e2e.AETitle{APTitle: asn1.OID{1, 3, 9999, 20}, AEQualifier: 1}, // the server's certificate must name it
+    OnEvent: func(e e2e.Event) { log.Print(e.Code, e.Diag) },
+}
+c, err := client.Dial(ctx, addr, client.WithE2E(cfg))
+peer := c.PeerSecurity() // authenticated AE title, certificate, algorithms, key epoch
+```
+
+The server side is `server.WithE2E(serverCfg, required)`; an authenticator
+(`server.WithAuthenticator`) sees the authenticated peer in
+`AssociationRequest.Security`. `Close` performs the MMS conclude and the
+signed ACSE release. A native-mode client never falls back to plain MMS. The
+declared profile and its deviations are in `docs/pics.md` section 8.1;
+design and interpretations in `docs/iec62351-4-implementation-guide.md`.
+
 ### Browsing and reading
 
 ```go

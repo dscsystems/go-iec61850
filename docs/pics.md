@@ -130,7 +130,8 @@ each gap is one.
 | Abort | Y | Y | ACSE A-ABORT in a presentation ARU in a session ABORT |
 | Release | Y | Y | MMS Conclude |
 | Authentication: password (ACSE) | Y | Y | `server.WithPassword`, or `server.WithAuthenticator` for the application's own decision (it also sees the ACSE identities and the TLS peer certificates); a refusal is an ACSE rejection with the diagnostic authentication-failure or authentication-required, reported to the client as `mms.RejectedError` |
-| Authentication: certificates (IEC 62351-4) | N | N | |
+| Authentication: certificates (IEC 62351-4 native mode, E2E) | Y | Y | signed handshake (`client.WithE2E`, `server.WithE2E`); the authenticated peer is in `AssociationRequest.Security`; see section 8.1 |
+| Authentication: certificates (IEC 62351-4 A-profile, compatibility mode) | N | N | |
 
 ### 3.2 Logical device and logical node
 
@@ -346,9 +347,42 @@ a writable one.
 | Replay protection, refusal of unsecured SPDUs | Y | — | |
 | Group key distribution, IEC 62351-9 (GDOI, RFC 6407/8052) | Y (member) | Y (key server) | package `gdoi`; GROUPKEY-PULL with IKEv1 main mode, certificates or pre-shared key |
 | GDOI GROUPKEY-PUSH | N | N | members re-register |
-| IEC 62351-4 (A-profile, end-to-end) | N | N | |
+| IEC 62351-4 E2E security, native mode (OSI) | Y | Y | packages `iec62351/e2e`, `iec62351/e2e/osi`; see 8.1 for the declared profile |
+| IEC 62351-4 A-profile (compatibility mode) | N | N | |
+| IEC 62351-4 native-mode TLS profile (Table 10) | P | P | `iec62351.Options.NativeMode`; see 8.1 |
 | IEC 62351-6 on Ethernet | N | N | |
 | IEC 62351-8 role-based access control | N | N | the server offers write and control hooks (`OnWrite`, `OnControl`) for an application's own policy |
+
+### 8.1 IEC 62351-4 declaration
+
+IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Design, interpretations and the register of open items: [iec62351-4-implementation-guide.md](iec62351-4-implementation-guide.md).
+
+| Table / row | Client | Server | Notes |
+|---|---|---|---|
+| T6 OSI operational environment | Y | Y | |
+| T6 XMPP operational environment | N | N | |
+| T7 Compatibility mode | N | N | A-profile not implemented |
+| T7 Native mode | Y | Y | |
+| T8 TLS_DH_DSS_WITH_AES_256_CBC_SHA (compatibility, m) | N | N | not implemented by Go `crypto/tls` |
+| T9 Use of authenticated encryption | N | N | the AEAD nonce has no defined field (register R-08) |
+| T9 Non-use of AE | Y | Y | clear transfer; E2E encryption (AES-CBC) not yet implemented |
+| T10 TLS_RSA_WITH_AES_128_CBC_SHA256 0x003C (m) | Y | Y | `NativeMode` |
+| T10 TLS_DH_RSA_WITH_AES_128_GCM_SHA256 0x00A0 (m) | N | N | not implemented by Go |
+| T10 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 0x009E (m) | N | N | not implemented by Go |
+| T10 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 0xC02B (m; printed 0xC0,0x23) | Y | Y | |
+| T10 ECDHE_RSA AES-128/256-GCM, ECDHE_ECDSA AES-256-GCM (o) | Y | Y | |
+| TLS renegotiation ([B] 6.2.4) | N | N | not implemented by Go; E2E rekeys at the application layer |
+| T11 rsaEncryption, secp256r1 | Y | Y | |
+| T11 brainpoolP256r1 (m) | N | N | not supported by Go `crypto/x509` |
+| T11 sha256WithRSAEncryption, ecdsa-with-SHA256 | Y | Y | |
+| T11 aes128-CBC, aes256-CBC (c[5]) | i | i | encryption not declared |
+| T11 aes128-GCM, aes256-GCM as AE (c[6]) | i | i | AE not declared |
+| T11 ICV hmacWithSHA256, aes128-GCM, aes256-GCM (c[7]) | Y | Y | AES-GCM as GMAC, 12-octet tag |
+| Diffie-Hellman groups 14, 23 | Y | Y | 28 (brainpool) N |
+| Rekey (client-driven, server request) | Y | Y | 15 min to 24 h; idle associations carry it with an Identify request |
+| Signed release, aborts (HandshakeSecReject/Abort, DtSecAbort, ApplAbort) | Y | Y | |
+| Attribute certificates (IEC 62351-8) | N | N | refused with invalid-attribute-certificate |
+| OCSP | N | N | CRLs only |
 
 ## 9. Implementation-specific information
 

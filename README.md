@@ -7,7 +7,8 @@ A pure-Go implementation of the IEC 61850 protocol family:
 - **Sampled Values** (IEC 61850-9-2 / 9-2LE) publisher and subscriber
 - **R-GOOSE and R-SV** (IEC 61850-90-5) over UDP, signed (HMAC-SHA256) or
   encrypted (AES-GCM), with their keys distributed by **GDOI** (IEC
-  62351-9, RFC 6407/8052), and MMS over TLS under the IEC 62351-3 profile
+  62351-9, RFC 6407/8052), MMS over TLS under the IEC 62351-3 profile, and
+  IEC 62351-4 end-to-end MMS security (native mode)
 - **SCL** (ICD/CID/SCD) parsing and runtime model instantiation
 
 No cgo. GPLv3 licensed.
@@ -50,6 +51,7 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 
 - [docs/api.md](docs/api.md) — full API reference with examples for every package
 - [docs/developer-guide.md](docs/developer-guide.md) — architecture and how to extend the stack
+- [docs/iec62351-4-implementation-guide.md](docs/iec62351-4-implementation-guide.md) — IEC 62351-4 implementation plan, wire contract, interpretations and status
 - [docs/pics.md](docs/pics.md) — Protocol Implementation Conformance Statement (ACSI models and services, MMS, GOOSE, SV, security)
 - [docs/edition-2.1.md](docs/edition-2.1.md) — the detailed IEC 61850 Edition 2.1 conformance record
 - [SKILL.md](SKILL.md) — task-oriented guide for building apps (agent-friendly)
@@ -65,6 +67,7 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 | `goose`, `sv` | GOOSE and Sampled Values publish/subscribe over `ethernet` |
 | `rsession` | R-GOOSE / R-SV session protocol (IEC 61850-90-5) with its message security; an `ethernet.Interface` over UDP |
 | `iec62351` | IEC 62351-3 TLS profile for the MMS client and server |
+| `iec62351/e2e`, `iec62351/e2e/osi`, `iec62351/pki` | IEC 62351-4 end-to-end security (native mode) for MMS, its OSI mapping, and the E2E certificate handling |
 | `gdoi` | IEC 62351-9 group key distribution: GDOI key server and group member |
 | `scl` | SCL file parsing and model building |
 | `model` | IEC 61850 object model, functional constraints, Quality/Timestamp types |

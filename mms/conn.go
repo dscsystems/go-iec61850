@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/asn1"
+	"github.com/dscsystems/go-iec61850/iec62351/e2e"
 	"github.com/dscsystems/go-iec61850/internal/osi/acse"
 	"github.com/dscsystems/go-iec61850/internal/osi/cotp"
 	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
@@ -40,6 +41,24 @@ type Options struct {
 	// proposes. The zero value, ContextMMS, is what most servers expect;
 	// ContextACSI is for a server that accepts only the IEC 61850 one.
 	ApplicationContext ApplicationContext
+
+	// E2E, when non-nil, runs the association in IEC 62351-4 native mode
+	// with end-to-end security: the MMS Initiate is carried in a signed
+	// handshake, every MMS PDU in an integrity-protected ClearTransfer, and
+	// Close performs the signed release. The called and calling identities
+	// default to E2E.Peer and E2E.Local.AE. A password cannot be combined
+	// with it, and a refused native-mode association is never retried in
+	// plain mode.
+	E2E *e2e.ClientConfig
+
+	// ReleaseTimeout bounds the release exchange of Close under E2E
+	// (default 10 s).
+	ReleaseTimeout time.Duration
+
+	// KeepAlive configures TCP keep-alive. Nil uses Go's default, except
+	// under E2E, where probes start after 30 s and fail after about a minute
+	// (IEC 62351-4 H.3.4).
+	KeepAlive *net.KeepAliveConfig
 }
 
 // ApplicationContext names the ACSE application context an association
@@ -97,6 +116,12 @@ type Conn struct {
 	reportHandlers    []reportHandler
 	rawUnconfHandlers []rawUnconfHandler
 	readerDone        chan struct{}
+
+	// Release under E2E: the reader signals the conclude response and the
+	// verified release response.
+	releaseTimeout time.Duration
+	concluded      chan struct{}
+	released       chan error
 }
 
 type reportHandler struct {
@@ -150,6 +175,11 @@ func (s State) String() string {
 // Dial establishes an MMS association to a "host:port" address.
 func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
 	d := net.Dialer{Timeout: opts.ConnectTimeout}
+	if opts.KeepAlive != nil {
+		d.KeepAliveConfig = *opts.KeepAlive
+	} else if opts.E2E != nil {
+		d.KeepAliveConfig = E2EKeepAlive
+	}
 	raw, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, err
@@ -188,6 +218,20 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 	init := DefaultInitiate()
 	if opts.Initiate != nil {
 		init = *opts.Initiate
+	}
+
+	if opts.E2E != nil {
+		if opts.Password != "" {
+			return nil, errors.New("mms: a password cannot be combined with IEC 62351-4 E2E security")
+		}
+		fr, negotiated, responding, err := e2eClientAssociate(ct, opts, init)
+		if err != nil {
+			return nil, err
+		}
+		if opts.ConnectTimeout > 0 {
+			raw.SetDeadline(time.Time{})
+		}
+		return startConn(raw, fr, logger, negotiated, responding, opts), nil
 	}
 
 	// Build ACSE AARQ wrapping the MMS InitiateRequest, wrap in
@@ -229,19 +273,34 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		raw.SetDeadline(time.Time{})
 	}
 
+	return startConn(raw, &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE},
+		logger, negotiated, identityFromACSE(res.Responding), opts), nil
+}
+
+func startConn(raw net.Conn, fr *framing, logger *slog.Logger, negotiated InitiateRequest, responding ACSEIdentity, opts Options) *Conn {
+	rt := opts.ReleaseTimeout
+	if rt <= 0 {
+		rt = 10 * time.Second
+	}
 	c := &Conn{
-		fr:         &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE},
-		raw:        raw,
-		log:        logger,
-		negotiate:  negotiated,
-		responding: identityFromACSE(res.Responding),
-		state:      StateConnected,
-		nextID:     1,
-		pending:    make(map[uint32]chan result),
-		readerDone: make(chan struct{}),
+		fr:             fr,
+		raw:            raw,
+		log:            logger,
+		negotiate:      negotiated,
+		responding:     responding,
+		state:          StateConnected,
+		nextID:         1,
+		pending:        make(map[uint32]chan result),
+		readerDone:     make(chan struct{}),
+		releaseTimeout: rt,
+		concluded:      make(chan struct{}, 1),
+		released:       make(chan error, 1),
 	}
 	go c.readLoop()
-	return c, nil
+	if fr.sec != nil {
+		go c.rekeyLoop(30 * time.Second)
+	}
+	return c
 }
 
 // RespondingIdentity returns the ACSE identity the peer answered with in its
@@ -366,6 +425,13 @@ func (c *Conn) readLoop() {
 	for {
 		pdu, err := c.fr.recvMMS()
 		if err != nil {
+			var rs *releaseSignal
+			if errors.As(err, &rs) {
+				err = c.handleRelease(rs)
+				if err == nil {
+					continue
+				}
+			}
 			c.failAll(err)
 			return
 		}
@@ -405,7 +471,12 @@ func (c *Conn) dispatch(pdu []byte) {
 	case tagUnconfirmed:
 		c.handleUnconfirmed(content)
 	case tagConcludeResponse, tagConcludeResponseLegacy:
-		// Peer accepted our conclude; the reader will see EOF next.
+		// Peer accepted our conclude; the reader will see EOF next, or the
+		// release under E2E.
+		select {
+		case c.concluded <- struct{}{}:
+		default:
+		}
 	case tagCancelResponse, tagCancelError:
 		c.deliverCancel(tag, content)
 	case tagConfirmedRequest:
@@ -533,10 +604,14 @@ func (c *Conn) Close() error {
 	c.mu.Unlock()
 
 	// Best-effort conclude, then ACSE/session release. Ignore errors.
-	c.writeMu.Lock()
-	conclude := asn1.Prim(tagConcludeRequest, nil).Encode()
-	c.fr.sendMMS(conclude)
-	c.writeMu.Unlock()
+	if c.fr.sec != nil {
+		c.closeE2E()
+	} else {
+		c.writeMu.Lock()
+		conclude := asn1.Prim(tagConcludeRequest, nil).Encode()
+		c.fr.sendMMS(conclude)
+		c.writeMu.Unlock()
+	}
 
 	err := c.raw.Close()
 	<-c.readerDone // the reader's failAll moves the state to StateClosed
@@ -592,4 +667,100 @@ func drillErrorClass(body []byte, depth int) (class, code uint8, ok bool) {
 		return uint8(tag.Number), uint8(n), true
 	}
 	return 0, 0, false
+}
+
+// handleRelease processes a release APDU received by the client. A release
+// response ends the association (nil is never returned for it); a release
+// request from the server is answered.
+func (c *Conn) handleRelease(rs *releaseSignal) error {
+	err := c.fr.checkRelease(rs)
+	if rs.response {
+		select {
+		case c.released <- err:
+		default:
+		}
+		if err != nil {
+			return err
+		}
+		return net.ErrClosed
+	}
+	if err != nil {
+		c.fr.sendAbort()
+		return err
+	}
+	if err := c.fr.sendRelease(true); err != nil {
+		return err
+	}
+	return net.ErrClosed
+}
+
+// PeerSecurity returns the authenticated E2E peer; the zero value when the
+// association is not E2E-secured.
+func (c *Conn) PeerSecurity() E2EPeer {
+	if c.fr == nil || c.fr.sec == nil {
+		return E2EPeer{}
+	}
+	return c.fr.sec.Peer()
+}
+
+// closeE2E performs the orderly end of an E2E association: MMS conclude,
+// then the signed ACSE release (IEC 62351-4 13.1.10, 15.3.5).
+func (c *Conn) closeE2E() {
+	timer := time.NewTimer(c.releaseTimeout)
+	defer timer.Stop()
+	c.writeMu.Lock()
+	err := c.fr.sendMMS(asn1.Prim(tagConcludeRequest, nil).Encode())
+	c.writeMu.Unlock()
+	if err != nil {
+		return
+	}
+	select {
+	case <-c.concluded:
+	case <-c.readerDone:
+		return
+	case <-timer.C:
+		return
+	}
+	c.writeMu.Lock()
+	err = c.fr.sendRelease(false)
+	c.writeMu.Unlock()
+	if err != nil {
+		return
+	}
+	select {
+	case err := <-c.released:
+		if err != nil {
+			c.log.Warn("mms: e2e release response not verified", "err", err)
+		}
+	case <-c.readerDone:
+	case <-timer.C:
+		c.log.Warn("mms: e2e release timed out")
+	}
+}
+
+// rekeyLoop keeps an idle E2E association within its rekey interval: when a
+// rekey is due and no PDU has carried it, it sends an Identify request to
+// carry it (IEC 62351-4 13.3.2 f)), and it aborts an association whose
+// rekey was never acknowledged.
+func (c *Conn) rekeyLoop(interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-c.readerDone:
+			return
+		case <-tick.C:
+		}
+		sec := c.fr.sec
+		if sec.RekeyOverdue(2 * c.releaseTimeout) {
+			c.log.Warn("mms: e2e rekey not acknowledged; aborting")
+			c.Abort()
+			return
+		}
+		if sec.RekeyDue() {
+			ctx, cancel := context.WithTimeout(context.Background(), c.releaseTimeout)
+			c.call(ctx, asn1.Prim(asn1.ContextPrimitive(svcIdentify), nil))
+			cancel()
+		}
+	}
 }

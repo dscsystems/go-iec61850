@@ -4,7 +4,6 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/hmac"
 	"crypto/rand"
@@ -16,6 +15,8 @@ import (
 	"fmt"
 	"hash"
 	"math/big"
+
+	dhx "github.com/dscsystems/go-iec61850/internal/cryptox/dh"
 )
 
 // Phase 1 attribute classes (RFC 2409 appendix A).
@@ -133,72 +134,42 @@ func prf(h func() hash.Hash, key []byte, data ...[]byte) []byte {
 type dh struct {
 	group int
 	pub   []byte // the KE payload value
-	ecKey *ecdh.PrivateKey
-	x     *big.Int // MODP private exponent
+	key   *dhx.Key
 }
 
-var (
-	modp2048P, _ = new(big.Int).SetString(
-		"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD129024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
-			"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
-			"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3DC2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"+
-			"83655D23DCA3AD961C62F356208552BB9ED529077096966D670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"+
-			"E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9DE2BCBF6955817183995497CEA956AE515D2261898FA0510"+
-			"15728E5A8AACAA68FFFFFFFFFFFFFFFF", 16)
-	modpLen = 256
-)
-
-func curveOf(group int) ecdh.Curve {
+func kindOf(group int) (dhx.Kind, bool) {
 	switch group {
+	case groupMODP2048:
+		return dhx.MODP2048, true
 	case groupECP256:
-		return ecdh.P256()
+		return dhx.P256, true
 	case groupECP384:
-		return ecdh.P384()
+		return dhx.P384, true
 	}
-	return nil
+	return 0, false
 }
 
+// newDH generates a key; an ECP KE value is x followed by y without the
+// uncompressed-point prefix (RFC 5903), a MODP one is padded to the modulus.
 func newDH(group int) (*dh, error) {
-	if c := curveOf(group); c != nil {
-		k, err := c.GenerateKey(rand.Reader)
-		if err != nil {
-			return nil, err
-		}
-		// RFC 5903: the KE value is x followed by y, without the
-		// uncompressed-point prefix.
-		return &dh{group: group, ecKey: k, pub: k.PublicKey().Bytes()[1:]}, nil
-	}
-	if group != groupMODP2048 {
+	k, ok := kindOf(group)
+	if !ok {
 		return nil, fmt.Errorf("gdoi: Diffie-Hellman group %d", group)
 	}
-	x, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 512))
+	key, err := dhx.Generate(k, dhx.RawXY, nil)
 	if err != nil {
 		return nil, err
 	}
-	y := new(big.Int).Exp(big.NewInt(2), x, modp2048P)
-	return &dh{group: group, x: x, pub: y.FillBytes(make([]byte, modpLen))}, nil
+	return &dh{group: group, pub: key.Public(), key: key}, nil
 }
 
-// shared computes g^xy from the peer's KE value: for an ECP group its x
-// coordinate (RFC 5903), for MODP the value padded to the modulus length.
+// shared computes g^xy from the peer's KE value.
 func (d *dh) shared(peer []byte) ([]byte, error) {
-	if c := curveOf(d.group); c != nil {
-		pk, err := c.NewPublicKey(append([]byte{4}, peer...))
-		if err != nil {
-			return nil, fmt.Errorf("gdoi: peer key exchange value: %w", err)
-		}
-		return d.ecKey.ECDH(pk)
+	z, err := d.key.Shared(peer)
+	if err != nil {
+		return nil, fmt.Errorf("gdoi: peer key exchange value: %w", err)
 	}
-	if len(peer) != modpLen {
-		return nil, fmt.Errorf("gdoi: MODP key exchange value of %d octets", len(peer))
-	}
-	y := new(big.Int).SetBytes(peer)
-	one := big.NewInt(1)
-	pm1 := new(big.Int).Sub(modp2048P, one)
-	if y.Cmp(one) <= 0 || y.Cmp(pm1) >= 0 {
-		return nil, errors.New("gdoi: peer key exchange value out of range")
-	}
-	return new(big.Int).Exp(y, d.x, modp2048P).FillBytes(make([]byte, modpLen)), nil
+	return z, nil
 }
 
 // keys is the keying material of a phase 1 SA (RFC 2409 5).
