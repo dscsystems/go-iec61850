@@ -42,6 +42,7 @@ const (
 	piTransportDisc  = 0x11
 	piReasonCode     = 0x32
 	pgiUserData      = 0xc1
+	pgiExtUserData   = 0xc2
 )
 
 // Reason codes of a REFUSE SPDU (ISO 8327-1).
@@ -78,7 +79,17 @@ func (e *AbortedError) Is(target error) bool { return target == ErrAborted }
 // ConnectClient sends a CONNECT SPDU carrying userData (the presentation
 // CP PDU) and returns the user data from the peer's ACCEPT SPDU.
 func ConnectClient(t Transport, callingSSEL, calledSSEL, userData []byte) ([]byte, error) {
-	spdu := buildConnect(siConnect, callingSSEL, calledSSEL, userData)
+	return ConnectClientExt(t, callingSSEL, calledSSEL, userData, len(userData) > MaxUserData)
+}
+
+// ConnectClientExt is ConnectClient choosing whether the CONNECT carries its
+// user data as Extended User Data (PGI 194), which IEC 62351-4 10.3 requires
+// and which is needed above 512 octets, up to 10 240.
+func ConnectClientExt(t Transport, callingSSEL, calledSSEL, userData []byte, extended bool) ([]byte, error) {
+	if len(userData) > MaxExtendedUserData {
+		return nil, fmt.Errorf("session: CONNECT user data of %d octets exceeds %d", len(userData), MaxExtendedUserData)
+	}
+	spdu := buildConnectExt(siConnect, callingSSEL, calledSSEL, userData, extended)
 	if err := t.Send(spdu); err != nil {
 		return nil, err
 	}
@@ -128,6 +139,9 @@ func AcceptServer(t Transport) (*AcceptResult, error) {
 	}
 	if si != siConnect {
 		return nil, fmt.Errorf("session: expected CONNECT, got SI 0x%02x", si)
+	}
+	if len(ud) > MaxExtendedUserData {
+		return nil, fmt.Errorf("session: CONNECT user data of %d octets exceeds %d", len(ud), MaxExtendedUserData)
 	}
 	return &AcceptResult{
 		UserData:    ud,
@@ -219,6 +233,10 @@ func stripDataPrefix(tsdu []byte) ([]byte, error) {
 }
 
 func buildConnect(si byte, callingSSEL, calledSSEL, userData []byte) []byte {
+	return buildConnectExt(si, callingSSEL, calledSSEL, userData, false)
+}
+
+func buildConnectExt(si byte, callingSSEL, calledSSEL, userData []byte, extended bool) []byte {
 	var params bytes.Buffer
 
 	// Connect/Accept Item parameter group.
@@ -238,7 +256,11 @@ func buildConnect(si byte, callingSSEL, calledSSEL, userData []byte) []byte {
 	}
 
 	// User data parameter group carries the presentation PDU.
-	writePGI(&params, pgiUserData, userData)
+	if extended {
+		writePGI(&params, pgiExtUserData, userData)
+	} else {
+		writePGI(&params, pgiUserData, userData)
+	}
 
 	return spdu(si, params.Bytes())
 }
@@ -318,7 +340,7 @@ func findUserData(params []byte) ([]byte, error) {
 			return nil, fmt.Errorf("session: parameter length %d overflows", plen)
 		}
 		val := params[1+n : 1+n+plen]
-		if code == pgiUserData {
+		if code == pgiUserData || code == pgiExtUserData {
 			return val, nil
 		}
 		params = params[1+n+plen:]
@@ -333,3 +355,72 @@ func writePI(b *bytes.Buffer, code byte, val []byte) {
 }
 
 func writePGI(b *bytes.Buffer, code byte, content []byte) { writePI(b, code, content) }
+
+// User data limits of ISO 8327-1 version 2: User Data in a CONNECT is at
+// most 512 octets; Extended User Data at most 10 240 (IEC 62351-4 10.1).
+const (
+	MaxUserData         = 512
+	MaxExtendedUserData = 10240
+)
+
+// Finish sends a FINISH SPDU (orderly release) carrying userData, the
+// presentation user data holding the ACSE RLRQ.
+func Finish(t Transport, userData []byte) error {
+	var params bytes.Buffer
+	writePI(&params, piTransportDisc, []byte{0x01}) // release the transport afterwards
+	writePGI(&params, pgiUserData, userData)
+	return t.Send(spdu(siFinish, params.Bytes()))
+}
+
+// Disconnect sends a DISCONNECT SPDU carrying userData (the RLRE).
+func Disconnect(t Transport, userData []byte) error {
+	var params bytes.Buffer
+	writePGI(&params, pgiUserData, userData)
+	return t.Send(spdu(siDisconnect, params.Bytes()))
+}
+
+// Kind classifies a received SPDU.
+type Kind uint8
+
+const (
+	KindData Kind = iota + 1
+	KindFinish
+	KindDisconnect
+)
+
+// Receive reads one data-phase TSDU and classifies it: data (the
+// presentation user data is returned), FINISH or DISCONNECT (their user
+// data is returned). An ABORT returns an *AbortedError as ReceiveData does.
+func Receive(t Transport) (Kind, []byte, error) {
+	tsdu, err := t.Receive()
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(tsdu) == 0 {
+		return 0, nil, fmt.Errorf("session: empty TSDU")
+	}
+	switch tsdu[0] {
+	case siAbort:
+		params, err := spduParams(tsdu)
+		if err != nil {
+			return 0, nil, &AbortedError{}
+		}
+		ud, _ := findUserData(params)
+		return 0, nil, &AbortedError{UserData: ud}
+	case siFinish, siDisconnect:
+		params, err := spduParams(tsdu)
+		if err != nil {
+			return 0, nil, err
+		}
+		ud, err := findUserData(params)
+		if err != nil {
+			return 0, nil, err
+		}
+		if tsdu[0] == siFinish {
+			return KindFinish, ud, nil
+		}
+		return KindDisconnect, ud, nil
+	}
+	ud, err := stripDataPrefix(tsdu)
+	return KindData, ud, err
+}

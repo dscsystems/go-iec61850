@@ -480,3 +480,171 @@ func parsePDVList(content []byte) (contextID int, data []byte, err error) {
 	}
 	return contextID, nil, fmt.Errorf("presentation: no data values in PDV-list")
 }
+
+// ContextE2E is the identifier this library proposes for the IEC 62351-4
+// E2E security abstract syntax (odd, as IEC 62351-4 10.4.1 requires).
+const ContextE2E = 5
+
+// oidE2E is e2eSecurityAS (IEC 62351-4 15.2.1).
+var oidE2E = asn1.OID{1, 0, 62351, 4, 1, 2, 1}
+
+// IsE2E reports the E2E security abstract syntax.
+func (c Context) IsE2E() bool { return c.AbstractSyntax.Equal(oidE2E) }
+
+// BuildCPE2E is BuildCP proposing, besides ACSE and MMS, the IEC 62351-4
+// E2E security context.
+func BuildCPE2E(callingPSel, calledPSel, acseData []byte) []byte {
+	normal := asn1.Cons(asn1.ContextConstructed(2))
+	if len(callingPSel) > 0 {
+		normal.Add(asn1.Prim(asn1.ContextPrimitive(1), callingPSel))
+	}
+	if len(calledPSel) > 0 {
+		normal.Add(asn1.Prim(asn1.ContextPrimitive(2), calledPSel))
+	}
+	normal.Add(asn1.Cons(asn1.ContextConstructed(4),
+		contextEntry(ContextACSE, oidACSE),
+		contextEntry(ContextMMS, oidMMS),
+		contextEntry(ContextE2E, oidE2E),
+	))
+	normal.Add(userData(ContextACSE, acseData))
+	return asn1.Cons(asn1.TagSet, modeSelector(), normal).Encode()
+}
+
+// NegotiatedE2E is Negotiated plus the E2E security context.
+type NegotiatedE2E struct {
+	Negotiated
+	E2E int // zero when not proposed or not accepted
+}
+
+// NegotiateWithE2E is Negotiate also accepting the E2E context when allow.
+func NegotiateWithE2E(proposed []Context, allow bool) NegotiatedE2E {
+	n := NegotiatedE2E{Negotiated: Negotiate(proposed)}
+	if allow {
+		for _, c := range proposed {
+			if c.IsE2E() && c.BER() {
+				n.E2E = c.ID
+			}
+		}
+	}
+	return n
+}
+
+func (n NegotiatedE2E) accepts(c Context) bool {
+	return c.Acceptable() || (n.E2E != 0 && c.ID == n.E2E && c.IsE2E() && c.BER())
+}
+
+// BuildCPAWithE2E is BuildCPA accepting the E2E context when allow.
+func BuildCPAWithE2E(respondingPSel []byte, proposed []Context, acseData []byte, allow bool) (NegotiatedE2E, []byte) {
+	neg := NegotiateWithE2E(proposed, allow)
+	normal := asn1.Cons(asn1.ContextConstructed(2))
+	if len(respondingPSel) > 0 {
+		normal.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
+	}
+	results := asn1.Cons(asn1.ContextConstructed(5))
+	for _, c := range proposed {
+		if neg.accepts(c) {
+			results.Add(contextResult(ResultAcceptance))
+		} else {
+			results.Add(contextResult(ResultProviderRejection))
+		}
+	}
+	normal.Add(results)
+	acseID := neg.ACSE
+	if acseID == 0 {
+		acseID = ContextACSE
+	}
+	normal.Add(userData(acseID, acseData))
+	return neg, asn1.Cons(asn1.TagSet, modeSelector(), normal).Encode()
+}
+
+// BuildCPRWithE2E is BuildCPR with the E2E context's result reported.
+func BuildCPRWithE2E(respondingPSel []byte, proposed []Context, acseData []byte, allow bool) []byte {
+	neg := NegotiateWithE2E(proposed, allow)
+	seq := asn1.Cons(asn1.TagSequence)
+	if len(respondingPSel) > 0 {
+		seq.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
+	}
+	results := asn1.Cons(asn1.ContextConstructed(5))
+	for _, c := range proposed {
+		if neg.accepts(c) {
+			results.Add(contextResult(ResultAcceptance))
+		} else {
+			results.Add(contextResult(ResultProviderRejection))
+		}
+	}
+	seq.Add(results)
+	acseID := neg.ACSE
+	if acseID == 0 {
+		acseID = ContextACSE
+	}
+	seq.Add(userData(acseID, acseData))
+	return seq.Encode()
+}
+
+// UnwrapDataCtx extracts the user data of a data-phase presentation PDU with
+// its presentation-context-identifier (-1 when absent).
+func UnwrapDataCtx(pdu []byte) (int, []byte, error) {
+	dec := asn1.NewDecoder(pdu)
+	tag, content, err := dec.ReadTLV()
+	if err != nil {
+		return 0, nil, err
+	}
+	if tag != asn1.ApplicationConstructed(1) {
+		return 0, nil, fmt.Errorf("presentation: expected fully-encoded-data, got %v", tag)
+	}
+	seq, err := asn1.NewDecoder(content).Expect(asn1.TagSequence)
+	if err != nil {
+		return 0, nil, err
+	}
+	inner := asn1.NewDecoder(seq)
+	ctx := -1
+	for inner.More() {
+		t, c, err := inner.ReadTLV()
+		if err != nil {
+			return 0, nil, err
+		}
+		switch {
+		case t == asn1.TagInteger:
+			n, err := asn1.DecodeInt(c)
+			if err != nil {
+				return 0, nil, err
+			}
+			ctx = int(n)
+		case t == asn1.ContextConstructed(0):
+			return ctx, c, nil
+		case t == asn1.TagOID:
+			// transfer-syntax-name
+		default:
+			return 0, nil, fmt.Errorf("presentation: unexpected %v in PDV-list", t)
+		}
+	}
+	return 0, nil, fmt.Errorf("presentation: no single-ASN1-type in PDV-list")
+}
+
+// WrapUserData wraps payload in fully-encoded-data for the given context,
+// with no default substitution (context 0 is a valid caller error).
+func WrapUserData(contextID int, payload []byte) []byte {
+	return userData(contextID, payload).Encode()
+}
+
+// UnwrapAbortCtx is UnwrapAbort returning the context identifier as well.
+func UnwrapAbortCtx(pdu []byte) (int, []byte, error) {
+	tag, content, err := asn1.NewDecoder(pdu).ReadTLV()
+	if err != nil {
+		return 0, nil, err
+	}
+	if tag != asn1.ContextConstructed(0) && tag != asn1.TagSequence {
+		return 0, nil, fmt.Errorf("presentation: ARU of tag %v", tag)
+	}
+	dec := asn1.NewDecoder(content)
+	for dec.More() {
+		t, c, err := dec.ReadTLV()
+		if err != nil {
+			return 0, nil, err
+		}
+		if t == asn1.ApplicationConstructed(1) {
+			return parsePDVList(c)
+		}
+	}
+	return 0, nil, fmt.Errorf("presentation: no user data")
+}

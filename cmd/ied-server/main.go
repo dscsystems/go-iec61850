@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/iec62351/e2e/e2efile"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 	"github.com/dscsystems/go-iec61850/scl"
@@ -30,6 +31,8 @@ func main() {
 	addr := flag.String("addr", ":102", "listen address")
 	filesDir := flag.String("files", "", "directory to serve via MMS file services")
 	verbose := flag.Bool("v", false, "verbose logging")
+	var e2eFlags e2efile.Flags
+	e2eFlags.Register(flag.CommandLine, true)
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -54,6 +57,15 @@ func main() {
 	}
 	if *filesDir != "" {
 		sopts = append(sopts, server.WithFileStore(os.DirFS(*filesDir)))
+	}
+	if e2eFlags.Enabled() {
+		cfg, err := e2eFlags.ServerConfig(e2eFlags.EventPrinter(os.Stdout))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ied-server: e2e: %v\n", err)
+			os.Exit(1)
+		}
+		sopts = append(sopts, server.WithE2E(cfg, e2eFlags.Required))
+		log.Info("IEC 62351-4 E2E enabled", "ae", e2eFlags.AE, "required", e2eFlags.Required)
 	}
 	srv := server.New(m, sopts...)
 	srv.OnWrite(func(da *model.DataAttribute, v *mms.Value) error {

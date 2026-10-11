@@ -306,6 +306,15 @@ type Result struct {
 	// so its own clients see the device's identity; it is zero when the peer
 	// omitted the fields, which is legal.
 	Responding Identity
+
+	// Result is the associate-result (0 accepted, 1 rejected-permanent, 2
+	// rejected-transient), DiagSource the result-source-diagnostic choice
+	// (1 acse-service-user, 2 acse-service-provider).
+	Result, DiagSource int
+	// ApplicationContext is the application-context-name answered.
+	ApplicationContext asn1.OID
+	// UserInfo holds every EXTERNAL of the user-information.
+	UserInfo [][]byte
 }
 
 // ParseAARE parses an A-ASSOCIATE response and extracts the MMS user data.
@@ -332,14 +341,19 @@ func ParseAARE(apdu []byte) (*Result, error) {
 			if err == nil && n != 0 {
 				res.Accepted = false
 			}
+			res.Result = int(n)
 		case asn1.ContextConstructed(3): // result-source-diagnostic
 			res.Diagnostic = parseDiagnostic(c)
+			if t, err := asn1.NewDecoder(c).Peek(); err == nil {
+				res.DiagSource = int(t.Number)
+			}
+		case asn1.ContextConstructed(1): // application-context-name
+			res.ApplicationContext, _ = firstOID(c)
 		case asn1.ContextConstructed(30): // user-information
-			ud, err := parseUserInfo(c)
-			if err != nil {
+			if res.UserInfo, err = externals(c); err != nil {
 				return nil, err
 			}
-			res.UserData = ud
+			res.UserData, _ = parseUserInfo(c)
 		}
 	}
 	return res, nil
@@ -359,6 +373,13 @@ type Request struct {
 	// ApplicationContext is the application-context-name the peer
 	// proposed, nil when it could not be decoded.
 	ApplicationContext asn1.OID
+
+	// UserInfo holds every EXTERNAL of the user-information, complete TLVs.
+	UserInfo [][]byte
+	// NonKernel reports fields outside the ACSE kernel: sender-acse-
+	// requirements, mechanism-name, calling-authentication-value or
+	// application-context-name-list (IEC 62351-4 15.6.1).
+	NonKernel bool
 }
 
 // ParseAARQ parses an A-ASSOCIATE request and extracts the MMS user data
@@ -397,16 +418,19 @@ func ParseAARQFull(apdu []byte) (Request, error) {
 					req.ApplicationContext = oid
 				}
 			}
+		case asn1.ContextPrimitive(10), asn1.ContextPrimitive(11), asn1.ContextConstructed(13):
+			req.NonKernel = true
 		case asn1.ContextConstructed(12): // calling-authentication-value
+			req.NonKernel = true
 			av := asn1.NewDecoder(c)
 			if pw, ok, _ := av.Optional(asn1.ContextPrimitive(0)); ok {
 				req.Password = string(pw)
 			}
 		case asn1.ContextConstructed(30):
-			req.UserData, err = parseUserInfo(c)
-			if err != nil {
+			if req.UserInfo, err = externals(c); err != nil {
 				return req, err
 			}
+			req.UserData, _ = parseUserInfo(c)
 		}
 	}
 	return req, nil

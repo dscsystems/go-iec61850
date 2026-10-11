@@ -62,6 +62,12 @@ type Options struct {
 	ServerName string
 	// TLS13Only refuses TLS 1.2.
 	TLS13Only bool
+	// NativeMode selects the IEC 62351-4 native-mode TLS profile (Table 10)
+	// instead of the IEC 62351-3 one: TLS 1.2 with NativeModeCipherSuites,
+	// and session resumption ([B] 6.2.3). The mandatory DH_RSA and DHE_RSA
+	// suites and renegotiation are not implemented by Go and are declared as
+	// deviations in docs/pics.md.
+	NativeMode bool
 	// OnEvent is told of every peer refused, for the security event log
 	// (IEC 62351-14).
 	OnEvent func(Event)
@@ -94,6 +100,9 @@ func ClientConfig(o Options) (*tls.Config, error) {
 		return nil, err
 	}
 	cfg.Renegotiation = tls.RenegotiateNever
+	if o.NativeMode {
+		cfg.ClientSessionCache = tls.NewLRUClientSessionCache(16)
+	}
 	return cfg, nil
 }
 
@@ -108,10 +117,12 @@ func ServerConfig(o Options) (*tls.Config, error) {
 	// The verification is VerifyConnection's; asking for the certificate
 	// here makes its absence an error before the handshake completes.
 	cfg.ClientAuth = tls.RequireAnyClientCert
-	// Resumption skips the certificate checks for a connection's lifetime
-	// of a ticket; MMS associations are long-lived, so a full handshake
-	// each time costs nothing that matters.
-	cfg.SessionTicketsDisabled = true
+	if !o.NativeMode {
+		// Resumption skips the certificate checks for a connection's lifetime
+		// of a ticket; MMS associations are long-lived, so a full handshake
+		// each time costs nothing that matters.
+		cfg.SessionTicketsDisabled = true
+	}
 	return cfg, nil
 }
 
@@ -128,10 +139,19 @@ func base(o Options) (*tls.Config, error) {
 	if o.TLS13Only {
 		min = tls.VersionTLS13
 	}
+	suites := CipherSuites
+	max := uint16(0)
+	if o.NativeMode {
+		if o.TLS13Only {
+			return nil, errors.New("iec62351: NativeMode is a TLS 1.2 profile")
+		}
+		suites, max = NativeModeCipherSuites, tls.VersionTLS12
+	}
 	return &tls.Config{
 		Certificates:     o.Certificates,
 		MinVersion:       min,
-		CipherSuites:     CipherSuites,
+		MaxVersion:       max,
+		CipherSuites:     suites,
 		CurvePreferences: Curves,
 		// The chain is verified by VerifyConnection, which checks what
 		// the standard library's verification does not (revocation, key
@@ -262,4 +282,24 @@ func namesServer(c *x509.Certificate, name string) bool {
 		return c.VerifyHostname(name) == nil
 	}
 	return c.Subject.CommonName == name
+}
+
+// NativeModeCipherSuites are the IEC 62351-4 Table 10 suites Go implements,
+// by the IANA value of the suite the table names (implementation plan
+// register R-10: the table prints 0xC0,0x23 for
+// TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, whose IANA value is 0xC0,0x2B;
+// 0xC023 is a CBC suite and must never be configured in its place).
+//
+// Mandatory and implemented: ECDHE_ECDSA_AES_128_GCM_SHA256 (0xC02B),
+// RSA_WITH_AES_128_CBC_SHA256 (0x003C). Optional and implemented:
+// ECDHE_RSA_AES_128/256_GCM (0xC02F, 0xC030), ECDHE_ECDSA_AES_256_GCM
+// (0xC02C). Not implemented by Go: DH_RSA_AES_128_GCM (0x00A0, mandatory),
+// DHE_RSA_AES_128_GCM (0x009E, mandatory), DH_RSA_AES_128_CBC (0x0031),
+// DH_RSA_AES_256_GCM (0x00A1).
+var NativeModeCipherSuites = []uint16{
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_RSA_WITH_AES_128_CBC_SHA256,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 }

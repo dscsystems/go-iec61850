@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto"
-	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -14,6 +13,7 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"errors"
+	dhx "github.com/dscsystems/go-iec61850/internal/cryptox/dh"
 	"math/big"
 	"net"
 	"strings"
@@ -40,11 +40,11 @@ func TestECP256Vectors(t *testing.T) {
 	gr := unhex(t, `D12DFB52 89C8D4F8 1208B702 70398C34 2296970A 0BCCB74C 736FC755 4494BF63
 		56FBF3CA 366CC23E 8157854C 13C58D6A AC23F046 ADA30F83 53E74F33 039872AB`)
 	gir := unhex(t, "D6840F6B 42F6EDAF D13116E0 E1256520 2FEF8E9E CE7DCE03 812464D0 4B9442DE")
-	k, err := ecdh.P256().NewPrivateKey(i)
+	k, err := dhx.FromPrivate(dhx.P256, dhx.RawXY, i)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &dh{group: groupECP256, ecKey: k, pub: k.PublicKey().Bytes()[1:]}
+	d := &dh{group: groupECP256, key: k, pub: k.Public()}
 	if !bytes.Equal(d.pub, gi) {
 		t.Errorf("KE value = %x, want %x", d.pub, gi)
 	}
@@ -73,11 +73,11 @@ func TestDHAgreement(t *testing.T) {
 	}
 	// Degenerate MODP values are refused.
 	a, _ := newDH(groupMODP2048)
-	if _, err := a.shared(make([]byte, modpLen)); err == nil {
+	if _, err := a.shared(make([]byte, dhx.MODPLen)); err == nil {
 		t.Error("g^y = 0 accepted")
 	}
-	one := make([]byte, modpLen)
-	one[modpLen-1] = 1
+	one := make([]byte, dhx.MODPLen)
+	one[dhx.MODPLen-1] = 1
 	if _, err := a.shared(one); err == nil {
 		t.Error("g^y = 1 accepted")
 	}

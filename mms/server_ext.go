@@ -19,9 +19,14 @@ type AssociationRequest struct {
 	Password        string
 	Called, Calling ACSEIdentity
 	// TLS is the state of the TLS connection the association runs over,
-	// nil without TLS; its PeerCertificates are the client's verified
-	// certificate chain.
+	// nil without TLS. Its PeerCertificates are the chain the client
+	// presented, leaf first; under the iec62351 profile it has been verified
+	// by the configuration's VerifyConnection, but VerifiedChains is empty
+	// because that verification replaces the standard one.
 	TLS *tls.ConnectionState
+	// Security is the peer authenticated by IEC 62351-4 E2E security; the
+	// zero value for a plain association.
+	Security E2EPeer
 }
 
 // ErrAuthenticationRequired, returned by an authenticator, rejects the

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/iec62351/e2e"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
@@ -55,6 +56,13 @@ type Server struct {
 
 	// authenticate decides on associations (WithAuthenticator).
 	authenticate func(mms.AssociationRequest) error
+	// e2e enables IEC 62351-4 native mode (WithE2E).
+	e2e         *e2e.ServerConfig
+	e2eRequired bool
+	// aeIdentity is the responding ACSE identity (WithAEIdentity).
+	aeIdentity *mms.ACSEIdentity
+	// handshakeTimeout bounds association setup (WithHandshakeTimeout).
+	handshakeTimeout time.Duration
 	// deletableLogs lets clients delete log entries (WithDeletableLogs).
 	deletableLogs bool
 	// status is the Status service's answer: logical<<8 | physical.
@@ -392,7 +400,12 @@ func (s *Server) serveConn(raw net.Conn) {
 	}
 
 	init := s.initiate()
-	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate})
+	ht := s.handshakeTimeout
+	if ht == 0 {
+		ht = 10 * time.Second
+	}
+	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate,
+		E2E: s.e2e, E2ERequired: s.e2eRequired, Responding: s.aeIdentity, HandshakeTimeout: ht})
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()
@@ -523,4 +536,23 @@ func (s *Server) Read(ref model.ObjectReference, fc model.FC) *mms.Value {
 		return nil
 	}
 	return daValue(da)
+}
+
+// WithE2E accepts IEC 62351-4 native-mode associations with end-to-end
+// security. With required, plain associations are refused
+// (application-context-name-not-supported).
+func WithE2E(cfg *e2e.ServerConfig, required bool) Option {
+	return func(s *Server) { s.e2e, s.e2eRequired = cfg, required }
+}
+
+// WithAEIdentity sets the responding ACSE identity (AP-title and
+// AE-qualifier) of the server's associations. Under E2E it defaults to the
+// AE title of the E2E identity.
+func WithAEIdentity(id mms.ACSEIdentity) Option {
+	return func(s *Server) { s.aeIdentity = &id }
+}
+
+// WithHandshakeTimeout bounds the association handshake (default 10 s).
+func WithHandshakeTimeout(d time.Duration) Option {
+	return func(s *Server) { s.handshakeTimeout = d }
 }

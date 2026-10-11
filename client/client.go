@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/iec62351/e2e"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
@@ -220,3 +221,23 @@ func (c *Client) TimeQuality() mms.TimeQuality {
 	}
 	return mms.DefaultTimeQuality
 }
+
+// WithE2E runs the association in IEC 62351-4 native mode with end-to-end
+// security (see package iec62351/e2e). The called and calling ACSE
+// identities default to cfg.Peer and cfg.Local.AE.
+func WithE2E(cfg *e2e.ClientConfig) Option { return func(o *mms.Options) { o.E2E = cfg } }
+
+// WithAEIdentity sets the called and calling ACSE identities (AP-title and
+// AE-qualifier) of the association.
+func WithAEIdentity(called, calling mms.ACSEIdentity) Option {
+	return func(o *mms.Options) { o.Called, o.Calling = called, calling }
+}
+
+// WithKeepAlive configures TCP keep-alive.
+func WithKeepAlive(cfg net.KeepAliveConfig) Option {
+	return func(o *mms.Options) { o.KeepAlive = &cfg }
+}
+
+// PeerSecurity returns the server authenticated by IEC 62351-4 E2E
+// security; the zero value for a plain association.
+func (c *Client) PeerSecurity() mms.E2EPeer { return c.mc.PeerSecurity() }

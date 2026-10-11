@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/client"
+	"github.com/dscsystems/go-iec61850/iec62351/e2e/e2efile"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
@@ -38,6 +39,8 @@ func main() {
 	valueStr := flag.String("value", "", "value for write")
 	password := flag.String("password", "", "ACSE authentication password")
 	timeout := flag.Duration("timeout", 20*time.Second, "overall timeout for the command's operations")
+	var e2eFlags e2efile.Flags
+	e2eFlags.Register(flag.CommandLine, false)
 	flag.Parse()
 
 	args := flag.Args()
@@ -54,6 +57,14 @@ func main() {
 	opts = append(opts, client.WithTimeout(6*time.Second))
 	if *password != "" {
 		opts = append(opts, client.WithPassword(*password))
+	}
+	if e2eFlags.Enabled() {
+		cfg, err := e2eFlags.ClientConfig(e2eFlags.EventPrinter(os.Stderr))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ied-client: e2e: %v\n", err)
+			os.Exit(1)
+		}
+		opts = append(opts, client.WithE2E(cfg))
 	}
 	c, err := client.Dial(dialCtx, *addr, opts...)
 	dialCancel()

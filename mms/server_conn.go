@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/dscsystems/go-iec61850/asn1"
+	"github.com/dscsystems/go-iec61850/iec62351/e2e"
 	"github.com/dscsystems/go-iec61850/internal/osi/acse"
 	"github.com/dscsystems/go-iec61850/internal/osi/cotp"
 	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
@@ -153,6 +155,17 @@ type AcceptOptions struct {
 	// authentication-failure otherwise; AcceptConnOpts then returns
 	// ErrRejected.
 	Authenticate func(AssociationRequest) error
+
+	// E2E, when non-nil, accepts IEC 62351-4 native-mode associations (the
+	// client proposes the e2eMmsAC application context): the handshake is
+	// verified before the MMS Initiate is processed and before Authenticate,
+	// which sees the authenticated peer in AssociationRequest.Security.
+	E2E *e2e.ServerConfig
+	// E2ERequired refuses plain (non-E2E) associations when E2E is set.
+	E2ERequired bool
+
+	// HandshakeTimeout bounds the association handshake (zero: none).
+	HandshakeTimeout time.Duration
 }
 
 func (o AcceptOptions) trace(event string, data []byte) {
@@ -170,6 +183,17 @@ func AcceptConn(raw net.Conn) (*ServerConn, error) {
 // AcceptConnOpts is AcceptConn with explicit control over the response
 // parameters.
 func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
+	if opts.HandshakeTimeout > 0 {
+		raw.SetDeadline(time.Now().Add(opts.HandshakeTimeout))
+	}
+	sc, err := acceptConn(raw, opts)
+	if err == nil && opts.HandshakeTimeout > 0 {
+		raw.SetDeadline(time.Time{})
+	}
+	return sc, err
+}
+
+func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	ct, err := cotp.Accept(raw)
 	if err != nil {
 		return nil, fmt.Errorf("mms: COTP accept: %w", err)
@@ -189,6 +213,17 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	areq, err := acse.ParseAARQFull(aarq)
 	if err != nil {
 		return nil, fmt.Errorf("mms: ACSE AARQ: %w", err)
+	}
+	if isE2EContext(areq.ApplicationContext, opts.E2E) {
+		return acceptE2E(raw, ct, res, cp, areq, opts)
+	}
+	if opts.E2E != nil && opts.E2ERequired {
+		var responding acse.Identity
+		if opts.Responding != nil {
+			responding = opts.Responding.toACSE()
+		}
+		e2eServerRefuse(ct, cp, areq.ApplicationContext, acse.ResultRejectedPermanent, acse.DiagAppContextNotSupported, responding, nil, opts.trace)
+		return nil, fmt.Errorf("%w: plain association refused, IEC 62351-4 E2E required", ErrRejected)
 	}
 	mmsInit, password := areq.UserData, areq.Password
 	if opts.Authenticate != nil {
@@ -340,6 +375,22 @@ func (sc *ServerConn) Serve(h Handler) error {
 	for {
 		pdu, err := sc.fr.recvMMS()
 		if err != nil {
+			var rs *releaseSignal
+			if errors.As(err, &rs) && !rs.response {
+				if cerr := sc.fr.checkRelease(rs); cerr != nil {
+					sc.writeMu.Lock()
+					sc.fr.sendAbort()
+					sc.writeMu.Unlock()
+					return cerr
+				}
+				sc.writeMu.Lock()
+				err := sc.fr.sendRelease(true)
+				sc.writeMu.Unlock()
+				if err != nil {
+					return err
+				}
+				return net.ErrClosed
+			}
 			return err
 		}
 		if err := sc.handlePDU(pdu, h); err != nil {
@@ -366,6 +417,11 @@ func (sc *ServerConn) handlePDU(pdu []byte, h Handler) error {
 	case tagConcludeRequest, tagConcludeRequestLegacy:
 		// Accept the conclude and end the association.
 		sc.send(asn1.Prim(tagConcludeResponse, nil).Encode())
+		if sc.fr.sec != nil {
+			// Under E2E the signed ACSE release follows (IEC 62351-4
+			// 13.1.10); Serve answers it.
+			return nil
+		}
 		return net.ErrClosed
 	default:
 		return nil
@@ -574,3 +630,61 @@ func (sc *ServerConn) Close() error {
 	})
 	return sc.raw.Close()
 }
+
+// acceptE2E completes a native-mode (IEC 62351-4 E2E) association.
+func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp presentation.CP, areq acse.Request, opts AcceptOptions) (*ServerConn, error) {
+	r, err := e2eServerHandshake(ct, cp, areq, opts)
+	if err != nil {
+		return nil, err
+	}
+	if opts.Authenticate != nil {
+		ar := AssociationRequest{Peer: raw.RemoteAddr(), Called: identityFromACSE(areq.Called),
+			Calling: identityFromACSE(areq.Calling), Security: r.assoc.Peer()}
+		if tc, ok := raw.(*tls.Conn); ok {
+			st := tc.ConnectionState()
+			ar.TLS = &st
+		}
+		if aerr := opts.Authenticate(ar); aerr != nil {
+			e2eServerApplReject(ct, cp, areq, r, opts.trace)
+			return nil, fmt.Errorf("%w: %v", ErrRejected, aerr)
+		}
+	}
+	opts.trace("rx InitiateRequest", r.mmsInit)
+	negotiated, err := ParseInitiateRequest(r.mmsInit)
+	if err != nil {
+		e2eServerApplReject(ct, cp, areq, r, opts.trace)
+		return nil, fmt.Errorf("mms: initiate request: %w", err)
+	}
+	want := DefaultServerInitiate()
+	if opts.Initiate != nil {
+		want = *opts.Initiate
+	}
+	answer := clampInitiate(want, negotiated)
+	initResp := EncodeInitiateResponse(answer)
+	opts.trace("tx InitiateResponse", initResp)
+	if err := e2eServerAccept(ct, cp, areq, r, initResp, sres.CalledSSEL, opts.trace); err != nil {
+		r.assoc.Close()
+		return nil, fmt.Errorf("mms: session reply: %w", err)
+	}
+	sc := &ServerConn{
+		fr: r.fr, raw: raw, Peer: raw.RemoteAddr(),
+		MaxPDU:  int(answer.LocalDetail),
+		unconf:  make(chan []byte, 512),
+		Called:  identityFromACSE(areq.Called),
+		Calling: identityFromACSE(areq.Calling),
+	}
+	go sc.pumpUnconfirmed()
+	return sc, nil
+}
+
+// PeerSecurity returns the authenticated E2E peer; the zero value when the
+// association is not E2E-secured.
+func (sc *ServerConn) PeerSecurity() E2EPeer {
+	if sc.fr == nil || sc.fr.sec == nil {
+		return E2EPeer{}
+	}
+	return sc.fr.sec.Peer()
+}
+
+// E2E reports an IEC 62351-4 E2E-secured association.
+func (sc *ServerConn) E2E() bool { return sc.fr != nil && sc.fr.sec != nil }

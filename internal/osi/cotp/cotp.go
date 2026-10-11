@@ -20,6 +20,10 @@ const (
 	tpduDR = 0x80 // disconnect request
 	tpduDT = 0xf0 // data
 	tpduER = 0x70 // error
+	tpduED = 0x10 // expedited data (not class 0)
+	tpduAK = 0x60 // data acknowledgement (not class 0)
+	tpduEA = 0x20 // expedited data acknowledgement (not class 0)
+	tpduRJ = 0x50 // reject (not class 0)
 )
 
 // Parameter codes.
@@ -43,7 +47,20 @@ type Conn struct {
 	srcTSAP []byte
 	dstTSAP []byte
 	readBuf bytes.Buffer
+	// maxTSDU bounds the reassembled TSDU (zero: DefaultMaxTSDU).
+	maxTSDU int
 }
+
+// DefaultMaxTSDU bounds a reassembled TSDU unless SetMaxTSDU raises it: the
+// largest session ACCEPT or ABORT user data of ISO 8327 version 2 plus
+// headroom, well above any MMS PDU a server negotiates.
+const DefaultMaxTSDU = 128 << 10
+
+// MaxTSEL is the largest transport selector accepted (IEC 62351-4 H.2.3).
+const MaxTSEL = 32
+
+// SetMaxTSDU sets the reassembly limit.
+func (c *Conn) SetMaxTSDU(n int) { c.maxTSDU = n }
 
 // Options configures a COTP connection.
 type Options struct {
@@ -204,6 +221,14 @@ func (c *Conn) Receive() ([]byte, error) {
 			}
 			num := body[0]
 			data := tpdu[1+li:]
+			limit := c.maxTSDU
+			if limit == 0 {
+				limit = DefaultMaxTSDU
+			}
+			if c.readBuf.Len()+len(data) > limit {
+				c.readBuf.Reset()
+				return nil, fmt.Errorf("cotp: TSDU exceeds %d octets", limit)
+			}
 			c.readBuf.Write(data)
 			if num&eot != 0 {
 				out := make([]byte, c.readBuf.Len())
@@ -214,6 +239,9 @@ func (c *Conn) Receive() ([]byte, error) {
 			return nil, io.EOF
 		case tpduER:
 			return nil, fmt.Errorf("cotp: received ER TPDU")
+		case tpduED, tpduAK, tpduEA, tpduRJ:
+			// Not part of class 0: ignored (IEC 62351-4 H.2.2).
+			continue
 		default:
 			return nil, fmt.Errorf("cotp: unexpected TPDU type 0x%02x", typ)
 		}

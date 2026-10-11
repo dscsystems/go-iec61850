@@ -40,9 +40,8 @@ func ReadPacket(r io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return nil, err
 	}
-	if hdr[0] != version {
-		return nil, fmt.Errorf("tpkt: bad version %d", hdr[0])
-	}
+	// The version field is ignored and processing continues as for version 3
+	// (IEC 62351-4 H.3.2).
 	total := int(binary.BigEndian.Uint16(hdr[2:]))
 	if total < headerLen || total > MaxPacket {
 		return nil, fmt.Errorf("tpkt: bad length %d", total)
