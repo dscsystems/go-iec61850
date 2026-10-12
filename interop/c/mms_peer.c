@@ -24,6 +24,7 @@
  * IedClientError (0 is success). The peer exits 0 when every step it ran
  * reported 0, 1 otherwise.
  */
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

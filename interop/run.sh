@@ -82,14 +82,20 @@ fi
 MMS_PEER="$WORK/mms_peer"
 if [ ! -x "$MMS_PEER" ] || [ "$REPO_ROOT/interop/c/mms_peer.c" -nt "$MMS_PEER" ]; then
   echo "== building the MMS services peer =="
-  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
+  # src/vs holds a Visual Studio stdbool.h (bool only, no true/false) that
+  # would shadow the system one before C23.
+  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -not -path "$SEC/src/vs/*" \
+    -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
   gcc -O1 -o "$MMS_PEER" "$REPO_ROOT/interop/c/mms_peer.c" @"$WORK/inc.rsp" \
     "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
 fi
 PEER="$WORK/rsession_peer"
 if [ ! -x "$PEER" ] || [ "$REPO_ROOT/interop/c/rsession_peer.c" -nt "$PEER" ]; then
   echo "== building the R-GOOSE/R-SV peer =="
-  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
+  # src/vs holds a Visual Studio stdbool.h (bool only, no true/false) that
+  # would shadow the system one before C23.
+  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -not -path "$SEC/src/vs/*" \
+    -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
   gcc -O1 -o "$PEER" "$REPO_ROOT/interop/c/rsession_peer.c" @"$WORK/inc.rsp" \
     "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
 fi
@@ -178,8 +184,15 @@ NS_RUN="IEC61850_C_SV_SERVER='$LIB/examples/iec61850_9_2_LE_example/sv_9_2LE_exa
   '$WORK/server.test' -test.run 'LTRKAgainst' -test.v"
 if [ "$(id -u)" = 0 ]; then
   sh -c "$NS_RUN"
-else
+elif unshare -rn true 2>/dev/null; then
   unshare -rn sh -c "ip link set lo up && $NS_RUN"
+elif sudo -n true 2>/dev/null; then
+  # Unprivileged user namespaces are disabled (Ubuntu 24.04 and the
+  # GitHub runners): a network namespace of its own, as root, instead.
+  sudo -n unshare -n sh -c "ip link set lo up && $NS_RUN"
+else
+  echo "cannot create a network namespace (no user namespaces, no sudo)" >&2
+  exit 1
 fi
 
 echo
