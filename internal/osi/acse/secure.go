@@ -114,6 +114,16 @@ func externals(content []byte) ([][]byte, error) {
 	return out, nil
 }
 
+// ABRT-diagnostic values (ISO 8650-1, ACSE version 2).
+const (
+	AbortDiagNoReason               = 1
+	AbortDiagProtocolError          = 2
+	AbortDiagMechanismNotRecognised = 3
+	AbortDiagMechanismRequired      = 4
+	AbortDiagAuthenticationFailure  = 5
+	AbortDiagAuthenticationRequired = 6
+)
+
 // Abort is a parsed ABRT.
 type Abort struct {
 	Source     int
