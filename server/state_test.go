@@ -10,6 +10,8 @@ import (
 	"github.com/dscsystems/go-iec61850/client"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
+	"github.com/dscsystems/go-iec61850/scl"
+	"github.com/dscsystems/go-iec61850/server"
 )
 
 // waitState polls until the connection reaches want, mirroring how a
@@ -183,5 +185,34 @@ func TestDoneFiresOnLocalClose(t *testing.T) {
 	}
 	if err := c.Err(); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("Err after Close = %v, want net.ErrClosed", err)
+	}
+}
+
+// Close during an association's handshake, after the AARE is decided but
+// before the association is registered, still ends it: the authenticator
+// runs in exactly that window.
+func TestCloseDuringHandshakeEndsAssociation(t *testing.T) {
+	m, err := scl.LoadModel("../testdata/simpleIO_direct_control.cid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var srv *server.Server
+	srv = server.New(m, server.WithAuthenticator(func(mms.AssociationRequest) error {
+		srv.Close()
+		return nil
+	}))
+	addr, _ := startServerWithModel(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr, client.WithTimeout(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	select {
+	case <-c.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("the association outlived Server.Close")
 	}
 }
