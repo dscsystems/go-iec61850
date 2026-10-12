@@ -235,7 +235,7 @@ func (a *Association) HandshakeRequest(applData []byte) ([]byte, error) {
 	} else {
 		t1.ConfParams = bits()
 	}
-	s := &Signed{Kind: KindHandshakeReq, PP: a.sh.protocol[0], Token1: t1, ApplData: applData,
+	s := &Signed{Kind: KindHandshakeReq, PP: a.sh.protocol[0], Token1: t1, ApplData: applData, Edition: a.pol.Edition,
 		Diag: -1, Sig: Signature{Alg: a.sh.sigAlg.id()}}
 	out, err := encodeSigned(s, a.signFn)
 	if err != nil {
@@ -366,7 +366,7 @@ func (a *Association) processRequest(content []byte, calling AETitle) *SecurityE
 	}
 	a.peerAE = calling
 	a.peerKey = "c:" + calling.String()
-	s, err := ParseSigned(KindHandshakeReq, content)
+	s, err := ParseSignedEdition(KindHandshakeReq, content, a.pol.Edition)
 	if err != nil {
 		return hsErr(HDProtocolError, err)
 	}
@@ -502,7 +502,7 @@ func (a *Association) HandshakeAccept(applData []byte) ([]byte, error) {
 	if a.reqToken.ConfParams.Bit(0) {
 		t1.ConfParams = bits(0)
 	}
-	s := &Signed{Kind: KindHandshakeAcc, Token1: t1, ApplData: applData, Diag: -1, Sig: Signature{Alg: a.sh.sigAlg.id()}}
+	s := &Signed{Kind: KindHandshakeAcc, Token1: t1, ApplData: applData, Diag: -1, Edition: a.pol.Edition, Sig: Signature{Alg: a.sh.sigAlg.id()}}
 	out, err := encodeSigned(s, a.signFn)
 	if err != nil {
 		return nil, err
@@ -555,7 +555,7 @@ func (a *Association) SecReject(se *SecurityError) ([]byte, error) {
 	defer a.mu.Unlock()
 	a.state = stClosed
 	a.release()
-	return a.signed3(KindHandshakeSecReject, se.WireDiag(a.pol.AlarmDiagnostic), nil)
+	return a.signed3(KindHandshakeSecReject, a.wireDiag(se), nil)
 }
 
 // ApplicationReject builds the ApplicationReject carrying the protected
@@ -587,7 +587,7 @@ func (a *Association) processAccept(content []byte, responding AETitle) ([]byte,
 	if a.role != RoleClient || a.state != stRequested {
 		return nil, hsErr(HDProtocolError, errors.New("unexpected HandshakeAcc"))
 	}
-	s, err := ParseSigned(KindHandshakeAcc, content)
+	s, err := ParseSignedEdition(KindHandshakeAcc, content, a.pol.Edition)
 	if err != nil {
 		return nil, hsErr(HDProtocolError, err)
 	}
@@ -678,9 +678,9 @@ func (a *Association) HandshakeSecAbort(se *SecurityError) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state = stClosed
-	a.event(EventAbortSent, ClassWarning, HandshakeDiagName(se.WireDiag(a.pol.AlarmDiagnostic)), "HandshakeSecAbort")
+	a.event(EventAbortSent, ClassWarning, HandshakeDiagName(a.wireDiag(se)), "HandshakeSecAbort")
 	a.release()
-	return a.signed3(KindHandshakeSecAbort, se.WireDiag(a.pol.AlarmDiagnostic), nil)
+	return a.signed3(KindHandshakeSecAbort, a.wireDiag(se), nil)
 }
 
 // ProcessRejection authenticates a peer's signed reject or abort (content
@@ -1076,7 +1076,7 @@ func (a *Association) processRelease(kind Kind, content []byte) error {
 func (a *Association) DtSecAbort(se *SecurityError) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	d := se.WireDiag(a.pol.AlarmDiagnostic)
+	d := a.wireDiag(se)
 	a.event(EventAbortSent, ClassWarning, DtDiagName(d), "DtSecAbort")
 	a.state = stClosed
 	a.release()
@@ -1117,4 +1117,14 @@ func (a *Association) release() {
 		clear(k)
 	}
 	a.tx.key, a.rx.key, a.pendingRx, a.pendingTx, a.salt = nil, nil, nil, nil, nil
+}
+
+// wireDiag is the diagnostic sent for se under the policy's alarm encoding
+// and edition.
+func (a *Association) wireDiag(se *SecurityError) int {
+	d := se.WireDiag(a.pol.AlarmDiagnostic)
+	if d < 0 {
+		return d
+	}
+	return a.pol.Edition.diagFor(se.Phase, d)
 }

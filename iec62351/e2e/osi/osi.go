@@ -288,3 +288,25 @@ func ParseData(ctx int, tlv []byte, e2eCtx int) (content []byte, encrypted bool,
 	}
 	return c, encrypted, nil
 }
+
+// ApplDataFor wraps a protected-protocol PDU as the edition's ApplData: the
+// Annex F.3 EXTERNAL under Edition2020, the PDU itself under Edition2018
+// (first-edition Virtual API: ApplData ::= <top-level type>).
+func ApplDataFor(ed e2e.Edition, ctx int, pdu []byte) []byte {
+	if ed == e2e.Edition2018 {
+		return pdu
+	}
+	return ApplData(ctx, pdu)
+}
+
+// ParseApplDataFor unwraps the edition's ApplData.
+func ParseApplDataFor(ed e2e.Edition, tlv []byte, wantCtx int) ([]byte, error) {
+	if ed != e2e.Edition2018 {
+		return ParseApplData(tlv, wantCtx)
+	}
+	d := asn1.NewDecoder(tlv)
+	if _, err := d.ReadSpan(); err != nil || d.More() {
+		return nil, fmt.Errorf("e2e/osi: ApplData is not a single PDU")
+	}
+	return tlv, nil
+}

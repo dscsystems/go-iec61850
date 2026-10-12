@@ -113,7 +113,7 @@ type LeafOptions struct {
 	NotAfter  time.Time
 	// Subject, when non-nil, replaces the AE-title subject (raw Name DER).
 	Subject []byte
-	// AttrType, when non-nil, replaces pki.ProvisionalAEAttributeType.
+	// AttrType, when non-nil, replaces pki.AEAttributeType.
 	AttrType asn1.OID
 	// Padding adds a non-critical extension of this many octets (oversized
 	// certificate tests).
@@ -150,7 +150,7 @@ func (ca *CA) NewE2ELeaf(apTitle asn1.OID, aeQualifier int32, o LeafOptions) *Le
 	if subject == nil {
 		at := o.AttrType
 		if at == nil {
-			at = pki.ProvisionalAEAttributeType
+			at = pki.AEAttributeType
 		}
 		subject = pki.OIDName(at, pki.AETitleOID(apTitle, aeQualifier))
 	}

@@ -153,6 +153,8 @@ type Signed struct {
 	ApplData []byte       // complete TLV; nil when absent
 	Diag     int          // HandshakeSecReject, HandshakeSecAbort, DtSecAbort; -1 when absent
 	Sig      Signature
+	// Edition selects the ClearToken1 layout (Edition2020 by default).
+	Edition Edition
 	// TBS is the content of the tbs component including any end-of-
 	// contents octets: the octets the signature covers.
 	TBS []byte
@@ -285,7 +287,11 @@ func (s *Signed) tbsContent() []byte {
 	var out []byte
 	switch s.Kind {
 	case KindHandshakeReq, KindHandshakeAcc:
-		out = s.Token1.element().Append(out)
+		if s.Edition == Edition2018 {
+			out = s.Token1.element2018().Append(out)
+		} else {
+			out = s.Token1.element().Append(out)
+		}
 	default:
 		out = s.Token3.element().Append(out)
 	}
@@ -501,24 +507,7 @@ func parseToken1(c []byte) (*ClearToken1, error) {
 	if t.AssoID, err = parseNMTOKEN(b); err != nil {
 		return nil, err
 	}
-	dhc, err := d.Expect(asn1.TagSequence)
-	if err != nil {
-		return nil, wrap(err)
-	}
-	dd := asn1.NewDecoder(dhc)
-	gb, err := dd.Expect(asn1.TagInteger)
-	if err != nil {
-		return nil, wrap(err)
-	}
-	if t.DHGroup, err = asn1.DecodeInt(gb); err != nil {
-		return nil, wrap(err)
-	}
-	pub, err := dd.Expect(asn1.TagOctetString)
-	if err != nil || len(pub) == 0 {
-		return nil, protoErr("dhPublicKey")
-	}
-	t.DHPublic = append([]byte(nil), pub...)
-	if err := skipExtensions(dd); err != nil {
+	if err := parseDHSet(d, t); err != nil {
 		return nil, err
 	}
 	if t.HMAC, err = readAlg(d); err != nil {
@@ -579,6 +568,28 @@ func parseToken1(c []byte) (*ClearToken1, error) {
 		t.AttCert = append([]byte(nil), b...)
 	}
 	return t, skipExtensions(d)
+}
+
+// parseDHSet decodes DiffieHellmanSet into t.
+func parseDHSet(d *asn1.Decoder, t *ClearToken1) error {
+	dhc, err := d.Expect(asn1.TagSequence)
+	if err != nil {
+		return wrap(err)
+	}
+	dd := asn1.NewDecoder(dhc)
+	gb, err := dd.Expect(asn1.TagInteger)
+	if err != nil {
+		return wrap(err)
+	}
+	if t.DHGroup, err = asn1.DecodeInt(gb); err != nil {
+		return wrap(err)
+	}
+	pub, err := dd.Expect(asn1.TagOctetString)
+	if err != nil || len(pub) == 0 {
+		return protoErr("dhPublicKey")
+	}
+	t.DHPublic = append([]byte(nil), pub...)
+	return skipExtensions(dd)
 }
 
 func parseToken2(s asn1.Span) (*ClearToken2, error) {
@@ -706,9 +717,15 @@ func parseSignature(c []byte) (Signature, error) {
 }
 
 // ParseSigned decodes the content octets of a signed SecPDU of the given
-// kind (the SEQUENCE content, whatever tag the environment gave it).
+// kind (the SEQUENCE content, whatever tag the environment gave it), under
+// Edition2020.
 func ParseSigned(kind Kind, content []byte) (*Signed, error) {
-	s := &Signed{Kind: kind, Diag: -1}
+	return ParseSignedEdition(kind, content, Edition2020)
+}
+
+// ParseSignedEdition is ParseSigned for the given edition.
+func ParseSignedEdition(kind Kind, content []byte, ed Edition) (*Signed, error) {
+	s := &Signed{Kind: kind, Diag: -1, Edition: ed}
 	d := asn1.NewDecoder(content)
 	if kind == KindHandshakeReq {
 		b, err := d.Expect(tagUTF8)
@@ -733,7 +750,11 @@ func ParseSigned(kind Kind, content []byte) (*Signed, error) {
 	}
 	switch kind {
 	case KindHandshakeReq, KindHandshakeAcc:
-		if s.Token1, err = parseToken1(tok); err != nil {
+		parse := parseToken1
+		if ed == Edition2018 {
+			parse = parseToken1v2018
+		}
+		if s.Token1, err = parse(tok); err != nil {
 			return nil, err
 		}
 	default:

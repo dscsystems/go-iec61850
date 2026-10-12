@@ -71,7 +71,14 @@ func serveOne(t *testing.T, ln net.Listener, opts AcceptOptions) <-chan error {
 }
 
 func TestE2EAssociation(t *testing.T) {
+	for _, ed := range []e2e.Edition{e2e.Edition2020, e2e.Edition2018} {
+		t.Run(ed.String(), func(t *testing.T) { testE2EAssociation(t, ed) })
+	}
+}
+
+func testE2EAssociation(t *testing.T, ed e2e.Edition) {
 	f := newE2EFixture(t)
+	f.cli.Policy.Edition, f.srv.Policy.Edition = ed, ed
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

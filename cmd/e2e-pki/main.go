@@ -155,7 +155,7 @@ func cmdCSR(args []string) error {
 		return err
 	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		RawSubject: pki.OIDName(pki.ProvisionalAEAttributeType, ae.OID()),
+		RawSubject: pki.OIDName(pki.AEAttributeType, ae.OID()),
 		ExtraExtensions: []pkix.Extension{
 			{Id: asn1.ObjectIdentifier{2, 5, 29, 15}, Critical: true, Value: ku},
 		},
