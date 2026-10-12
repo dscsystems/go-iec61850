@@ -6,6 +6,11 @@
 //
 //	ied-client -addr host:port <command> [args]
 //
+// TLS (IEC 62351-3): -tls-cert, -tls-key and -tls-ca, optionally -tls-crl;
+// the server certificate must name the host of -addr unless
+// -tls-server-name or -tls-no-server-name says otherwise. MMS over TLS
+// usually listens on port 3782.
+//
 // Commands:
 //
 //	scan                       identify + list logical devices/nodes
@@ -41,6 +46,8 @@ func main() {
 	timeout := flag.Duration("timeout", 20*time.Second, "overall timeout for the command's operations")
 	var e2eFlags e2efile.Flags
 	e2eFlags.Register(flag.CommandLine, false)
+	var tlsF tlsFlags
+	tlsF.register(flag.CommandLine)
 	flag.Parse()
 
 	args := flag.Args()
@@ -57,6 +64,14 @@ func main() {
 	opts = append(opts, client.WithTimeout(6*time.Second))
 	if *password != "" {
 		opts = append(opts, client.WithPassword(*password))
+	}
+	if tlsF.enabled() {
+		cfg, err := tlsF.config(*addr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ied-client: tls: %v\n", err)
+			os.Exit(1)
+		}
+		opts = append(opts, client.WithTLS(cfg))
 	}
 	if e2eFlags.Enabled() {
 		cfg, err := e2eFlags.ClientConfig(e2eFlags.EventPrinter(os.Stderr))
