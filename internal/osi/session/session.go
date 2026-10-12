@@ -108,6 +108,15 @@ func ConnectClientExt(t Transport, callingSSEL, calledSSEL, userData []byte, ext
 		}
 		return nil, &RefusedError{Reason: rc[0], UserData: rc[1:]}
 	}
+	if len(resp) > 0 && resp[0] == siAbort {
+		// A responder that refuses the authentication of the IEC 62351-4
+		// A-profile answers the CONNECT with an abort (P-ABORT).
+		var ud []byte
+		if params, err := spduParams(resp); err == nil {
+			ud, _ = findUserData(params)
+		}
+		return nil, &AbortedError{UserData: ud}
+	}
 	si, _, ud, err := parseConnectLike(resp)
 	if err != nil {
 		return nil, err

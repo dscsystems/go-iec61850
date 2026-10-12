@@ -72,6 +72,14 @@ func BuildABRT(source int, userInfo [][]byte) []byte {
 	).Encode()
 }
 
+// ABRTWithDiagnostic builds an ABRT with an abort-diagnostic [1].
+func ABRTWithDiagnostic(source, diagnostic int) []byte {
+	return asn1.Cons(tagABRT,
+		asn1.IntElem(asn1.ContextPrimitive(0), int64(source)),
+		asn1.IntElem(asn1.ContextPrimitive(1), int64(diagnostic)),
+	).Encode()
+}
+
 // Release-request and release-response reasons.
 const (
 	ReleaseNormal = 0

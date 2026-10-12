@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/iec62351/aprofile"
 	"github.com/dscsystems/go-iec61850/iec62351/e2e"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
@@ -59,6 +60,8 @@ type Server struct {
 	// e2e enables IEC 62351-4 native mode (WithE2E).
 	e2e         *e2e.ServerConfig
 	e2eRequired bool
+	aprofile    *aprofile.Config
+	apRequired  bool
 	// aeIdentity is the responding ACSE identity (WithAEIdentity).
 	aeIdentity *mms.ACSEIdentity
 	// handshakeTimeout bounds association setup (WithHandshakeTimeout).
@@ -405,7 +408,8 @@ func (s *Server) serveConn(raw net.Conn) {
 		ht = 10 * time.Second
 	}
 	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate,
-		E2E: s.e2e, E2ERequired: s.e2eRequired, Responding: s.aeIdentity, HandshakeTimeout: ht})
+		E2E: s.e2e, E2ERequired: s.e2eRequired, AProfile: s.aprofile, AProfileRequired: s.apRequired,
+		Responding: s.aeIdentity, HandshakeTimeout: ht})
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()
@@ -543,6 +547,15 @@ func (s *Server) Read(ref model.ObjectReference, fc model.FC) *mms.Value {
 // (application-context-name-not-supported).
 func WithE2E(cfg *e2e.ServerConfig, required bool) Option {
 	return func(s *Server) { s.e2e, s.e2eRequired = cfg, required }
+}
+
+// WithAProfile verifies clients authenticating with the IEC 62351-4
+// A-security profile (compatibility mode) and answers with cfg's own
+// authentication value. With required, clients that do not authenticate
+// are refused. Combine it with WithTLS: the profile requires TLS unless
+// cfg.AllowWithoutTLS.
+func WithAProfile(cfg *aprofile.Config, required bool) Option {
+	return func(s *Server) { s.aprofile, s.apRequired = cfg, required }
 }
 
 // WithAEIdentity sets the responding ACSE identity (AP-title and

@@ -76,8 +76,31 @@ func AARQWithIdentity(mmsInitiate []byte, password string, called, calling Ident
 	return AARQFor(mmsInitiate, password, called, calling, MMSContext)
 }
 
+// Auth is an ACSE authentication: the mechanism-name and the
+// Authentication-value, encoded as the CHOICE element (charstring [0] for a
+// password, external [2] for the IEC 62351-4 A-profile).
+type Auth struct {
+	Mechanism asn1.OID
+	Value     []byte
+}
+
+// PasswordAuth is the password mechanism carrying pw.
+func PasswordAuth(pw string) *Auth {
+	// AuthenticationValue charstring [0] IMPLICIT GraphicString
+	return &Auth{Mechanism: PasswordMechanism, Value: asn1.Prim(asn1.ContextPrimitive(0), []byte(pw)).Encode()}
+}
+
 // AARQFor is AARQWithIdentity proposing the given application context.
 func AARQFor(mmsInitiate []byte, password string, called, calling Identity, appCtx ApplicationContext) []byte {
+	var auth *Auth
+	if password != "" {
+		auth = PasswordAuth(password)
+	}
+	return AARQAuth(mmsInitiate, auth, called, calling, appCtx)
+}
+
+// AARQAuth is AARQFor with any authentication mechanism; nil sends none.
+func AARQAuth(mmsInitiate []byte, auth *Auth, called, calling Identity, appCtx ApplicationContext) []byte {
 	seq := asn1.Cons(tagAARQ,
 		// application-context-name [1] EXPLICIT OID
 		asn1.Cons(asn1.ContextConstructed(1), asn1.OIDElem(asn1.TagOID, appCtx.OID())),
@@ -85,23 +108,31 @@ func AARQFor(mmsInitiate []byte, password string, called, calling Identity, appC
 	// called-AP-title [2] .. [5], then calling-AP-title [6] .. [9].
 	addIdentity(seq, 2, called)
 	addIdentity(seq, 6, calling)
-	if password != "" {
-		// sender-acse-requirements [10] BIT STRING {authentication(0)}
-		bs := asn1.NewBitString(1)
-		bs.SetBit(0, true)
-		seq.Add(asn1.BitStringElem(asn1.ContextPrimitive(10), bs))
-		// mechanism-name [11] OID: password-1, {joint-iso-itu-t(2)
-		// association-control(2) authentication-mechanism(3) password-1(1)}.
-		// libiec61850 drops an association naming any other mechanism.
-		seq.Add(asn1.OIDElem(asn1.ContextPrimitive(11), PasswordMechanism))
-		// calling-authentication-value [12] EXPLICIT AuthenticationValue
-		//   charstring [0] IMPLICIT GraphicString
-		seq.Add(asn1.Cons(asn1.ContextConstructed(12),
-			asn1.Prim(asn1.ContextPrimitive(0), []byte(password))))
-	}
+	// sender-acse-requirements [10], mechanism-name [11],
+	// calling-authentication-value [12]. A password names password-1,
+	// {joint-iso-itu-t(2) association-control(2) authentication-mechanism(3)
+	// password-1(1)}: libiec61850 drops an association naming another
+	// mechanism with a charstring value.
+	addAuth(seq, 10, auth)
 	// user-information [30] IMPLICIT SEQUENCE OF EXTERNAL
 	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiate, PresentationContextMMS)))
 	return seq.Encode()
+}
+
+// addAuth appends acse-requirements {authentication(0)}, mechanism-name and
+// the authentication value [EXPLICIT] at consecutive tags from base: [10]
+// to [12] in an AARQ, [8] to [10] in an AARE.
+func addAuth(seq *asn1.Element, base uint32, auth *Auth) {
+	if auth == nil {
+		return
+	}
+	bs := asn1.NewBitString(1)
+	bs.SetBit(0, true)
+	seq.Add(asn1.BitStringElem(asn1.ContextPrimitive(base), bs))
+	if auth.Mechanism != nil {
+		seq.Add(asn1.OIDElem(asn1.ContextPrimitive(base+1), auth.Mechanism))
+	}
+	seq.Add(asn1.RawContent(asn1.ContextConstructed(base+2), auth.Value))
 }
 
 // Identity is the application-entity identity carried in an AARQ or AARE:
@@ -203,6 +234,11 @@ func AAREWithIdentity(mmsInitiateResp []byte, responding Identity) []byte {
 // InitiateResponse is in, and the identifier is the proposer's choice, not
 // a constant. Zero uses the conventional PresentationContextMMS.
 func AAREFor(mmsInitiateResp []byte, responding Identity, proposed asn1.OID, mmsContextID int) []byte {
+	return AAREAuth(mmsInitiateResp, responding, proposed, mmsContextID, nil)
+}
+
+// AAREAuth is AAREFor carrying a responding authentication (nil: none).
+func AAREAuth(mmsInitiateResp []byte, responding Identity, proposed asn1.OID, mmsContextID int, auth *Auth) []byte {
 	if !knownApplicationContext(proposed) {
 		proposed = oidMMSContext
 	}
@@ -220,6 +256,9 @@ func AAREFor(mmsInitiateResp []byte, responding Identity, proposed asn1.OID, mms
 	// responding-AP-title [4] .. responding-AE-invocation-identifier [7],
 	// which the ASN.1 places between the diagnostic and the user information.
 	addIdentity(seq, 4, responding)
+	// responder-acse-requirements [8], mechanism-name [9],
+	// responding-authentication-value [10].
+	addAuth(seq, 8, auth)
 	seq.Add(asn1.Cons(asn1.ContextConstructed(30), external(mmsInitiateResp, mmsContextID)))
 	return seq.Encode()
 }
@@ -230,6 +269,7 @@ const (
 	DiagAuthenticationFailure      = 13
 	DiagAuthenticationRequired     = 14
 	DiagAuthMechanismNotRecognised = 11
+	DiagAuthMechanismRequired      = 12
 )
 
 // AAREReject builds a rejecting AARE with the given service-user diagnostic.
@@ -315,6 +355,14 @@ type Result struct {
 	ApplicationContext asn1.OID
 	// UserInfo holds every EXTERNAL of the user-information.
 	UserInfo [][]byte
+
+	// ResponderAuth reports the authentication functional unit selected in
+	// responder-acse-requirements; Mechanism is the mechanism-name and
+	// AuthValue the responding-authentication-value (the CHOICE element),
+	// each nil when absent.
+	ResponderAuth bool
+	Mechanism     asn1.OID
+	AuthValue     []byte
 }
 
 // ParseAARE parses an A-ASSOCIATE response and extracts the MMS user data.
@@ -349,6 +397,12 @@ func ParseAARE(apdu []byte) (*Result, error) {
 			}
 		case asn1.ContextConstructed(1): // application-context-name
 			res.ApplicationContext, _ = firstOID(c)
+		case asn1.ContextPrimitive(8): // responder-acse-requirements
+			res.ResponderAuth = authBit(c)
+		case asn1.ContextPrimitive(9): // mechanism-name
+			res.Mechanism, _ = asn1.DecodeOID(c)
+		case asn1.ContextConstructed(10): // responding-authentication-value
+			res.AuthValue = c
 		case asn1.ContextConstructed(30): // user-information
 			if res.UserInfo, err = externals(c); err != nil {
 				return nil, err
@@ -376,6 +430,11 @@ type Request struct {
 
 	// UserInfo holds every EXTERNAL of the user-information, complete TLVs.
 	UserInfo [][]byte
+	// Mechanism is the mechanism-name and AuthValue the
+	// calling-authentication-value (the CHOICE element), nil when absent.
+	Mechanism asn1.OID
+	AuthValue []byte
+
 	// NonKernel reports fields outside the ACSE kernel: sender-acse-
 	// requirements, mechanism-name, calling-authentication-value or
 	// application-context-name-list (IEC 62351-4 15.6.1).
@@ -418,10 +477,14 @@ func ParseAARQFull(apdu []byte) (Request, error) {
 					req.ApplicationContext = oid
 				}
 			}
-		case asn1.ContextPrimitive(10), asn1.ContextPrimitive(11), asn1.ContextConstructed(13):
+		case asn1.ContextPrimitive(10), asn1.ContextConstructed(13):
 			req.NonKernel = true
+		case asn1.ContextPrimitive(11): // mechanism-name
+			req.NonKernel = true
+			req.Mechanism, _ = asn1.DecodeOID(c)
 		case asn1.ContextConstructed(12): // calling-authentication-value
 			req.NonKernel = true
+			req.AuthValue = c
 			av := asn1.NewDecoder(c)
 			if pw, ok, _ := av.Optional(asn1.ContextPrimitive(0)); ok {
 				req.Password = string(pw)
@@ -464,6 +527,10 @@ func parseUserInfo(content []byte) ([]byte, error) {
 	}
 	return nil, fmt.Errorf("acse: EXTERNAL has no encoding")
 }
+
+// authBit reports the authentication(0) bit of an ACSE-requirements BIT
+// STRING's content (unused-bits octet, then the bits).
+func authBit(c []byte) bool { return len(c) >= 2 && c[1]&0x80 != 0 }
 
 func parseDiagnostic(content []byte) int {
 	dec := asn1.NewDecoder(content)

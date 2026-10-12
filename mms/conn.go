@@ -3,6 +3,7 @@ package mms
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,7 +12,9 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/asn1"
+	"github.com/dscsystems/go-iec61850/iec62351/aprofile"
 	"github.com/dscsystems/go-iec61850/iec62351/e2e"
+	"github.com/dscsystems/go-iec61850/iec62351/pki"
 	"github.com/dscsystems/go-iec61850/internal/osi/acse"
 	"github.com/dscsystems/go-iec61850/internal/osi/cotp"
 	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
@@ -51,6 +54,13 @@ type Options struct {
 	// plain mode.
 	E2E *e2e.ClientConfig
 
+	// AProfile, when non-nil, authenticates the association with the IEC
+	// 62351-4 A-security profile (compatibility mode): the AARQ carries this
+	// end's certificate and a signed time, and the server's AARE must carry
+	// its own, which is verified before the association is used. It
+	// requires TLS unless AProfile.AllowWithoutTLS, and cannot be combined
+	// with a password or E2E.
+	AProfile *aprofile.Config
 	// ReleaseTimeout bounds the release exchange of Close under E2E
 	// (default 10 s).
 	ReleaseTimeout time.Duration
@@ -93,6 +103,8 @@ type Conn struct {
 	// responding is the identity the peer answered with, which a proxy
 	// replays to its own clients.
 	responding ACSEIdentity
+	// aprofilePeer is the server's A-profile certificate.
+	aprofilePeer *x509.Certificate
 
 	writeMu sync.Mutex
 
@@ -224,6 +236,9 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		if opts.Password != "" {
 			return nil, errors.New("mms: a password cannot be combined with IEC 62351-4 E2E security")
 		}
+		if opts.AProfile != nil {
+			return nil, errors.New("mms: the A-profile cannot be combined with IEC 62351-4 E2E security")
+		}
 		fr, negotiated, responding, err := e2eClientAssociate(ct, opts, init)
 		if err != nil {
 			return nil, err
@@ -236,7 +251,24 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 
 	// Build ACSE AARQ wrapping the MMS InitiateRequest, wrap in
 	// presentation CP, exchange via the session CONNECT.
-	aarq := acse.AARQFor(EncodeInitiateRequest(init), opts.Password,
+	var auth *acse.Auth
+	if opts.Password != "" {
+		auth = acse.PasswordAuth(opts.Password)
+	}
+	if ap := opts.AProfile; ap != nil {
+		if opts.Password != "" {
+			return nil, errors.New("mms: a password cannot be combined with the A-profile")
+		}
+		if _, isTLS := raw.(*tls.Conn); !isTLS && !ap.AllowWithoutTLS {
+			return nil, errors.New("mms: the IEC 62351-4 A-profile requires TLS (set AllowWithoutTLS for lab use)")
+		}
+		val, err := ap.Value()
+		if err != nil {
+			return nil, err
+		}
+		auth = &acse.Auth{Mechanism: ap.MechanismName(), Value: val.Encode()}
+	}
+	aarq := acse.AARQAuth(EncodeInitiateRequest(init), auth,
 		opts.Called.toACSE(), opts.Calling.toACSE(), opts.ApplicationContext.acse())
 	cp := presentation.BuildCP(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aarq)
 	cpaUserData, err := session.ConnectClient(ct, nil, nil, cp)
@@ -254,6 +286,12 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		}
 		return nil, fmt.Errorf("mms: association refused: %w", err)
 	}
+	if errors.Is(err, session.ErrAborted) && opts.AProfile != nil {
+		// IEC 62351-4 11.2.3.2 c) to f): the server refused the certificate,
+		// the time or the signature.
+		return nil, fmt.Errorf("mms: the server aborted the association, refusing the A-profile authentication "+
+			"(certificate not trusted, clock more than 10 minutes off, or signature): %w", err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("mms: session connect: %w", err)
 	}
@@ -268,6 +306,12 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 	if !res.Accepted {
 		return nil, &RejectedError{Diagnostic: res.Diagnostic}
 	}
+	var peerCert *x509.Certificate
+	if opts.AProfile != nil {
+		if peerCert, err = verifyAProfileAARE(ct, res, opts.AProfile); err != nil {
+			return nil, err
+		}
+	}
 	negotiated, err := ParseInitiateResponse(res.UserData)
 	if err != nil {
 		return nil, fmt.Errorf("mms: initiate response: %w", err)
@@ -277,9 +321,50 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		raw.SetDeadline(time.Time{})
 	}
 
-	return startConn(raw, &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE},
-		logger, negotiated, identityFromACSE(res.Responding), opts), nil
+	c := startConn(raw, &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE},
+		logger, negotiated, identityFromACSE(res.Responding), opts)
+	c.aprofilePeer = peerCert
+	return c, nil
 }
+
+// verifyAProfileAARE checks the server's authentication in an accepted
+// AARE (IEC 62351-4 11.2.4.2): a missing mechanism-name is answered with
+// an ABRT, an authentication value that fails verification with a
+// P-ABORT.
+func verifyAProfileAARE(ct *cotp.Conn, res *acse.Result, ap *aprofile.Config) (*x509.Certificate, error) {
+	if res.Mechanism == nil {
+		session.Abort(ct, presentation.WrapAbort(presentation.ContextACSE,
+			acse.ABRTWithDiagnostic(acse.AbortSourceProvider, acse.AbortDiagMechanismRequired)))
+		return nil, &AProfileError{Err: errors.New("the server's AARE names no authentication mechanism")}
+	}
+	if res.AuthValue == nil || !aprofile.IsValue(res.AuthValue) {
+		session.Abort(ct, nil)
+		return nil, &AProfileError{Err: errors.New("the server's AARE carries no A-profile authentication value")}
+	}
+	val, err := aprofile.Parse(res.AuthValue)
+	if err == nil {
+		var cert *pki.Certificate
+		if cert, err = ap.Verifier.Verify(val); err == nil {
+			return cert.Certificate, nil
+		}
+	}
+	session.Abort(ct, nil) // P-ABORT
+	return nil, &AProfileError{Err: err}
+}
+
+// AProfileError is an association abandoned because the peer's IEC
+// 62351-4 A-profile authentication failed verification. Err wraps the
+// aprofile error (ErrCertificate, ErrTime, ErrReplay, ErrSignature, ...).
+type AProfileError struct{ Err error }
+
+func (e *AProfileError) Error() string {
+	return "mms: A-profile authentication of the peer failed: " + e.Err.Error()
+}
+func (e *AProfileError) Unwrap() error { return e.Err }
+
+// PeerAProfileCertificate returns the certificate the server authenticated
+// with under the A-profile, nil without it.
+func (c *Conn) PeerAProfileCertificate() *x509.Certificate { return c.aprofilePeer }
 
 func startConn(raw net.Conn, fr *framing, logger *slog.Logger, negotiated InitiateRequest, responding ACSEIdentity, opts Options) *Conn {
 	rt := opts.ReleaseTimeout

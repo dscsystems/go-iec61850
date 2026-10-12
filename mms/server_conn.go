@@ -3,6 +3,7 @@ package mms
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/asn1"
+	"github.com/dscsystems/go-iec61850/iec62351/aprofile"
 	"github.com/dscsystems/go-iec61850/iec62351/e2e"
+	"github.com/dscsystems/go-iec61850/iec62351/pki"
 	"github.com/dscsystems/go-iec61850/internal/osi/acse"
 	"github.com/dscsystems/go-iec61850/internal/osi/cotp"
 	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
@@ -59,6 +62,10 @@ type ServerConn struct {
 	// responding identity in the AARE against it.
 	Called  ACSEIdentity
 	Calling ACSEIdentity
+
+	// AProfilePeer is the certificate the client authenticated with under
+	// the IEC 62351-4 A-security profile, nil without it.
+	AProfilePeer *x509.Certificate
 
 	serverConnExt
 }
@@ -164,6 +171,15 @@ type AcceptOptions struct {
 	// E2ERequired refuses plain (non-E2E) associations when E2E is set.
 	E2ERequired bool
 
+	// AProfile, when non-nil, verifies clients that authenticate with the
+	// IEC 62351-4 A-security profile and answers them with this end's own
+	// authentication value. Clients that send none are still accepted
+	// unless AProfileRequired. Verification failures abort the association
+	// (P-ABORT, IEC 62351-4 11.2.3.2). Without TLS it is refused unless
+	// AProfile.AllowWithoutTLS.
+	AProfile         *aprofile.Config
+	AProfileRequired bool
+
 	// HandshakeTimeout bounds the association handshake (zero: none).
 	HandshakeTimeout time.Duration
 }
@@ -226,9 +242,22 @@ func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		return nil, fmt.Errorf("%w: plain association refused, IEC 62351-4 E2E required", ErrRejected)
 	}
 	mmsInit, password := areq.UserData, areq.Password
+	refuse := func(diag int) {
+		aare := acse.AARERejectFor(areq.ApplicationContext, diag)
+		opts.trace("tx AARE", aare)
+		sel := cp.CalledPSel
+		if len(sel) == 0 {
+			sel = presentation.DefaultCalledPSel
+		}
+		session.Refuse(ct, presentation.BuildCPR(sel, cp.Contexts, aare))
+	}
+	apPeer, respAuth, err := acceptAProfile(raw, ct, areq, opts, refuse)
+	if err != nil {
+		return nil, err
+	}
 	if opts.Authenticate != nil {
 		ar := AssociationRequest{Peer: raw.RemoteAddr(), Password: password,
-			Called: identityFromACSE(areq.Called), Calling: identityFromACSE(areq.Calling)}
+			Called: identityFromACSE(areq.Called), Calling: identityFromACSE(areq.Calling), AProfile: apPeer}
 		if tc, ok := raw.(*tls.Conn); ok {
 			st := tc.ConnectionState()
 			ar.TLS = &st
@@ -238,13 +267,7 @@ func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 			if errors.Is(aerr, ErrAuthenticationRequired) {
 				diag = acse.DiagAuthenticationRequired
 			}
-			aare := acse.AARERejectFor(areq.ApplicationContext, diag)
-			opts.trace("tx AARE", aare)
-			sel := cp.CalledPSel
-			if len(sel) == 0 {
-				sel = presentation.DefaultCalledPSel
-			}
-			session.Refuse(ct, presentation.BuildCPR(sel, cp.Contexts, aare))
+			refuse(diag)
 			return nil, fmt.Errorf("%w: %v", ErrRejected, aerr)
 		}
 	}
@@ -276,7 +299,7 @@ func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		return nil, fmt.Errorf("mms: peer proposed no usable MMS presentation "+
 			"context (%d contexts proposed)", len(cp.Contexts))
 	}
-	aare := acse.AAREFor(initResp, responding, areq.ApplicationContext, negotiatedCtx.MMS)
+	aare := acse.AAREAuth(initResp, responding, areq.ApplicationContext, negotiatedCtx.MMS, respAuth)
 	opts.trace("tx AARE", aare)
 	// The responder's selector is the one the peer addressed, so it sees the
 	// entity it dialled answer rather than a stack default.
@@ -296,11 +319,57 @@ func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 		unconf:  make(chan []byte, 512),
 		Called:  identityFromACSE(areq.Called),
 		Calling: identityFromACSE(areq.Calling),
+
+		AProfilePeer: apPeer,
 	}
 	// A dedicated writer drains unconfirmed PDUs (reports) so callers never
 	// block on the socket while holding the model lock.
 	go sc.pumpUnconfirmed()
 	return sc, nil
+}
+
+// acceptAProfile applies the A-security profile to an AARQ (IEC 62351-4
+// 11.2.3.2): it returns the authenticated client certificate and the
+// authentication to answer with, both nil when the profile does not apply.
+// A refusal is sent with refuse (an AARE); a verification failure with a
+// P-ABORT.
+func acceptAProfile(raw net.Conn, ct *cotp.Conn, areq acse.Request, opts AcceptOptions,
+	refuse func(diag int)) (*x509.Certificate, *acse.Auth, error) {
+	ap := opts.AProfile
+	sent := areq.AuthValue != nil && aprofile.IsValue(areq.AuthValue)
+	if ap == nil || (!sent && !opts.AProfileRequired) {
+		return nil, nil, nil
+	}
+	if _, isTLS := raw.(*tls.Conn); !isTLS && !ap.AllowWithoutTLS {
+		refuse(acse.DiagAuthenticationFailure)
+		return nil, nil, fmt.Errorf("%w: the A-profile requires TLS", ErrRejected)
+	}
+	switch {
+	case areq.Mechanism == nil:
+		refuse(acse.DiagAuthMechanismRequired)
+		return nil, nil, fmt.Errorf("%w: no authentication mechanism-name", ErrRejected)
+	case !sent:
+		refuse(acse.DiagAuthenticationRequired)
+		return nil, nil, fmt.Errorf("%w: A-profile authentication required", ErrRejected)
+	}
+	val, err := aprofile.Parse(areq.AuthValue)
+	var cert *pki.Certificate
+	if err == nil {
+		cert, err = ap.Verifier.Verify(val)
+	}
+	if err != nil {
+		opts.trace("tx P-ABORT", nil)
+		session.Abort(ct, nil)
+		return nil, nil, fmt.Errorf("%w: %w", ErrRejected, &AProfileError{Err: err})
+	}
+	own, err := ap.Value()
+	if err != nil {
+		session.Abort(ct, nil)
+		return nil, nil, err
+	}
+	// The mechanism-name is echoed: peers built on the 2007 TS may expect
+	// the one they sent.
+	return cert.Certificate, &acse.Auth{Mechanism: areq.Mechanism, Value: own.Encode()}, nil
 }
 
 // DefaultServerInitiate is the answer of a server that names no

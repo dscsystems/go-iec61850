@@ -3,6 +3,7 @@ package mms
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"sync"
@@ -27,6 +28,9 @@ type AssociationRequest struct {
 	// Security is the peer authenticated by IEC 62351-4 E2E security; the
 	// zero value for a plain association.
 	Security E2EPeer
+	// AProfile is the certificate the client authenticated with under the
+	// IEC 62351-4 A-security profile, nil without it.
+	AProfile *x509.Certificate
 }
 
 // ErrAuthenticationRequired, returned by an authenticator, rejects the
