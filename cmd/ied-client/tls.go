@@ -11,7 +11,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/dscsystems/go-iec61850/client"
 	"github.com/dscsystems/go-iec61850/iec62351"
+	"github.com/dscsystems/go-iec61850/iec62351/ossltls"
 )
 
 // tlsFlags are the IEC 62351-3 TLS options: this client's certificate,
@@ -24,6 +26,7 @@ type tlsFlags struct {
 	TLS13Only     bool
 	NativeMode    bool
 	AllowStaleCRL bool
+	OpenSSL       bool
 }
 
 type fileList []string
@@ -41,32 +44,65 @@ func (f *tlsFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.TLS13Only, "tls13", false, "refuse TLS 1.2")
 	fs.BoolVar(&f.NativeMode, "tls-native", false, "IEC 62351-4 native-mode TLS profile instead of IEC 62351-3")
 	fs.BoolVar(&f.AllowStaleCRL, "tls-allow-stale-crl", false, "accept a CRL past its next update")
+	fs.BoolVar(&f.OpenSSL, "tls-openssl", false,
+		"run TLS on OpenSSL, for the suites crypto/tls lacks (DHE_RSA_AES_128_GCM in native mode); needs a build with -tags openssl")
 }
 
 func (f *tlsFlags) enabled() bool { return f.Cert != "" }
 
-// config builds the client TLS configuration for a server at addr.
+// option builds the client option securing a connection to addr, on
+// crypto/tls or, with -tls-openssl, on OpenSSL.
+func (f *tlsFlags) option(addr string) (client.Option, error) {
+	o, err := f.options(addr)
+	if err != nil {
+		return nil, err
+	}
+	if f.OpenSSL {
+		ctx, err := ossltls.NewContext(o, ossltls.Client)
+		if err != nil {
+			return nil, err
+		}
+		return client.WithTLSHandshake(ctx.Handshake), nil
+	}
+	cfg, err := iec62351.ClientConfig(o)
+	if err != nil {
+		return nil, err
+	}
+	return client.WithTLS(cfg), nil
+}
+
+// config builds the crypto/tls client configuration for a server at addr.
 func (f *tlsFlags) config(addr string) (*tls.Config, error) {
+	o, err := f.options(addr)
+	if err != nil {
+		return nil, err
+	}
+	return iec62351.ClientConfig(o)
+}
+
+// options builds the profile options for a server at addr.
+func (f *tlsFlags) options(addr string) (iec62351.Options, error) {
+	var none iec62351.Options
 	if f.Key == "" {
-		return nil, errors.New("-tls-key is required with -tls-cert")
+		return none, errors.New("-tls-key is required with -tls-cert")
 	}
 	if len(f.CA) == 0 {
-		return nil, errors.New("-tls-ca is required with -tls-cert")
+		return none, errors.New("-tls-ca is required with -tls-cert")
 	}
 	cert, err := tls.LoadX509KeyPair(f.Cert, f.Key)
 	if err != nil {
-		return nil, fmt.Errorf("key pair: %w", err)
+		return none, fmt.Errorf("key pair: %w", err)
 	}
 	roots := x509.NewCertPool()
 	for _, p := range f.CA {
 		ders, err := readDERs(p, "CERTIFICATE")
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+			return none, fmt.Errorf("%s: %w", p, err)
 		}
 		for _, der := range ders {
 			c, err := x509.ParseCertificate(der)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", p, err)
+				return none, fmt.Errorf("%s: %w", p, err)
 			}
 			roots.AddCert(c)
 		}
@@ -75,12 +111,12 @@ func (f *tlsFlags) config(addr string) (*tls.Config, error) {
 	for _, p := range f.CRL {
 		ders, err := readDERs(p, "X509 CRL")
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+			return none, fmt.Errorf("%s: %w", p, err)
 		}
 		for _, der := range ders {
 			crl, err := x509.ParseRevocationList(der)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", p, err)
+				return none, fmt.Errorf("%s: %w", p, err)
 			}
 			crls = append(crls, crl)
 		}
@@ -91,7 +127,7 @@ func (f *tlsFlags) config(addr string) (*tls.Config, error) {
 			name = addr
 		}
 	}
-	return iec62351.ClientConfig(iec62351.Options{
+	return iec62351.Options{
 		Certificates:  []tls.Certificate{cert},
 		Roots:         roots,
 		CRLs:          crls,
@@ -106,7 +142,7 @@ func (f *tlsFlags) config(addr string) (*tls.Config, error) {
 			}
 			fmt.Fprintf(os.Stderr, "ied-client: tls: server refused (%s): %v\n", peer, e.Err)
 		},
-	})
+	}, nil
 }
 
 // readDERs returns the PEM blocks of type typ in the file at path, or the

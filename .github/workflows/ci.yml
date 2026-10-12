@@ -30,3 +30,14 @@ jobs:
               go test -run=NONE -fuzz="^$f$" -fuzztime=20s $pkg
             done
           done
+
+  openssl:
+    # The OpenSSL TLS engine (package iec62351/ossltls), built with cgo.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - run: sudo apt-get install -y libssl-dev pkg-config && openssl version
+      - run: go vet -tags openssl ./...
+      - run: go test -tags openssl -race ./iec62351/... ./mms ./client ./cmd/ied-client

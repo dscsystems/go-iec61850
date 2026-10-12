@@ -17,7 +17,8 @@ func setup(t *testing.T) (*pkitest.CA, Credential, *Verifier, time.Time) {
 	t.Helper()
 	root := pkitest.NewRoot("aprofile CA", pkitest.ECDSAP256)
 	leaf := root.NewE2ELeaf([]uint32{1, 3, 9999, 1}, 1, pkitest.LeafOptions{KeyType: pkitest.RSA2048})
-	now := time.Date(2026, 10, 12, 21, 30, 0, 0, time.UTC)
+	// The certificates are valid from an hour ago: the clock is the real one.
+	now := time.Now().UTC().Truncate(time.Second)
 	return root, Credential{Certificate: leaf.DER, Signer: leaf.Key},
 		&Verifier{Trust: pki.NewTrustStore(root.Cert), Now: func() time.Time { return now }}, now
 }
@@ -30,7 +31,7 @@ func TestEncodingOracle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(v.Time) != "20261012213000Z" {
+	if string(v.Time) != now.Format("20060102150405Z") {
 		t.Fatalf("time %q", v.Time)
 	}
 	type certBased struct {

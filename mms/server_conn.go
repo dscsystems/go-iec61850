@@ -2,7 +2,6 @@ package mms
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -258,7 +257,7 @@ func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	if opts.Authenticate != nil {
 		ar := AssociationRequest{Peer: raw.RemoteAddr(), Password: password,
 			Called: identityFromACSE(areq.Called), Calling: identityFromACSE(areq.Calling), AProfile: apPeer}
-		if tc, ok := raw.(*tls.Conn); ok {
+		if tc, ok := raw.(tlsConn); ok {
 			st := tc.ConnectionState()
 			ar.TLS = &st
 		}
@@ -340,7 +339,7 @@ func acceptAProfile(raw net.Conn, ct *cotp.Conn, areq acse.Request, opts AcceptO
 	if ap == nil || (!sent && !opts.AProfileRequired) {
 		return nil, nil, nil
 	}
-	if _, isTLS := raw.(*tls.Conn); !isTLS && !ap.AllowWithoutTLS {
+	if _, isTLS := raw.(tlsConn); !isTLS && !ap.AllowWithoutTLS {
 		refuse(acse.DiagAuthenticationFailure)
 		return nil, nil, fmt.Errorf("%w: the A-profile requires TLS", ErrRejected)
 	}
@@ -709,7 +708,7 @@ func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp prese
 	if opts.Authenticate != nil {
 		ar := AssociationRequest{Peer: raw.RemoteAddr(), Called: identityFromACSE(areq.Called),
 			Calling: identityFromACSE(areq.Calling), Security: r.assoc.Peer()}
-		if tc, ok := raw.(*tls.Conn); ok {
+		if tc, ok := raw.(tlsConn); ok {
 			st := tc.ConnectionState()
 			ar.TLS = &st
 		}

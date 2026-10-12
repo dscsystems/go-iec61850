@@ -48,6 +48,13 @@ type Option func(*mms.Options)
 // WithTLS enables TLS per IEC 62351-3.
 func WithTLS(cfg *tls.Config) Option { return func(o *mms.Options) { o.TLS = cfg } }
 
+// WithTLSHandshake secures the connection with another TLS engine, such
+// as an ossltls.Context's Handshake for the IEC 62351-4 native-mode suites
+// crypto/tls lacks. It applies when WithTLS is not set.
+func WithTLSHandshake(h func(ctx context.Context, raw net.Conn) (net.Conn, error)) Option {
+	return func(o *mms.Options) { o.TLSHandshake = h }
+}
+
 // WithPassword sets an ACSE authentication password.
 func WithPassword(pw string) Option { return func(o *mms.Options) { o.Password = pw } }
 

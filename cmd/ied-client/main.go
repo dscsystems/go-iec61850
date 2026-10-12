@@ -71,12 +71,12 @@ func main() {
 		opts = append(opts, client.WithPassword(*password))
 	}
 	if tlsF.enabled() {
-		cfg, err := tlsF.config(*addr)
+		opt, err := tlsF.option(*addr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ied-client: tls: %v\n", err)
 			os.Exit(1)
 		}
-		opts = append(opts, client.WithTLS(cfg))
+		opts = append(opts, opt)
 	}
 	if apF.enabled() {
 		cfg, err := apF.config(tlsF.enabled())
