@@ -340,6 +340,10 @@ a writable one.
 |---|---|---|---|
 | MMS over TLS, IEC 62351-3 profile | Y | Y | package `iec62351`; TLS 1.2 (ECDHE AES-GCM) and 1.3; mutual certificates; CRLs; key strength; pinning |
 | TLS session key renewal | N | N | |
+| IEC 62351-3 Table 1 DHE_RSA suites (0x009E; 0x009F after Part 3 TISSUE 79) | N | N | not implemented by Go `crypto/tls` |
+| Trusted CA indication, `trusted_ca_keys` (Part 3 7.5.3, TISSUE 58) | N | N | Go `crypto/tls` neither sends the extension nor answers it in the ServerHello |
+| OCSP, including a response without nextUpdate (Part 3 TISSUE 99) | N | N | CRLs only |
+| Disallowed-cipher alarm `TLS_DISALLOWED_CIPHER` (Part 3 7.3; alarm level per TISSUE 88) | N | N | a handshake with no common suite fails inside `crypto/tls` before the profile sees it; peers refused by the certificate checks are reported (`Options.OnEvent`) |
 | R-GOOSE / R-SV session protocol (IEC 61850-90-5) | Y | Y | package `rsession`; UDP unicast and multicast, IPv4 and IPv6; protocol versions 1 and 2 |
 | SPDU authentication HMAC-SHA256-80/128/256 | Y | Y | |
 | SPDU encryption AES-128-GCM, AES-256-GCM | Y | Y | |
@@ -347,6 +351,7 @@ a writable one.
 | Replay protection, refusal of unsecured SPDUs | Y | — | |
 | Group key distribution, IEC 62351-9 (GDOI, RFC 6407/8052) | Y (member) | Y (key server) | package `gdoi`; GROUPKEY-PULL with IKEv1 main mode, certificates or pre-shared key |
 | GDOI GROUPKEY-PUSH | N | N | members re-register |
+| IEC 62351-9 TISSUEs (none in force; accepted or editorial) | — | — | 121: auth values 2 = HMAC-SHA256-128, 3 = HMAC-SHA256, as implemented. 149: HASH(2)–(4) take Ni_b/Nr_b without the payload header, as implemented. 170: TEK integrity and encryption keys are drawn independently, as implemented. 123: a member whose HASH check fails sends nothing to the key server, as implemented. 169: `61850_UDP_Tunnel` moves to 1.0.62351.9.61850.8.1.3 (group OIDs are the application's). 168 (open): a fresh, clear 16-octet IV per message would replace the RFC 2409 IV chaining implemented here; not adopted until published. 160: HMAC-SHA-384/512 (auth 6/7) not implemented |
 | IEC 62351-4 E2E security, native mode (OSI) | Y | Y | packages `iec62351/e2e`, `iec62351/e2e/osi`; see 8.1 for the declared profile |
 | IEC 62351-4 A-profile (compatibility mode) | N | N | |
 | IEC 62351-4 native-mode TLS profile (Table 10) | P | P | `iec62351.Options.NativeMode`; see 8.1 |
@@ -363,7 +368,7 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 | T6 XMPP operational environment | N | N | |
 | T7 Compatibility mode | N | N | A-profile not implemented |
 | T7 Native mode | Y | Y | |
-| T8 TLS_DH_DSS_WITH_AES_256_CBC_SHA (compatibility, m) | N | N | not implemented by Go `crypto/tls` |
+| T8 compatibility suite (m): TLS_DHE_DSS_WITH_AES_128_CBC_SHA 0x0032 after Part 4 TISSUE 129 (printed 0x0030) | N | N | DSS is not implemented by Go `crypto/tls` |
 | T9 Use of authenticated encryption | N | N | not built (WP9). TISSUE 95 makes AE and non-AE mandatory for a server, so server conformance to Table 9 is not claimed (R-32) |
 | T9 Non-use of AE | Y | Y | clear transfer; E2E encryption (AES-CBC) not yet implemented |
 | T10 TLS_RSA_WITH_AES_128_CBC_SHA256 0x003C (m) | Y | Y | `NativeMode` |

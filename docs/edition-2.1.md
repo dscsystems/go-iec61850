@@ -380,7 +380,13 @@ every IED's GOOSE addressing is missing.
   delivers a group's TEKs (named by ID_KEY_ID or ID_OID) with their
   activation delay; the key server authorises each member per group; a
   `gdoi.Member` keeps an `rsession.KeyStore` current through key
-  rotation and withdrawal, and removes its keys when it stops.
+  rotation and withdrawal, and removes its keys when it stops. Checked
+  against the IEC 62351-9 TISSUEs (https://iec62351.tissue-db.com/parts/16;
+  none in force): the authentication values (121), the HASH nonce inputs
+  (149), independent TEK keys (170) and a silent member on a HASH failure
+  (123) match; TISSUE 169 moves `61850_UDP_Tunnel` to
+  1.0.62351.9.61850.8.1.3; TISSUE 168, still open, would replace the RFC
+  2409 IV chaining used here with a fresh IV sent in clear.
 - **MMS over TLS (IEC 62351-3)**, package `iec62351`: `ClientConfig` and
   `ServerConfig` for `client.WithTLS` and `server.WithTLS`. TLS 1.2 (with
   the ECDHE AES-GCM suites only) and 1.3; mutual certificate

@@ -1107,7 +1107,7 @@ Estimates are indicative engineer-weeks (ew) for one engineer familiar with the 
 | Requirement | Go 1.27 | Plan |
 | --- | --- | --- |
 | Native mandatory suites ([B] Table 10) | 0x003C yes (explicit enable); 0x00A0 no; 0x009E no; 0xC02B yes | Declare 0x00A0 and 0x009E N. DEC-7 |
-| Compatibility mandatory `TLS_DH_DSS_WITH_AES_256_CBC_SHA` | no | Declare N; compatibility mode TLS remains out of scope |
+| Compatibility mandatory suite ([B] Table 8; TISSUE 129: `TLS_DHE_DSS_WITH_AES_128_CBC_SHA` 0x0032) | no (no DSS) | Declare N; compatibility mode TLS remains out of scope |
 | Resumption ([B] 6.2.3) | yes (tickets, client cache) | WP11 |
 | Renegotiation ([B] 6.2.4) | client can only accept a server's request; server: none | Declare N. Long associations re-evaluate certificates (6.4) and rekey at the application layer (E2E) |
 | ≥ 2 trust anchors, 8192-octet certificates, CRL period, events | yes / yes / via `pki` / yes | WP5 |
@@ -1603,7 +1603,7 @@ Status values: **Open** (to be resolved in WP0.4), **Adopted** (a default chosen
 | R-29 | `EncrTransfer.auth` | 2018: mandatory, with `icv` absent for aea; AMD1: OPTIONAL | — | Applies to WP9 only (encryption not built) | Open |
 | R-30 | GMAC ICV identifiers | 8.7/Table 11: `aes128-GCM` {aes 6}, `aes256-GCM` {aes 46} used as GMAC | — | **TISSUE 52** (in force): `aes128-GMAC` {aes 9}, `aes256-GMAC` {aes 49} (RFC 9044), PARMS `GCMParameters`. Sent by default; both forms accepted; the server echoes the client's identifier and both ends keep the negotiated one, so corrected and uncorrected peers interoperate. TISSUE 60 (editorial, not in force) would make the PARMS NULL | Adopted |
 | R-31 | Received attribute certificate | 13.3.1.1 k) silent on absence/handling | T50 "aa" row expects `invalid-attribute-certificate` | **TISSUE 97** (in force): validate per IEC 62351-8 if authorization is configured, otherwise ignore. Default: ignored with an `attribute-certificate-ignored` event; `Policy.RequireAuthorization` refuses it (62351-8 validation not implemented) | Adopted |
-| R-32 | Server AE / non-AE support | Table 9 conditional on the referencing standard | — | **TISSUE 95** (in force): the server shall support both, so Table 11 c[5]–c[7] are mandatory for servers. Our server cannot claim server conformance until WP9 (encryption, AE) is built; PICS 8.1 says so | Open (WP9) |
+| R-32 | Server AE / non-AE support | Table 9 conditional on the referencing standard | — | **TISSUE 95** (in force): the server shall support both, so Table 11 c[5]–c[7] are mandatory for servers. Our server cannot claim server conformance until WP9 (encryption, AE) is built; PICS 8.1 says so. Part 6 TISSUE 54 (triage) asks Part 6 to state how Table 9 is filled for IEC 61850, proposing "servers at least one option, clients both", which would reverse 95 for servers; watch | Open (WP9) |
 | R-33 | Other in-force TISSUEs | — | — | 90: DtDiagnostics 11 renamed `unexpected-changeKeys` (name only, adopted). 92: AssoAbort has four elements with `osiDiag` (already so). 78: other key usages are ignored (already so: digitalSignature and keyAgreement required, others ignored). 77: DH 14 and ECDH 23 mandatory, 28 optional in Table 11 (PICS). 130: wording of item 21 (`invalid-ae-algorithm`), relevant with AE only | Adopted |
 | R-34 | TISSUEs not yet in force | — | — | 60 and 64 (algorithm PARMS NULL in ClearToken1, IV out of ClearToken1), 96 (OSI-SecAsso references), 101 (rekey overlap: clarifying text, possibly symmetric `changedKey`), 171 (cipher-suite references; drafting). Track; no code change | Open |
 
@@ -1735,3 +1735,23 @@ The IEC 62351 TISSUE database (<https://iec62351.tissue-db.com/parts/4>) lists 1
 | Tests: wire numbering in all three modes with a round trip; GMAC identifiers for corrected, mixed and uncorrected pairs with data both ways; attribute certificate ignored; IV sizes | `iec62351/e2e/tissue_test.go`, `edition_test.go` |
 
 Compatibility: a peer built on AMD1 as printed reads handshake diagnostics 19–25 from a corrected peer one value too low; that only affects the diagnosis of a failed handshake, never a successful association. Set `CorrectionsNone` for such peers, or for a test campaign that still expects the Annex B values.
+
+## 19.7 TISSUEs of the other parts (12 October 2026)
+
+The parts overview (<https://iec62351.tissue-db.com/parts.mspx>) was reviewed for what touches this code. The General part and Parts 100-4 and 100-6 have no TISSUEs; Parts 5, 7, 11 and 100-1 do not concern it; Part 8 has one (RADIUS). No TISSUE outside Part 4 requires a code change: Part 9 has none in force and the code already meets its accepted ones, and Part 3's in-force ones concern features the TLS profile does not implement, now declared in the PICS.
+
+| Part | TISSUE | Status | Effect here |
+| --- | --- | --- | --- |
+| 3 (TLS) | 79: Table 1 `TLS_DHE_RSA_WITH_AES_256_GCM_SHA384` = 0x009F, `..._128_...` = 0x009E | In force (57/2853/INF) | DHE suites are not implemented by Go; PICS N with the corrected values |
+| 3 | 58: `trusted_ca_keys` carries the client's CA key list; the server answers with an empty extension | In force | Not supported by `crypto/tls`; PICS N |
+| 3 | 99: an OCSP response without nextUpdate is valid until thisUpdate + 24 h | In force | OCSP not implemented; PICS N |
+| 3 | 88: `TLS_DISALLOWED_CIPHER` is an alarm | In force | Not raised: a suite mismatch fails inside `crypto/tls`. Gap recorded in the PICS |
+| 3 | 162, 172, 115, 89, 93, 50 and others | Editorial / future improvement / drafting | 172 (validating one's own certificate becomes optional) and 162 (RFC 5746 on resumption) need no change: renegotiation is off and the own certificate is not validated locally |
+| 4 | 129: Table 8 suite is `TLS_DHE_DSS_WITH_AES_128_CBC_SHA` 0x0032 | In force | Section 11 and PICS corrected; still N (no DSS) |
+| 6 | 54: how Part 4 Table 9 is filled for IEC 61850 | Triage | Watch with R-32 |
+| 6 | 21/22: Table 6 merged, E2E or ACSE authentication conditional | Drafting / accepted | Would make E2E (native) an alternative to the A-profile in the IEC 61850 security PICS; supports the native-only position. Revisit when published |
+| 9 (GDOI) | 121, 149, 170, 123 | Conformance verification / editorial | Already as implemented (package `gdoi`) |
+| 9 | 169: `61850_UDP_Tunnel` → 1.0.62351.9.61850.8.1.3 | Analysis of compatibility | Group OIDs are the application's; documented |
+| 9 | 168: fresh 16-octet IV in clear per encrypted message | Editorial, disputed | Not adopted: `gdoi` follows RFC 2409 Appendix B, which Wireshark also decrypts. Revisit when published |
+| 9 | 160: HMAC-SHA-384/512 as GDOI auth values 6/7 | Analysis of compatibility | Not implemented; additive when needed |
+| 100-3 (TLS tests) | 140, 137, 132 and others | Mostly editorial | Inform the laboratory agreement on the declared TLS profile (R-24) |
