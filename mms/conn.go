@@ -242,10 +242,14 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 	cpaUserData, err := session.ConnectClient(ct, nil, nil, cp)
 	var refused *session.RefusedError
 	if errors.As(err, &refused) {
-		// A refused association: the CPR carries the AARE saying why.
-		if aare, perr := presentation.ParseCPRUserData(refused.UserData); perr == nil {
-			if res, perr := acse.ParseAARE(aare); perr == nil && !res.Accepted {
+		// A refused association: the CPR carries the AARE saying why, or,
+		// from some servers (Triangle MicroWorks), an A-ABORT.
+		if apdu, perr := presentation.ParseCPRUserData(refused.UserData); perr == nil {
+			if res, perr := acse.ParseAARE(apdu); perr == nil && !res.Accepted {
 				return nil, &RejectedError{Diagnostic: res.Diagnostic}
+			}
+			if a, perr := acse.ParseABRTFull(apdu); perr == nil {
+				return nil, &AbortedError{Source: a.Source, Diagnostic: a.Diagnostic}
 			}
 		}
 		return nil, fmt.Errorf("mms: association refused: %w", err)

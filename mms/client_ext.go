@@ -29,6 +29,43 @@ func (e *RejectedError) Error() string {
 	return fmt.Sprintf("mms: association rejected (diagnostic %d)", e.Diagnostic)
 }
 
+// AbortedError is an association the server aborted instead of rejecting:
+// an A-ABORT in place of the AARE. Diagnostic is the ABRT-diagnostic (-1
+// when absent).
+type AbortedError struct {
+	Source     int // acse.AbortSourceUser or acse.AbortSourceProvider
+	Diagnostic int
+}
+
+func (e *AbortedError) Error() string {
+	var why string
+	switch e.Diagnostic {
+	case -1:
+		return "mms: association aborted by the server"
+	case acse.AbortDiagNoReason:
+		why = "no reason given"
+	case acse.AbortDiagProtocolError:
+		why = "protocol error"
+	case acse.AbortDiagMechanismNotRecognised:
+		why = "authentication mechanism not recognised"
+	case acse.AbortDiagMechanismRequired:
+		why = "authentication mechanism required"
+	case acse.AbortDiagAuthenticationFailure:
+		why = "authentication failure"
+	case acse.AbortDiagAuthenticationRequired:
+		why = "authentication required"
+	default:
+		why = fmt.Sprintf("diagnostic %d", e.Diagnostic)
+	}
+	return "mms: association aborted by the server: " + why
+}
+
+// Is matches ErrAuthenticationFailed for the authentication diagnostics.
+func (e *AbortedError) Is(target error) bool {
+	return target == ErrAuthenticationFailed && e.Diagnostic >= acse.AbortDiagMechanismNotRecognised &&
+		e.Diagnostic <= acse.AbortDiagAuthenticationRequired
+}
+
 // ErrAuthenticationFailed matches a RejectedError for a failed or missing
 // authentication with errors.Is.
 var ErrAuthenticationFailed = errors.New("mms: authentication failed")
