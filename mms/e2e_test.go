@@ -106,6 +106,17 @@ func testE2EAssociation(t *testing.T, ed e2e.Edition) {
 			t.Fatalf("status %d: %+v %v", i, st, err)
 		}
 	}
+	// The server queues each unconfirmed PDU behind its response for an
+	// asynchronous writer: wait for all of them before releasing.
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		mu.Lock()
+		n := unconf
+		mu.Unlock()
+		if n >= 20 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if err := c.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		t.Fatal(err)
 	}
