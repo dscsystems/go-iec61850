@@ -21,6 +21,7 @@
  * prints one line per message: "GOOSE st=.. sq=.. data=.." or
  * "SV svID=.. smpCnt=.. v0=.. v1=..".
  */
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

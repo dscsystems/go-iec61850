@@ -82,14 +82,20 @@ fi
 MMS_PEER="$WORK/mms_peer"
 if [ ! -x "$MMS_PEER" ] || [ "$REPO_ROOT/interop/c/mms_peer.c" -nt "$MMS_PEER" ]; then
   echo "== building the MMS services peer =="
-  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
+  # src/vs holds a Visual Studio stdbool.h (bool only, no true/false) that
+  # would shadow the system one before C23.
+  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -not -path "$SEC/src/vs/*" \
+    -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
   gcc -O1 -o "$MMS_PEER" "$REPO_ROOT/interop/c/mms_peer.c" @"$WORK/inc.rsp" \
     "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
 fi
 PEER="$WORK/rsession_peer"
 if [ ! -x "$PEER" ] || [ "$REPO_ROOT/interop/c/rsession_peer.c" -nt "$PEER" ]; then
   echo "== building the R-GOOSE/R-SV peer =="
-  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
+  # src/vs holds a Visual Studio stdbool.h (bool only, no true/false) that
+  # would shadow the system one before C23.
+  find "$SEC/src" "$SEC/hal" "$SEC/config" "$SEC/cbuild" -name '*.h' -not -path "$SEC/src/vs/*" \
+    -printf '-I%h\n' | sort -u >"$WORK/inc.rsp"
   gcc -O1 -o "$PEER" "$REPO_ROOT/interop/c/rsession_peer.c" @"$WORK/inc.rsp" \
     "$SEC/cbuild/src/libiec61850.a" "$SEC/cbuild/hal/libhal.a" -lpthread -lm
 fi

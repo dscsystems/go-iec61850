@@ -3,6 +3,7 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,7 @@ func TestCMMSPeerServices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.(io.Closer).Close() })
 	addr, srv := startServerWith(t, simpleIO(t), server.WithFileStore(store), server.WithPassword("s3cret"))
 	closed := make(chan struct{}, 8)
 	srv.OnConnection(func(ev server.ConnectionEvent) {

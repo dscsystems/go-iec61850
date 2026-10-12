@@ -80,7 +80,9 @@ type WritableFS interface {
 }
 
 // DirFS returns a WritableFS of the files under dir. Names are resolved
-// within dir: no name, symbolic link included, reaches outside it.
+// within dir: no name, symbolic link included, reaches outside it. The
+// store holds dir open (on Windows, dir cannot be removed meanwhile); it is
+// an io.Closer, to be closed once no server uses it.
 func DirFS(dir string) (WritableFS, error) {
 	r, err := os.OpenRoot(dir)
 	if err != nil {
@@ -99,6 +101,9 @@ func (r *rootFS) Create(name string) (io.WriteCloser, error) {
 }
 
 func (r *rootFS) Remove(name string) error { return r.root.Remove(name) }
+
+// Close releases the directory.
+func (r *rootFS) Close() error { return r.root.Close() }
 
 // Rename links the file under its new name, which fails if that name is
 // taken, and then removes the old one: an existing file is never

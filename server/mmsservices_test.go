@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,6 +134,9 @@ func TestSetFileAndDeleteFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered before the server, so it runs after the server stops and
+	// before the directory is removed (Windows refuses to remove it open).
+	t.Cleanup(func() { store.(io.Closer).Close() })
 	addr, _ := startServerWith(t, simpleIO(t), server.WithFileStore(store))
 	c := dialDemo(t, addr)
 	ctx := testCtx(t)
@@ -272,6 +276,9 @@ func TestRenameFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Registered before the server, so it runs after the server stops and
+	// before the directory is removed (Windows refuses to remove it open).
+	t.Cleanup(func() { store.(io.Closer).Close() })
 	for name, data := range map[string]string{"a.cfg": "A", "b.cfg": "B"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
 			t.Fatal(err)
