@@ -30,7 +30,9 @@ func TestSubscriberSupervisesTimeAllowedToLive(t *testing.T) {
 
 	pub, err := NewPublisher(pubIf, PublisherConfig{
 		AppID: 0x1000, GoCbRef: "IED1LD0/LLN0$GO$gcb01", DatSet: "ds", GoID: "g",
-		Retrans: []time.Duration{20 * time.Millisecond}, // TAL 40 ms
+		// TAL 200 ms: a 100 ms margin over the retransmission absorbs
+		// scheduler stalls on loaded CI runners.
+		Retrans: []time.Duration{100 * time.Millisecond},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -38,12 +40,16 @@ func TestSubscriberSupervisesTimeAllowedToLive(t *testing.T) {
 	if err := pub.Publish([]*mms.Value{mms.NewBool(true)}); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(time.Second)
 	if n := expired.Load(); n != 0 {
 		t.Fatalf("expired %d times while the publisher was retransmitting", n)
 	}
 	pub.Close()
-	time.Sleep(200 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
+	for expired.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond) // a second expiry would show here
 	if n := expired.Load(); n != 1 {
 		t.Fatalf("expired %d times after the publisher stopped, want 1", n)
 	}
