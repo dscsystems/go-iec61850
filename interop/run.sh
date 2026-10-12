@@ -184,8 +184,15 @@ NS_RUN="IEC61850_C_SV_SERVER='$LIB/examples/iec61850_9_2_LE_example/sv_9_2LE_exa
   '$WORK/server.test' -test.run 'LTRKAgainst' -test.v"
 if [ "$(id -u)" = 0 ]; then
   sh -c "$NS_RUN"
-else
+elif unshare -rn true 2>/dev/null; then
   unshare -rn sh -c "ip link set lo up && $NS_RUN"
+elif sudo -n true 2>/dev/null; then
+  # Unprivileged user namespaces are disabled (Ubuntu 24.04 and the
+  # GitHub runners): a network namespace of its own, as root, instead.
+  sudo -n unshare -n sh -c "ip link set lo up && $NS_RUN"
+else
+  echo "cannot create a network namespace (no user namespaces, no sudo)" >&2
+  exit 1
 fi
 
 echo
