@@ -78,8 +78,11 @@ type Server struct {
 	lnMu sync.Mutex
 	lns  net.Listener
 
-	connMu   sync.Mutex
-	conns    map[*mms.ServerConn]struct{}
+	connMu sync.Mutex
+	conns  map[*mms.ServerConn]struct{}
+	// closed is set by Close under connMu: an association whose handshake
+	// completes afterwards is closed at once instead of registered.
+	closed   bool
 	open     int // slots taken: established associations and those setting up
 	maxConns int
 	connH    func(ConnectionEvent)
@@ -412,6 +415,14 @@ func (s *Server) serveConn(raw net.Conn) {
 		return
 	}
 	s.connMu.Lock()
+	if s.closed {
+		// Close ran while the handshake was finishing: the client already
+		// has its AARE, so the association has to be torn down here.
+		s.connMu.Unlock()
+		s.releaseSlot()
+		sc.Close()
+		return
+	}
 	s.conns[sc] = struct{}{}
 	open = s.open
 	s.connMu.Unlock()
@@ -504,6 +515,7 @@ func (s *Server) Close() error {
 	}
 	s.lnMu.Unlock()
 	s.connMu.Lock()
+	s.closed = true
 	for sc := range s.conns {
 		sc.Close()
 	}
