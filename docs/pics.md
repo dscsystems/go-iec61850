@@ -383,6 +383,8 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 | Signed release, aborts (HandshakeSecReject/Abort, DtSecAbort, ApplAbort) | Y | Y | |
 | Attribute certificates (IEC 62351-8) | N | N | refused with invalid-attribute-certificate |
 | OCSP | N | N | CRLs only |
+| E2E certificate subject | Y | Y | X.520 `objectIdentifier` (2.5.4.106) holding the AE title; other OID-valued attributes only with `Policy.AcceptAnyAEAttributeType` |
+| First-edition wire format (IEC 62351-4:2018 code component) | Y | Y | `Policy.Edition = e2e.Edition2018` (ClearToken1 layout, bare-OID algorithm lists, ApplData without the EXTERNAL); the default is AMD1:2020 |
 
 ## 9. Implementation-specific information
 

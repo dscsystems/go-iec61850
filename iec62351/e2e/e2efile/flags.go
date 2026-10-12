@@ -27,6 +27,8 @@ type Flags struct {
 	RevocationW string
 	Events      string
 	Required    bool
+	Edition     string
+	AnyAEAttr   bool
 }
 
 type list []string
@@ -55,6 +57,8 @@ func (f *Flags) Register(fs *flag.FlagSet, server bool) {
 	fs.BoolVar(&f.T100, "t100-diagnostics", false, "use the IEC TS 62351-100-4 diagnostics where they differ")
 	fs.StringVar(&f.RevocationW, "revocation-unavailable", "warn", "warn or fail-closed")
 	fs.StringVar(&f.Events, "events", "", "print security events: json")
+	fs.StringVar(&f.Edition, "e2e-edition", "2020", "wire format: 2020 (IEC 62351-4+AMD1) or 2018 (first edition)")
+	fs.BoolVar(&f.AnyAEAttr, "e2e-any-ae-attr", false, "accept any OID-valued subject attribute, not only X.520 objectIdentifier (2.5.4.106)")
 }
 
 // Enabled reports whether E2E was requested.
@@ -62,6 +66,12 @@ func (f *Flags) Enabled() bool { return f.Cert != "" }
 
 func (f *Flags) policy(l *Loaded) (e2e.Policy, error) {
 	p := e2e.Policy{Trust: l.Trust, Revocation: l.Revocation, T100Diagnostics: f.T100}
+	p.AcceptAnyAEAttributeType = f.AnyAEAttr
+	ed, err := e2e.ParseEdition(f.Edition)
+	if err != nil {
+		return p, err
+	}
+	p.Edition = ed
 	for _, s := range strings.Split(f.ICV, ",") {
 		switch strings.TrimSpace(s) {
 		case "hmac-sha256":

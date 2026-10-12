@@ -3,6 +3,7 @@ package mms
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"time"
 
@@ -57,7 +58,7 @@ func e2eClientAssociate(ct *cotp.Conn, opts Options, init InitiateRequest) (*fra
 		assoc.Close()
 		return nil, InitiateRequest{}, ACSEIdentity{}, err
 	}
-	hs, err := assoc.HandshakeRequest(e2eosi.ApplData(presentation.ContextMMS, EncodeInitiateRequest(init)))
+	hs, err := assoc.HandshakeRequest(e2eosi.ApplDataFor(cfg.Policy.Edition, presentation.ContextMMS, EncodeInitiateRequest(init)))
 	if err != nil {
 		return fail(err)
 	}
@@ -65,7 +66,7 @@ func e2eClientAssociate(ct *cotp.Conn, opts Options, init InitiateRequest) (*fra
 		[][]byte{e2eosi.AssoReq(presentation.ContextE2E, hs)})
 	cp := presentation.BuildCPE2E(presentation.DefaultCallingPSel, presentation.DefaultCalledPSel, aarq)
 	fr := &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE,
-		e2eContext: presentation.ContextE2E, sec: assoc, alarmDiag: cfg.Policy.AlarmDiagnostic}
+		e2eContext: presentation.ContextE2E, sec: assoc, alarmDiag: cfg.Policy.AlarmDiagnostic, edition: cfg.Policy.Edition}
 
 	cpaUserData, err := session.ConnectClientExt(ct, nil, nil, cp, true)
 	var refused *session.RefusedError
@@ -87,6 +88,12 @@ func e2eClientAssociate(ct *cotp.Conn, opts Options, init InitiateRequest) (*fra
 		var ab *session.AbortedError
 		if errors.As(err, &ab) {
 			return fail(fr.peerAborted(ab.UserData))
+		}
+		if errors.Is(err, io.EOF) {
+			// Stacks without IEC 62351-4 (libiec61850 among them) drop the
+			// connection on a CP proposing the e2eSecurityAS context instead
+			// of rejecting it with a CPR.
+			return fail(fmt.Errorf("%w: %w", ErrE2EUnsupportedByPeer, err))
 		}
 		return fail(fmt.Errorf("mms: session connect: %w", err))
 	}
@@ -142,7 +149,7 @@ func e2eClientAssociate(ct *cotp.Conn, opts Options, init InitiateRequest) (*fra
 		}
 		return fail(err)
 	}
-	resp, err := e2eosi.ParseApplData(appl, presentation.ContextMMS)
+	resp, err := e2eosi.ParseApplDataFor(cfg.Policy.Edition, appl, presentation.ContextMMS)
 	if err != nil {
 		fr.sendAbort()
 		return fail(err)
@@ -209,7 +216,7 @@ func e2eServerHandshake(ct *cotp.Conn, cp presentation.CP, areq acse.Request, op
 	}
 	neg := presentation.NegotiateWithE2E(cp.Contexts, true)
 	fr := &framing{cotp: ct, mmsContext: neg.MMS, acseContext: neg.ACSE, e2eContext: neg.E2E,
-		alarmDiag: cfg.Policy.AlarmDiagnostic}
+		alarmDiag: cfg.Policy.AlarmDiagnostic, edition: cfg.Policy.Edition}
 	if fr.acseContext == 0 {
 		fr.acseContext = presentation.ContextACSE
 	}
@@ -257,7 +264,7 @@ func e2eServerHandshake(ct *cotp.Conn, cp presentation.CP, areq acse.Request, op
 		e2eServerRefuse(ct, cp, areq.ApplicationContext, acse.ResultRejectedPermanent, acse.DiagNoReason, responding, ui, trace)
 		return nil, fmt.Errorf("%w: %v", ErrRejected, err)
 	}
-	mmsInit, err := e2eosi.ParseApplData(appl, neg.MMS)
+	mmsInit, err := e2eosi.ParseApplDataFor(cfg.Policy.Edition, appl, neg.MMS)
 	res := &e2eServerResult{fr: fr, mmsInit: mmsInit, assoc: assoc, neg: neg, responding: responding}
 	if err != nil {
 		e2eServerApplReject(ct, cp, areq, res, trace)
@@ -270,7 +277,7 @@ func e2eServerHandshake(ct *cotp.Conn, cp presentation.CP, areq acse.Request, op
 // signed ApplicationReject carrying an initiate-ErrorPDU.
 func e2eServerApplReject(ct *cotp.Conn, cp presentation.CP, areq acse.Request, r *e2eServerResult, trace func(string, []byte)) {
 	var ui [][]byte
-	if sp, err := r.assoc.ApplicationReject(e2eosi.ApplData(r.neg.MMS, initiateErrorPDU())); err == nil {
+	if sp, err := r.assoc.ApplicationReject(e2eosi.ApplDataFor(r.fr.edition, r.neg.MMS, initiateErrorPDU())); err == nil {
 		ui = [][]byte{e2eosi.AssoRsp(r.neg.E2E, e2eosi.RspApplReject, sp)}
 	}
 	e2eServerRefuse(ct, cp, areq.ApplicationContext, acse.ResultRejectedPermanent, acse.DiagNoReason, r.responding, ui, trace)
@@ -279,7 +286,7 @@ func e2eServerApplReject(ct *cotp.Conn, cp presentation.CP, areq acse.Request, r
 // e2eServerAccept answers with the signed HandshakeAcc carrying the MMS
 // InitiateResponse.
 func e2eServerAccept(ct *cotp.Conn, cp presentation.CP, areq acse.Request, r *e2eServerResult, initResp []byte, sessionCalledSSEL []byte, trace func(string, []byte)) error {
-	acc, err := r.assoc.HandshakeAccept(e2eosi.ApplData(r.neg.MMS, initResp))
+	acc, err := r.assoc.HandshakeAccept(e2eosi.ApplDataFor(r.fr.edition, r.neg.MMS, initResp))
 	if err != nil {
 		return err
 	}
@@ -298,3 +305,8 @@ func e2eServerAccept(ct *cotp.Conn, cp presentation.CP, areq acse.Request, r *e2
 // E2EKeepAlive is the TCP keep-alive used under IEC 62351-4 (H.3.4: about
 // one minute to detect a dead peer).
 var E2EKeepAlive = net.KeepAliveConfig{Enable: true, Idle: 30 * time.Second, Interval: 10 * time.Second, Count: 3}
+
+// ErrE2EUnsupportedByPeer is a native-mode association the peer ended by
+// closing the connection during setup, which is what stacks without IEC
+// 62351-4 E2E support commonly do. It wraps the transport error.
+var ErrE2EUnsupportedByPeer = errors.New("mms: peer closed the connection during the IEC 62351-4 native-mode association (it may not support E2E security)")

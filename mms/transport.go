@@ -32,6 +32,7 @@ type framing struct {
 	// e2eContext and sec are set for an E2E-secured association.
 	e2eContext int
 	sec        *e2e.Association
+	edition    e2e.Edition
 	alarmDiag  e2e.AlarmDiagnostic
 
 	// wmu serialises the writes framing makes on its own (aborts, release)
@@ -70,7 +71,7 @@ func (f *framing) sendMMS(pdu []byte) error {
 	if f.sec == nil {
 		return session.SendData(f.cotp, presentation.WrapData(f.mmsContext, pdu))
 	}
-	sp, err := f.sec.Seal(e2eosi.ApplData(f.mmsContext, pdu))
+	sp, err := f.sec.Seal(e2eosi.ApplDataFor(f.edition, f.mmsContext, pdu))
 	if err != nil {
 		return err
 	}
@@ -124,7 +125,7 @@ func (f *framing) recvMMS() ([]byte, error) {
 		}
 		return nil, err
 	}
-	pdu, err := e2eosi.ParseApplData(appl, f.mmsContext)
+	pdu, err := e2eosi.ParseApplDataFor(f.edition, appl, f.mmsContext)
 	if err != nil {
 		f.abortDt(&e2e.SecurityError{Phase: e2e.PhaseData, Diag: e2e.DDProtocolError, Err: err})
 		return nil, err

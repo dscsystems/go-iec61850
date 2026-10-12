@@ -1572,10 +1572,10 @@ Status values: **Open** (to be resolved in WP0.4), **Adopted** (a default chosen
 
 | Id | Topic | [B] | [T] / registry | Default in this plan | Status |
 | --- | --- | --- | --- | --- | --- |
-| R-01 | Code components | Annexes A, B, D, F printed (scan) | IEC archive URL in [B] 1.2 | Obtain and diff (WP0.2) | Open |
+| R-01 | Code components | Annexes A, B, D, F printed (scan) | IEC archive URL in [B] 1.2 | Archive `IEC_62351-4.ASN.1_XSD.full` obtained (manifest dated 2018-04-19, publication IEC 62351-4:2018). It is the **first-edition** module set and predates AMD1. Diff in 19.5 | Closed (see R-27) |
 | R-02 | Application context name | `e2eMmsAC` = 1.0.62351.4.2.1 (15.2.2) | T68/T69: 1.0.62351.4.1.2.1.1 | Send [B]; as a server, accept the [T] value only with the named setting `AcceptT100AppContext` (test campaigns) | Adopted |
-| R-03 | Diagnostic numbering | clause 14.2 lists vs Annex B (`altSig-mismatch(19)`, DtDiagnostics gap at 5) | — | Annex B values (7.2) | Adopted |
-| R-04 | Authenticator tagging | 13.4.2 `[0] nonce`, `algorithm`, `[1] icv`; Annex B untagged, `algo` | — | Annex B; the clause-13 variant only as a named setting | Adopted |
+| R-03 | Diagnostic numbering | clause 14.2 lists vs Annex B (`altSig-mismatch(19)`, DtDiagnostics gap at 5) | — | Annex B values (7.2). The 2018 module agrees for 0–16 and defines DtDiagnostics 5 = `gmac-init-vector-required`; under `Edition2018` handshake values above 16 are sent as `protocol-error` | Closed |
+| R-04 | Authenticator tagging | 13.4.2 `[0] nonce`, `algorithm`, `[1] icv`; Annex B untagged, `algo` | — | Annex B; the clause-13 variant only as a named setting. The 2018 code component is also untagged (`nonce OCTET STRING OPTIONAL, algo, icv OCTET STRING OPTIONAL`) | Closed |
 | R-05 | ClearToken1 `version` | body: mandatory; Annex B: DEFAULT {v1} | T55 #7: check bit 0 | Always emit; accept absence | Adopted |
 | R-06 | Sequence number | resets to 0 when the time changes (13.3.2 d), 14.4.3 d)) | T62–T65 #6: always +1 | [B] | Adopted; raise with the laboratory |
 | R-07 | Diagnostics for alarm and mode cases | alarm → diag absent; k), t), x), g) codes | T50 #2/#5/#9, T51–54 #6 `no-reason-given`; T49 #11, T49 #15, T50 #12, T54 #7 other codes | [B]; `AlarmDiagnostic` setting and a documented mapping for the others | Adopted |
@@ -1596,6 +1596,11 @@ Status values: **Open** (to be resolved in WP0.4), **Adopted** (a default chosen
 | R-22 | DH group 23 | 23 = secp256r1 "according to RFC 5114" | IKE registry: 19 = secp256r1, 23 = MODP-2048/224 | Protocol code points 14, 23, 28 as in [B] and T55 | Adopted |
 | R-23 | Brainpool | Table 11 m; group 28 optional | — | Release 2 verification only; declare N before that | Adopted |
 | R-24 | Part 3 edition | [B] 2014+A1:2018 | [T] 2023; T5 cites 2014/AMD2:2020 | Declare the implemented TLS profile explicitly in the PIXIT | Open |
+| R-25 | E2E subject attribute type | G.6.2: X.520 `objectIdentifier` | — | `id-at-objectIdentifier` = {id-at 106} = **2.5.4.106** (ITU-T X.501 UsefulDefinitions, X.520 SelectedAttributeTypes, 10/2019); 2.5.4.82 is `permission`. Issued and required by default; `Policy.AcceptAnyAEAttributeType` for legacy certificates | Closed |
+| R-26 | Go `crypto/x509` and OID-valued subjects | — | — | Parse with a placeholder subject, restore the raw fields (19.3) | Adopted |
+| R-27 | Wire-format edition | 2018 code component: ClearToken1 `…assoID, time, dHKey, hmac` with `hmac` a bare OID, `encr-mode` aea = SET OF OID, non-aea = untagged SEQUENCE {[0] SET OF OID, [1] SET OF OID}; AMD1 Annex B: `…assoID, dHKey, hmac (AlgorithmIdentifier), time`, aea = SEQUENCE OF AlgorithmIdentifier, non-aea = [0] SEQUENCE {[0] SEQUENCE OF, [1] SET OF} | [T] tests AMD1 | AMD1 (`Edition2020`) by default; `Policy.Edition = Edition2018` for first-edition peers. Both encodings are checked against an independent `encoding/asn1` oracle | Adopted |
+| R-28 | `ApplData` in the OSI environment | 2018 Annex F gives only the generic template `ApplData ::= <top-level type>` ("a synonym for the top-level entry"), so the MMS PDU itself; AMD1 F.3 specifies an EXTERNAL naming the MMS presentation context. The code component imports `Virtual-API` but does not ship it | — | Follows the edition (R-27); the 2018 reading is an interpretation to confirm with a first-edition peer | Adopted |
+| R-29 | `EncrTransfer.auth` | 2018: mandatory, with `icv` absent for aea; AMD1: OPTIONAL | — | Applies to WP9 only (encryption not built) | Open |
 
 # 18. References
 
@@ -1625,7 +1630,7 @@ This section records what has been built against the plan. Unless a deviation is
 | WP7 MMS integration: secured framing, client and server handshakes, signed release, aborts, idle-rekey carrier, keep-alive, handshake deadline | Done | `mms/secure.go`, `mms/transport.go`, `mms/conn.go`, `mms/server_conn.go` |
 | WP8 public API and tools | Done: `client.WithE2E`, `server.WithE2E`, `WithAEIdentity`, `WithHandshakeTimeout`; `ied-server`/`ied-client` E2E flags with `-events json`; `cmd/e2e-pki` (test CA, leaves, CSR, show); `e2efile` loader | `client`, `server`, `cmd/*`, `iec62351/e2e/e2efile` |
 | WP9 E2E encryption | Not started (blocked by R-08 and R-09); refused with the specific diagnostics | — |
-| WP10 test infrastructure | Partly done: unit and vector-free tests, single-fault tests for [T] Tables 49/50 at the core level, MMS-level tests over TCP (association, refusals, rekey ×3 with an injected clock), IEC 61850 server/client test, fuzz targets. **Not done:** the independent oracle (15.2), the `cmd/e2e-teq` fault-injection peer, external reference vectors | `*_test.go` |
+| WP10 test infrastructure | Partly done: unit and vector-free tests, single-fault tests for [T] Tables 49/50 at the core level, MMS-level tests over TCP (association, refusals, rekey ×3 with an injected clock), IEC 61850 server/client test, fuzz targets. **Not done** (oracle since done, 19.5): the `cmd/e2e-teq` fault-injection peer, external reference vectors | `*_test.go` |
 | WP11 native-mode TLS profile | Done (`iec62351.Options.NativeMode`, guard test against `0xC023`/`0xC024`) | `iec62351/tls.go` |
 | WP12 documentation | `docs/pics.md` §8.1, `docs/api.md`, `SKILL.md`, `README.md` | |
 | Track A (A-profile), brainpool, TASE.2 stack | Not started | — |
@@ -1661,16 +1666,41 @@ Verified on this branch:
 | R-02 application context | Send `1.0.62351.4.2.1`; a server accepts the [T] value only with `ServerConfig.AcceptT100AppContext` |
 | R-07 diagnostics | [B] by default; `Policy.AlarmDiagnostic` and `Policy.T100Diagnostics` select the [T] expectations |
 | R-20 environment errors in the AARQ | AARE rejected-permanent, no-reason-given, without user-information |
-| **R-25 (new)** subject attribute type | The X.520 attribute type of G.6.2 is not yet confirmed. Generated certificates use the provisional `2.5.4.82` (`pki.ProvisionalAEAttributeType`). Receivers accept any single attribute with an OID value unless `Policy.AEAttributeType` pins the type |
+| **R-25** subject attribute type | Closed: X.520 `objectIdentifier`, 2.5.4.106 (`pki.AEAttributeType`). Issued by `cmd/e2e-pki` and `pkitest`; receivers require it unless `Policy.AEAttributeType` names another type or `Policy.AcceptAnyAEAttributeType` is set (certificates issued with the earlier provisional 2.5.4.82 must be reissued or admitted with that setting) |
 | **R-26 (new)** Go `crypto/x509` | It refuses a subject with an OID-valued attribute ("invalid RDNSequence"). `pki.ParseCertificate` parses a copy with a placeholder subject and restores the raw fields, so signatures and chains are verified over the received octets |
 | GMAC parameters | Emitted without parameters (12-octet tag); `GCMParameters` with ICV length 12 accepted |
 | E2E responding identity | Always the AE title of the server's E2E certificate (it is what the client checks), whatever the plain-mode responding identity |
 
 ## 19.4 Next steps, in order
 
-1. WP0.2 and WP0.3: obtain the IEC code components and build reference vectors (closes R-01, R-03, R-04, R-12–R-14, R-25).
-2. WP10: the independent oracle and the `e2e-teq` peer; extend [T] coverage to Tables 16, 17, 19–25 and 51–54 at the EnvPDU level.
+1. WP0.3: build reference vectors (R-12–R-14). The code components settled R-01, R-03, R-04 and R-25 (19.5); they do not settle the key-schedule encodings.
+2. WP10: the `e2e-teq` peer (the encoding oracle is done, 19.5); extend [T] coverage to Tables 16, 17, 19–25 and 51–54 at the EnvPDU level.
 3. Laboratory dry run with commercial test equipment.
 4. WP9 (encryption) once R-08 and R-09 are settled.
 5. Track S (TASE.2) and D8.
 6. Track A and brainpool verification, if the target deployments need them.
+
+## 19.5 Code components and the first edition (12 October 2026)
+
+Inputs: the IEC archive `IEC_62351-4.ASN.1_XSD.full` (`IECManifest.xml` dated 2018-04-19, publication IEC 62351-4:2018: modules `E2E-Security`, `OSI-Env`, `XMPP-Env`, `XMPP-Stz` with their XSDs, and the first-edition `STASE-MMS-Authentication-value`), the IEC 62351-4:2018 edition 1.0 PDF, and the ITU-T X.501/X.520 (10/2019) modules in `output/standards/iec62351-4-retrieval`.
+
+Findings:
+
+- The archive is the **first-edition** module set. AMD1:2020 rewrote `ClearToken1` and added the OSI Virtual API; neither change is in the archive. The two editions are not wire compatible (R-27, R-28).
+- What both editions share and the code already did: `ClearToken2`, `ClearToken3`, `Signature`, the signed PDUs, an untagged `Authenticator` (R-04), DiffieHellmanSet, `ConfidentialityParms`, `Version`, NMTOKEN `AssoID`, and the whole `OSI-Env` module (`HandshakeRsp` [1..3] without osiDiag, which supports R-20; `AssoAbort` [0..3] with osiDiag [3]).
+- Diagnostics: the 2018 handshake list stops at 16 (`invalid-attribute-certificate`), and DtDiagnostics 5 is `gmac-init-vector-required` (R-03).
+- R-25: G.6.2 names the X.520 `objectIdentifier` attribute, `id-at-objectIdentifier` = {id-at 106} = 2.5.4.106.
+- The archive and the PDF repeat `h0 = 0` without a representation and do not fix the DH public-value or signature encodings: R-12–R-14 stay open.
+
+Changes:
+
+| Change | Where |
+| --- | --- |
+| `e2e.Edition` (`Edition2020` default, `Edition2018`) in `Policy.Edition`; 2018 ClearToken1 encoder/decoder; `ParseSignedEdition`; first-edition diagnostics mapping (values above 16 sent as `protocol-error`) | `iec62351/e2e/edition.go`, `pdu.go`, `assoc.go`, `diag.go` |
+| ApplData per edition (`ApplDataFor`, `ParseApplDataFor`) through the MMS framing | `iec62351/e2e/osi`, `mms/secure.go`, `mms/transport.go` |
+| X.520 `objectIdentifier` (2.5.4.106) issued and required; `Policy.AcceptAnyAEAttributeType` | `iec62351/pki/cert.go`, `e2e/config.go`, `cmd/e2e-pki`, `pkitest` |
+| `-e2e-edition`, `-e2e-any-ae-attr` on the tools; `edition`, `accept_any_ae_attribute` in the diode's `e2e` blocks | `e2efile/flags.go`; datadiode-mms `internal/config`, `internal/e2eprofile` |
+| Independent oracle (WP10, 15.2): ClearToken1 (both editions, aea and non-aea), Authenticator and ClearToken2 encoded by Go `encoding/asn1` from structs transcribed from the modules, compared octet for octet, and the oracle's octets decoded by the codec | `iec62351/e2e/oracle_test.go` |
+| Tests: 2018 association and transfer, edition mismatch → `protocol-error`, MMS over TCP under both editions, the diode chain with a first-edition device leg and a 2020 DMZ leg | `edition_test.go`, `mms/e2e_test.go`, datadiode-mms `test/e2e` |
+
+The libiec61850 interoperability suite still passes (16/16). libiec61850 has no E2E support, so it cannot confirm either edition.

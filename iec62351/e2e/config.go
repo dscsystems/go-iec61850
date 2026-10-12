@@ -117,9 +117,13 @@ type Policy struct {
 	Revocation *pki.RevocationChecker
 	// MaxCertPath bounds the CA certificates a peer may send (default 4).
 	MaxCertPath int
-	// AEAttributeType, when set, pins the subject attribute type of peer
-	// certificates; nil accepts any attribute with an OID value.
+	// AEAttributeType pins the subject attribute type of peer certificates;
+	// nil means pki.AEAttributeType (X.520 objectIdentifier, 2.5.4.106).
 	AEAttributeType asn1.OID
+	// AcceptAnyAEAttributeType accepts any single attribute with an OBJECT
+	// IDENTIFIER value, for certificates issued before the attribute type
+	// was settled (register R-25).
+	AcceptAnyAEAttributeType bool
 
 	// DHGroups: for a client the group proposed (the first); for a server
 	// the groups accepted. Default {GroupP256, GroupMODP2048}.
@@ -158,12 +162,22 @@ type Policy struct {
 	AcceptUnverifiedAttributeCertificates bool
 	// HKDFInit is the representation of h0 (R-12).
 	HKDFInit ChainInit
+	// Edition selects the wire format: Edition2020 (IEC 62351-4:2018+AMD1:2020,
+	// the default) or Edition2018 for peers built on the first edition. Both
+	// ends must use the same edition.
+	Edition Edition
 }
 
 func (p *Policy) withDefaults() Policy {
 	q := *p
 	if q.MaxCertPath == 0 {
 		q.MaxCertPath = 4
+	}
+	if q.AEAttributeType == nil && !q.AcceptAnyAEAttributeType {
+		q.AEAttributeType = pki.AEAttributeType
+	}
+	if q.AcceptAnyAEAttributeType {
+		q.AEAttributeType = nil
 	}
 	if len(q.DHGroups) == 0 {
 		q.DHGroups = []Group{GroupP256, GroupMODP2048}

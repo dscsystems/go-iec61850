@@ -37,19 +37,22 @@ const (
 	HDSingleICVAlgoRequired         = 26
 )
 
-// DtDiagnostics values of the Annex B code component (value 5 unused).
+// DtDiagnostics values. Value 5 is gmac-init-vector-required in the 2018
+// code component and "not used" in Annex B of AMD1:2020; neither edition
+// has this implementation send it.
 const (
-	DDNoReasonGiven         = 0
-	DDProtocolError         = 1
-	DDUnexpectedVersion     = 2
-	DDEncryptionNotSelected = 3
-	DDEncryptionRequired    = 4
-	DDGMACNonceRequired     = 6
-	DDInvalidTimeValue      = 7
-	DDInvalidSequenceNumber = 8
-	DDAESInitVectorRequired = 9
-	DDUnexpectedDHPublicKey = 10
-	DDUnexpectedChangedKey  = 11 // unexpected-changedCypher in Annex B
+	DDNoReasonGiven          = 0
+	DDProtocolError          = 1
+	DDUnexpectedVersion      = 2
+	DDEncryptionNotSelected  = 3
+	DDEncryptionRequired     = 4
+	DDGMACInitVectorRequired = 5 // Edition2018 only
+	DDGMACNonceRequired      = 6
+	DDInvalidTimeValue       = 7
+	DDInvalidSequenceNumber  = 8
+	DDAESInitVectorRequired  = 9
+	DDUnexpectedDHPublicKey  = 10
+	DDUnexpectedChangedKey   = 11 // unexpected-changedCypher in Annex B
 )
 
 var hdNames = map[int]string{
@@ -66,7 +69,7 @@ var hdNames = map[int]string{
 
 var ddNames = map[int]string{
 	0: "no-reason-given", 1: "protocol-error", 2: "unexpected-version", 3: "encryption-not-selected",
-	4: "encryption-required", 6: "gmac-nonce-required", 7: "invalid-time-value", 8: "invalid-sequence-number",
+	4: "encryption-required", 5: "gmac-init-vector-required", 6: "gmac-nonce-required", 7: "invalid-time-value", 8: "invalid-sequence-number",
 	9: "aes-init-vector-required", 10: "unexpected-dhPublicKey", 11: "unexpected-changedCypher",
 }
 

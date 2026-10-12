@@ -188,12 +188,11 @@ func OIDName(attrType, aeTitle asn1.OID) []byte {
 	return asn1.Cons(asn1.TagSequence, asn1.Cons(asn1.TagSet, atv)).Encode()
 }
 
-// ProvisionalAEAttributeType is the attribute type this module puts in the
-// subject of the E2E certificates it generates (test PKI, CSR tool). IEC
-// 62351-4 G.6.2 names the objectIdentifier attribute type of ISO/IEC
-// 9594-6; the exact object identifier is to be confirmed (implementation
-// plan WP0.5). Receivers do not depend on it unless a policy pins the type.
-var ProvisionalAEAttributeType = asn1.OID{2, 5, 4, 82}
+// AEAttributeType is the attribute type of an E2E certificate subject
+// (IEC 62351-4 G.6.2): objectIdentifier of ITU-T X.520, id-at-objectIdentifier
+// = {id-at 106} (ITU-T X.501 UsefulDefinitions), with an OBJECT IDENTIFIER
+// value.
+var AEAttributeType = asn1.OID{2, 5, 4, 106}
 
 // EndEntityProfile checks an E2E end-entity certificate against IEC
 // 62351-4 Annex G: version 3, positive serial, no unique identifiers,
