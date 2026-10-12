@@ -131,7 +131,7 @@ each gap is one.
 | Release | Y | Y | MMS Conclude |
 | Authentication: password (ACSE) | Y | Y | `server.WithPassword`, or `server.WithAuthenticator` for the application's own decision (it also sees the ACSE identities and the TLS peer certificates); a refusal is an ACSE rejection with the diagnostic authentication-failure or authentication-required, reported to the client as `mms.RejectedError` |
 | Authentication: certificates (IEC 62351-4 native mode, E2E) | Y | Y | signed handshake (`client.WithE2E`, `server.WithE2E`); the authenticated peer is in `AssociationRequest.Security`; see section 8.1 |
-| Authentication: certificates (IEC 62351-4 A-profile, compatibility mode) | N | N | |
+| Authentication: certificates (IEC 62351-4 A-profile, compatibility mode) | Y | Y | `client.WithAProfile`, `server.WithAProfile` (package `iec62351/aprofile`); the client certificate is in `AssociationRequest.AProfile`, the server's in `Conn.PeerAProfileCertificate`; see section 8.1 |
 
 ### 3.2 Logical device and logical node
 
@@ -353,7 +353,7 @@ a writable one.
 | GDOI GROUPKEY-PUSH | N | N | members re-register |
 | IEC 62351-9 TISSUEs (none in force; accepted or editorial) | — | — | 121: auth values 2 = HMAC-SHA256-128, 3 = HMAC-SHA256, as implemented. 149: HASH(2)–(4) take Ni_b/Nr_b without the payload header, as implemented. 170: TEK integrity and encryption keys are drawn independently, as implemented. 123: a member whose HASH check fails sends nothing to the key server, as implemented. 169: `61850_UDP_Tunnel` moves to 1.0.62351.9.61850.8.1.3 (group OIDs are the application's). 168 (open): a fresh, clear 16-octet IV per message would replace the RFC 2409 IV chaining implemented here; not adopted until published. 160: HMAC-SHA-384/512 (auth 6/7) not implemented |
 | IEC 62351-4 E2E security, native mode (OSI) | Y | Y | packages `iec62351/e2e`, `iec62351/e2e/osi`; see 8.1 for the declared profile |
-| IEC 62351-4 A-profile (compatibility mode) | N | N | |
+| IEC 62351-4 A-profile (compatibility mode) | Y | Y | package `iec62351/aprofile`; see 8.1 |
 | IEC 62351-4 native-mode TLS profile (Table 10) | P | P | `iec62351.Options.NativeMode`; see 8.1 |
 | IEC 62351-6 on Ethernet | N | N | |
 | IEC 62351-8 role-based access control | N | N | the server offers write and control hooks (`OnWrite`, `OnControl`) for an application's own policy |
@@ -366,7 +366,7 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 |---|---|---|---|
 | T6 OSI operational environment | Y | Y | |
 | T6 XMPP operational environment | N | N | |
-| T7 Compatibility mode | N | N | A-profile not implemented |
+| T7 Compatibility mode | Y | Y | A-profile (clause 11): certificate, time and RSASSA-PKCS1-v1_5 SHA-256 signature over the time's content octets in the ACSE authentication value; 10-minute window and per-certificate replay cache; P-ABORT on a failed check, AARE rejection for a missing mechanism-name (server), ABRT authentication-mechanism-name-required (client). Sends version1-mechanism 1.0.62351.4.3.1, or the 2007 1.0.840.0.1.0.1.1 (`Config.Mechanism`); accepts any. A server echoes the client's mechanism-name. The mmsAuthenticationAS presentation context is not proposed, and the indirect-reference is omitted unless configured (11.1.4.4 tolerance). The profile requires TLS (7.1 a)); `Config.AllowWithoutTLS` relaxes that for lab devices |
 | T7 Native mode | Y | Y | |
 | T8 compatibility suite (m): TLS_DHE_DSS_WITH_AES_128_CBC_SHA 0x0032 after Part 4 TISSUE 129 (printed 0x0030) | N | N | DSS is not implemented by Go `crypto/tls` |
 | T9 Use of authenticated encryption | N | N | not built (WP9). TISSUE 95 makes AE and non-AE mandatory for a server, so server conformance to Table 9 is not claimed (R-32) |

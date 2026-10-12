@@ -11,6 +11,9 @@
 // -tls-server-name or -tls-no-server-name says otherwise. MMS over TLS
 // usually listens on port 3782.
 //
+// MMS certificate authentication (IEC 62351-4 A-profile, compatibility
+// mode): -mms-cert, -mms-key and -mms-ca, normally together with TLS.
+//
 // Commands:
 //
 //	scan                       identify + list logical devices/nodes
@@ -48,6 +51,8 @@ func main() {
 	e2eFlags.Register(flag.CommandLine, false)
 	var tlsF tlsFlags
 	tlsF.register(flag.CommandLine)
+	var apF apFlags
+	apF.register(flag.CommandLine)
 	flag.Parse()
 
 	args := flag.Args()
@@ -72,6 +77,14 @@ func main() {
 			os.Exit(1)
 		}
 		opts = append(opts, client.WithTLS(cfg))
+	}
+	if apF.enabled() {
+		cfg, err := apF.config(tlsF.enabled())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ied-client: A-profile: %v\n", err)
+			os.Exit(1)
+		}
+		opts = append(opts, client.WithAProfile(cfg))
 	}
 	if e2eFlags.Enabled() {
 		cfg, err := e2eFlags.ClientConfig(e2eFlags.EventPrinter(os.Stderr))

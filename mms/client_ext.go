@@ -25,6 +25,10 @@ func (e *RejectedError) Error() string {
 		return "mms: association rejected: authentication failure"
 	case acse.DiagAuthenticationRequired:
 		return "mms: association rejected: authentication required"
+	case acse.DiagAuthMechanismNotRecognised:
+		return "mms: association rejected: authentication mechanism not recognised"
+	case acse.DiagAuthMechanismRequired:
+		return "mms: association rejected: authentication mechanism required"
 	}
 	return fmt.Sprintf("mms: association rejected (diagnostic %d)", e.Diagnostic)
 }
@@ -71,8 +75,8 @@ func (e *AbortedError) Is(target error) bool {
 var ErrAuthenticationFailed = errors.New("mms: authentication failed")
 
 func (e *RejectedError) Is(target error) bool {
-	return target == ErrAuthenticationFailed &&
-		(e.Diagnostic == acse.DiagAuthenticationFailure || e.Diagnostic == acse.DiagAuthenticationRequired)
+	return target == ErrAuthenticationFailed && e.Diagnostic >= acse.DiagAuthMechanismNotRecognised &&
+		e.Diagnostic <= acse.DiagAuthenticationRequired
 }
 
 // Abort ends the association abruptly (ACSE A-ABORT): nothing more is sent

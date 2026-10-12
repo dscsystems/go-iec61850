@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dscsystems/go-iec61850/iec62351/aprofile"
 	"github.com/dscsystems/go-iec61850/iec62351/e2e"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
@@ -226,6 +227,12 @@ func (c *Client) TimeQuality() mms.TimeQuality {
 // security (see package iec62351/e2e). The called and calling ACSE
 // identities default to cfg.Peer and cfg.Local.AE.
 func WithE2E(cfg *e2e.ClientConfig) Option { return func(o *mms.Options) { o.E2E = cfg } }
+
+// WithAProfile authenticates the association with the IEC 62351-4
+// A-security profile (compatibility mode): the AARQ carries cfg's
+// certificate and signed time, and the server's answer is verified. It
+// requires WithTLS unless cfg.AllowWithoutTLS.
+func WithAProfile(cfg *aprofile.Config) Option { return func(o *mms.Options) { o.AProfile = cfg } }
 
 // WithAEIdentity sets the called and calling ACSE identities (AP-title and
 // AE-qualifier) of the association.

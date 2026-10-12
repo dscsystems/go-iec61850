@@ -1123,6 +1123,8 @@ If a procurement **requires** the full native T-profile, a separate decision rec
 
 # 12. Track A — compatibility mode (A-security profile, optional)
 
+**Status (October 2026): implemented** in package `iec62351/aprofile` with `client.WithAProfile`, `server.WithAProfile`, `ied-client -mms-*` flags and datadiode-mms `device.app_security: aprofile`. The interop result with a Triangle MicroWorks SCADA Data Gateway 5.0.2 is in section 12.1.
+
 **Why consider it.** ICCP links and older IEC 61850 devices built against IEC TS 62351-4:2007 use it. Without it, the diode cannot authenticate at the application layer to such a peer. [T] does not test it, so the evidence must come from interoperability tests.
 
 **Wire format** ([B] 11, Annex A):
@@ -1160,6 +1162,16 @@ If a procurement **requires** the full native T-profile, a separate decision rec
 - Configuration validation: the A-profile requires T-security ([B] 7.1 a)). Refuse it on plain TCP unless `AllowWithoutTLS` is set, which is for lab use only.
 
 **Effort:** 2–3 ew. Tests: vector-based, negative cases a)–f), and interop with at least one independent ICCP implementation identified during WP0.
+
+## 12.1 Interoperability: Triangle MicroWorks SCADA Data Gateway 5.0.2
+
+Observed on the wire against the SDG's IEC 61850 server with "Use MMS Authentication" enabled:
+
+- The SDG answers with `mechanism-name` 1.0.840.0.1.0.1.1 (the 2007 identifier) whatever the client sends, and with `responder-acse-requirements` set.
+- Its authentication value has no indirect-reference, uses the single-ASN1-type wrapper, and its time carries milliseconds (`20261012215653.881Z`). Our parser accepts all three.
+- It refuses associations it does not authenticate with a session REFUSE whose CPR carries an AARE (rejected-permanent, diagnostic null) or an ACSE ABRT (authentication-failure), not with a P-ABORT.
+- Open: it rejected go-iec61850's AARQ (standard and 2007 mechanism-name) with the null diagnostic while its own MMS key was not configured; the cause is to be confirmed once it is.
+- Open: with the SDG's MMS private key left unconfigured, its signature verified under none of the test PKI's keys in either byte order. The signature format is to be confirmed once the SDG signs with the configured key.
 
 # 13. datadiode-mms integration
 
