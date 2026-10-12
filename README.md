@@ -46,6 +46,18 @@ go run ./cmd/ied-client -addr 192.168.10.5:3782 \
   -tls-cert client.pem -tls-key client.key -tls-ca ca.pem -tls-crl ca.crl scan
 ```
 
+The IEC 62351-4 native-mode profile (`-tls-native`) mandates
+TLS_DHE_RSA_WITH_AES_128_GCM_SHA256, which Go's crypto/tls does not
+implement. Package `iec62351/ossltls` runs TLS on OpenSSL 3 instead. It
+needs cgo, libssl-dev and the build tag `openssl`; in `ied-client` it is
+the `-tls-openssl` option:
+
+```sh
+go build -tags openssl -o ied-client ./cmd/ied-client
+./ied-client -addr 192.168.10.5:3782 -tls-openssl -tls-native \
+  -tls-cert client.pem -tls-key client.key -tls-ca ca.pem scan
+```
+
 Read a value programmatically:
 
 ```go

@@ -64,9 +64,10 @@ type Options struct {
 	TLS13Only bool
 	// NativeMode selects the IEC 62351-4 native-mode TLS profile (Table 10)
 	// instead of the IEC 62351-3 one: TLS 1.2 with NativeModeCipherSuites,
-	// and session resumption ([B] 6.2.3). The mandatory DH_RSA and DHE_RSA
-	// suites and renegotiation are not implemented by Go and are declared as
-	// deviations in docs/pics.md.
+	// and session resumption ([B] 6.2.3). The mandatory DHE_RSA suite is not
+	// implemented by Go; package ossltls offers it on OpenSSL with the same
+	// Options. The mandatory static DH_RSA suite (in neither) and
+	// renegotiation are declared as deviations in docs/pics.md.
 	NativeMode bool
 	// OnEvent is told of every peer refused, for the security event log
 	// (IEC 62351-14).
@@ -177,6 +178,23 @@ func (o *Options) now() time.Time {
 		return o.Now()
 	}
 	return time.Now()
+}
+
+// VerifyPeer applies the profile's checks to the certificates a peer
+// presented (leaf first) — chain, validity, key strength, revocation,
+// server name and pinning — and reports a refusal to OnEvent. It is what
+// the configurations from ClientConfig and ServerConfig run after the
+// handshake, for TLS engines other than crypto/tls (package ossltls).
+func (o *Options) VerifyPeer(certs []*x509.Certificate) error {
+	err := o.verify(certs)
+	if err != nil && o.OnEvent != nil {
+		var leaf *x509.Certificate
+		if len(certs) > 0 {
+			leaf = certs[0]
+		}
+		o.OnEvent(Event{Peer: leaf, Err: err})
+	}
+	return err
 }
 
 // verify checks a peer's certificates against the options.

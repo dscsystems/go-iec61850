@@ -26,6 +26,12 @@ type Options struct {
 	// TLS, when non-nil, wraps the TCP connection per IEC 62351-3. The
 	// default MMS-over-TLS port is 3782.
 	TLS *tls.Config
+	// TLSHandshake, when non-nil and TLS is nil, secures the TCP connection
+	// with another TLS engine: it completes the handshake on raw under ctx
+	// and returns the secured connection, which must offer
+	// ConnectionState() tls.ConnectionState (package iec62351/ossltls's
+	// Context.Handshake, for the cipher suites crypto/tls lacks).
+	TLSHandshake func(ctx context.Context, raw net.Conn) (net.Conn, error)
 	// Password, when non-empty, is sent as an ACSE authentication value.
 	Password string
 	// Initiate overrides the negotiated MMS parameters.
@@ -69,6 +75,11 @@ type Options struct {
 	// under E2E, where probes start after 30 s and fail after about a minute
 	// (IEC 62351-4 H.3.4).
 	KeepAlive *net.KeepAliveConfig
+}
+
+// tlsConn is a TLS connection of any engine: crypto/tls or ossltls.
+type tlsConn interface {
+	ConnectionState() tls.ConnectionState
 }
 
 // ApplicationContext names the ACSE application context an association
@@ -203,6 +214,13 @@ func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
 			return nil, fmt.Errorf("mms: TLS handshake: %w", err)
 		}
 		raw = tlsConn
+	} else if opts.TLSHandshake != nil {
+		sec, err := opts.TLSHandshake(ctx, raw)
+		if err != nil {
+			raw.Close()
+			return nil, fmt.Errorf("mms: TLS handshake: %w", err)
+		}
+		raw = sec
 	}
 	c, err := newClientConn(raw, opts)
 	if err != nil {
@@ -259,7 +277,7 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		if opts.Password != "" {
 			return nil, errors.New("mms: a password cannot be combined with the A-profile")
 		}
-		if _, isTLS := raw.(*tls.Conn); !isTLS && !ap.AllowWithoutTLS {
+		if _, isTLS := raw.(tlsConn); !isTLS && !ap.AllowWithoutTLS {
 			return nil, errors.New("mms: the IEC 62351-4 A-profile requires TLS (set AllowWithoutTLS for lab use)")
 		}
 		val, err := ap.Value()
