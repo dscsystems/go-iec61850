@@ -28,6 +28,7 @@ type Flags struct {
 	Events      string
 	Required    bool
 	Edition     string
+	Corrections string
 	AnyAEAttr   bool
 }
 
@@ -58,6 +59,7 @@ func (f *Flags) Register(fs *flag.FlagSet, server bool) {
 	fs.StringVar(&f.RevocationW, "revocation-unavailable", "warn", "warn or fail-closed")
 	fs.StringVar(&f.Events, "events", "", "print security events: json")
 	fs.StringVar(&f.Edition, "e2e-edition", "2020", "wire format: 2020 (IEC 62351-4+AMD1) or 2018 (first edition)")
+	fs.StringVar(&f.Corrections, "e2e-corrections", "tissues", "with edition 2020: tissues (the IEC 62351-4 TISSUEs in force) or none (AMD1 as printed)")
 	fs.BoolVar(&f.AnyAEAttr, "e2e-any-ae-attr", false, "accept any OID-valued subject attribute, not only X.520 objectIdentifier (2.5.4.106)")
 }
 
@@ -72,6 +74,9 @@ func (f *Flags) policy(l *Loaded) (e2e.Policy, error) {
 		return p, err
 	}
 	p.Edition = ed
+	if p.Corrections, err = e2e.ParseCorrections(f.Corrections); err != nil {
+		return p, err
+	}
 	for _, s := range strings.Split(f.ICV, ",") {
 		switch strings.TrimSpace(s) {
 		case "hmac-sha256":

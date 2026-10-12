@@ -157,9 +157,17 @@ type Policy struct {
 	Authenticator AuthenticatorTagging
 	// AcceptSHA256HMACID accepts id-sha256 in the hmac field (R-15).
 	AcceptSHA256HMACID bool
-	// AcceptUnverifiedAttributeCertificates ignores a received attCert
-	// instead of refusing it (attribute certificates are not supported).
+	// AcceptUnverifiedAttributeCertificates ignores a received attCert in
+	// every case (attribute certificates are not validated).
 	AcceptUnverifiedAttributeCertificates bool
+	// RequireAuthorization means authorization is configured (TISSUE 97):
+	// a received attribute certificate must then be validated, and as
+	// IEC 62351-8 is not implemented it is refused. Without it, an
+	// attribute certificate is ignored.
+	RequireAuthorization bool
+	// Corrections selects the published corrections applied to
+	// Edition2020; the default is the TISSUEs in force.
+	Corrections Corrections
 	// HKDFInit is the representation of h0 (R-12).
 	HKDFInit ChainInit
 	// Edition selects the wire format: Edition2020 (IEC 62351-4:2018+AMD1:2020,

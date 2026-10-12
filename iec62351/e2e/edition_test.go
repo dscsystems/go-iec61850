@@ -35,17 +35,33 @@ func TestEditionMismatch(t *testing.T) {
 	wantHS(t, err, HDProtocolError, AlarmNone)
 }
 
-func TestEdition2018DiagnosticMapping(t *testing.T) {
-	if d := Edition2018.diagFor(PhaseHandshake, HDAltSigMismatch); d != HDProtocolError {
-		t.Fatalf("altSig-mismatch under 2018 = %d", d)
+func TestDiagnosticWireMapping(t *testing.T) {
+	ed18 := &Policy{Edition: Edition2018}
+	amd1 := &Policy{Corrections: CorrectionsNone}
+	tis := &Policy{}
+	cases := []struct {
+		p    *Policy
+		in   int
+		want int
+	}{
+		{ed18, HDAltSigMismatch, HDProtocolError},
+		{ed18, HDInvalidAttributeCertificate, HDInvalidAttributeCertificate},
+		{amd1, HDAltSigMismatch, 19},
+		{amd1, HDSingleICVAlgoRequired, 26},
+		{tis, HDAEIsRequired, 18},
+		{tis, HDAltSigMismatch, HDProtocolError},
+		{tis, HDAEASelectButEncrypNotSupp, 19},
+		{tis, HDSingleICVAlgoRequired, 25},
+		{tis, -1, -1},
 	}
-	if d := Edition2018.diagFor(PhaseHandshake, HDInvalidAttributeCertificate); d != HDInvalidAttributeCertificate {
-		t.Fatalf("value 16 under 2018 = %d", d)
+	for _, c := range cases {
+		if got := c.p.hdToWire(c.in); got != c.want {
+			t.Errorf("%+v: %s → %d, want %d", *c.p, HandshakeDiagName(c.in), got, c.want)
+		}
 	}
-	if d := Edition2020.diagFor(PhaseHandshake, HDAltSigMismatch); d != HDAltSigMismatch {
-		t.Fatal("2020 must keep AMD1 values")
-	}
-	if d := Edition2018.diagFor(PhaseData, DDUnexpectedChangedKey); d != DDUnexpectedChangedKey {
-		t.Fatal("data diagnostics are the same in both editions")
+	for w := 0; w <= 25; w++ {
+		if d := tis.hdFromWire(w); tis.hdToWire(d) != w {
+			t.Errorf("TISSUE 94 numbering does not round-trip at %d", w)
+		}
 	}
 }

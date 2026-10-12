@@ -46,6 +46,7 @@ const (
 	EventAbortReceived         EventCode = "abort-received"
 	EventPeerInvalidated       EventCode = "peer-invalidated-during-association"
 	EventResourceLimit         EventCode = "resource-limit"
+	EventAttCertIgnored        EventCode = "attribute-certificate-ignored"
 )
 
 // Event is a security event. It never carries key material.

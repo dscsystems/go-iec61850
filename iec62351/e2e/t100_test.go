@@ -57,6 +57,8 @@ func TestT100Table50Server(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t, pkitest.ECDSAP256, pkitest.ECDSAP256)
+			// TISSUE 97: refused only when authorization is configured.
+			f.srv.Policy.RequireAuthorization = true
 			cl, _ := NewClient(f.cli)
 			req, _ := cl.HandshakeRequest(appl)
 			s, err := ParseSigned(KindHandshakeReq, content(t, req))

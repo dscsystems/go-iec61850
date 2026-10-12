@@ -88,7 +88,8 @@ type Association struct {
 	dhKey      *dh.Key // client: current; server: retained for rekeying
 	peerPub    []byte  // server's public value on the client
 	icv        ICVAlg
-	reqTBS     []byte // client: data1 until the accept
+	icvID      AlgorithmIdentifier // as negotiated, sent in every Authenticator
+	reqTBS     []byte              // client: data1 until the accept
 	reqToken   *ClearToken1
 	applDataIn []byte // server: ApplData of the request until accepted
 	salt       []byte
@@ -194,7 +195,7 @@ func (a *Association) signFn(tbs []byte) ([]byte, error) {
 func (a *Association) icvIDs() []AlgorithmIdentifier {
 	var out []AlgorithmIdentifier
 	for _, x := range a.pol.ICVAlgs {
-		out = append(out, x.id())
+		out = append(out, x.idFor(a.pol.tissues()))
 	}
 	return out
 }
@@ -441,6 +442,9 @@ func (a *Association) processRequest(content []byte, calling AETitle) *SecurityE
 		for _, mine := range a.pol.ICVAlgs {
 			if mine == alg {
 				icv, found = alg, true
+				// Echo the client's identifier: an uncorrected
+				// client knows GMAC only by the aesNNN-GCM OID.
+				a.icvID = id
 				break
 			}
 		}
@@ -451,8 +455,8 @@ func (a *Association) processRequest(content []byte, calling AETitle) *SecurityE
 	if !found {
 		return hsErr(HDICVAlgorithmsNotSupported, errors.New("no supported ICV algorithm"))
 	}
-	if t.AttCert != nil && !a.pol.AcceptUnverifiedAttributeCertificates {
-		return hsErr(HDInvalidAttributeCertificate, errors.New("attribute certificates are not supported"))
+	if err := a.checkAttCert(t); err != nil {
+		return err
 	}
 	// Accepted: allocate the server part of the identifier.
 	own, err := a.sh.assoIDs.get(a.peerKey + "|" + t.AssoID)
@@ -495,7 +499,7 @@ func (a *Association) HandshakeAccept(applData []byte) ([]byte, error) {
 		DHPublic: key.Public(),
 		HMAC:     a.reqToken.HMAC,
 		TimeRaw:  asn1.FormatTime62351(a.now()),
-		ICV:      []AlgorithmIdentifier{a.icv.id()},
+		ICV:      []AlgorithmIdentifier{a.icvID},
 		// The server mirrors the client's view of hop protection.
 		ConfParams: bits(),
 	}
@@ -637,6 +641,7 @@ func (a *Association) processAccept(content []byte, responding AETitle) ([]byte,
 		return nil, hsErr(HDSingleICVAlgoRequired, fmt.Errorf("%d ICV algorithms", len(t.ICV)))
 	}
 	icv, ok := icvAlgOf(t.ICV[0])
+	a.icvID = t.ICV[0]
 	offered := false
 	for _, x := range a.pol.ICVAlgs {
 		if ok && x == icv {
@@ -649,8 +654,8 @@ func (a *Association) processAccept(content []byte, responding AETitle) ([]byte,
 	if t.ConfParams.Bit(1) {
 		return nil, hsErr(HDEncryptionNotRequired, errors.New("applProtected set"))
 	}
-	if t.AttCert != nil && !a.pol.AcceptUnverifiedAttributeCertificates {
-		return nil, hsErr(HDInvalidAttributeCertificate, errors.New("attribute certificates are not supported"))
+	if err := a.checkAttCert(t); err != nil {
+		return nil, err
 	}
 	z, err := a.dhKey.Shared(t.DHPublic)
 	if err != nil {
@@ -699,10 +704,13 @@ func (a *Association) ProcessRejection(kind Kind, content []byte) *RejectedError
 		return re
 	}
 	re.Diag, re.ApplData = s.Diag, s.ApplData
+	if kind != KindDtSecAbort {
+		re.Diag = a.pol.hdFromWire(s.Diag)
+	}
 	re.Authenticated = a.verifyToken3(s) == nil
-	d := HandshakeDiagName(s.Diag)
+	d := HandshakeDiagName(re.Diag)
 	if kind == KindDtSecAbort {
-		d = DtDiagName(s.Diag)
+		d = DtDiagName(re.Diag)
 	}
 	code := EventAbortReceived
 	if kind == KindHandshakeSecReject || kind == KindApplicationReject {
@@ -815,7 +823,7 @@ func (a *Association) Seal(applData []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &Authenticator{Nonce: nonce, Alg: a.icv.id(), ICV: v}, nil
+		return &Authenticator{Nonce: nonce, Alg: a.icvID, ICV: v}, nil
 	})
 	if err != nil {
 		return nil, err
@@ -1123,8 +1131,23 @@ func (a *Association) release() {
 // and edition.
 func (a *Association) wireDiag(se *SecurityError) int {
 	d := se.WireDiag(a.pol.AlarmDiagnostic)
-	if d < 0 {
+	if se.Phase != PhaseHandshake {
 		return d
 	}
-	return a.pol.Edition.diagFor(se.Phase, d)
+	return a.pol.hdToWire(d)
+}
+
+// checkAttCert applies the policy to a received attribute certificate.
+// Attribute certificates are not validated (IEC 62351-8 is not
+// implemented). Under TISSUE 97 one is ignored unless authorization is
+// configured; before it, one is refused unless explicitly accepted.
+func (a *Association) checkAttCert(t *ClearToken1) *SecurityError {
+	if t.AttCert == nil || a.pol.AcceptUnverifiedAttributeCertificates {
+		return nil
+	}
+	if a.pol.tissues() && !a.pol.RequireAuthorization {
+		a.event(EventAttCertIgnored, ClassInfo, "", "attribute certificate ignored: authorization not configured")
+		return nil
+	}
+	return hsErr(HDInvalidAttributeCertificate, errors.New("attribute certificates cannot be validated"))
 }

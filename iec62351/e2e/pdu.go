@@ -628,7 +628,8 @@ func parseToken2(s asn1.Span) (*ClearToken2, error) {
 	if b, ok, err := d.Optional(tagIV); err != nil {
 		return nil, wrap(err)
 	} else if ok {
-		if len(b) != 16 {
+		// SIZE (12 | 16): a GCM nonce or a CBC IV (TISSUE 53/55).
+		if len(b) != 12 && len(b) != 16 {
 			return nil, protoErr("iv of %d octets", len(b))
 		}
 		t.IV = append([]byte(nil), b...)

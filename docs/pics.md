@@ -364,7 +364,7 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 | T7 Compatibility mode | N | N | A-profile not implemented |
 | T7 Native mode | Y | Y | |
 | T8 TLS_DH_DSS_WITH_AES_256_CBC_SHA (compatibility, m) | N | N | not implemented by Go `crypto/tls` |
-| T9 Use of authenticated encryption | N | N | the AEAD nonce has no defined field (register R-08) |
+| T9 Use of authenticated encryption | N | N | not built (WP9). TISSUE 95 makes AE and non-AE mandatory for a server, so server conformance to Table 9 is not claimed (R-32) |
 | T9 Non-use of AE | Y | Y | clear transfer; E2E encryption (AES-CBC) not yet implemented |
 | T10 TLS_RSA_WITH_AES_128_CBC_SHA256 0x003C (m) | Y | Y | `NativeMode` |
 | T10 TLS_DH_RSA_WITH_AES_128_GCM_SHA256 0x00A0 (m) | N | N | not implemented by Go |
@@ -377,13 +377,14 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 | T11 sha256WithRSAEncryption, ecdsa-with-SHA256 | Y | Y | |
 | T11 aes128-CBC, aes256-CBC (c[5]) | i | i | encryption not declared |
 | T11 aes128-GCM, aes256-GCM as AE (c[6]) | i | i | AE not declared |
-| T11 ICV hmacWithSHA256, aes128-GCM, aes256-GCM (c[7]) | Y | Y | AES-GCM as GMAC, 12-octet tag |
+| T11 ICV hmacWithSHA256, aes128-GMAC, aes256-GMAC (c[7]) | Y | Y | 12-octet tag; sent as id-aes128-GMAC / id-aes256-GMAC (TISSUE 52), the earlier aesNNN-GCM identifiers also accepted |
 | Diffie-Hellman groups 14, 23 | Y | Y | 28 (brainpool) N |
 | Rekey (client-driven, server request) | Y | Y | 15 min to 24 h; idle associations carry it with an Identify request |
 | Signed release, aborts (HandshakeSecReject/Abort, DtSecAbort, ApplAbort) | Y | Y | |
-| Attribute certificates (IEC 62351-8) | N | N | refused with invalid-attribute-certificate |
+| Attribute certificates (IEC 62351-8) | N | N | ignored (TISSUE 97); refused with invalid-attribute-certificate when `Policy.RequireAuthorization` is set |
 | OCSP | N | N | CRLs only |
 | E2E certificate subject | Y | Y | X.520 `objectIdentifier` (2.5.4.106) holding the AE title; other OID-valued attributes only with `Policy.AcceptAnyAEAttributeType` |
+| Published corrections (TISSUEs in force through 57/2901/INF, 16 July 2026) | Y | Y | default: 94 (handshake diagnostics renumbered), 52, 53/55, 90, 97; `Policy.Corrections = CorrectionsNone` for AMD1 as printed. See the guide, 19.6 |
 | First-edition wire format (IEC 62351-4:2018 code component) | Y | Y | `Policy.Edition = e2e.Edition2018` (ClearToken1 layout, bare-OID algorithm lists, ApplData without the EXTERNAL); the default is AMD1:2020 |
 
 ## 9. Implementation-specific information

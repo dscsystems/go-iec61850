@@ -36,6 +36,10 @@ var (
 	oidAES256CBC       = asn1.OID{2, 16, 840, 1, 101, 3, 4, 1, 42}
 	oidAES128GCM       = asn1.OID{2, 16, 840, 1, 101, 3, 4, 1, 6}
 	oidAES256GCM       = asn1.OID{2, 16, 840, 1, 101, 3, 4, 1, 46}
+	// id-aes128-GMAC and id-aes256-GMAC (RFC 9044), the ICV identifiers
+	// of TISSUE 52.
+	oidAES128GMAC = asn1.OID{2, 16, 840, 1, 101, 3, 4, 1, 9}
+	oidAES256GMAC = asn1.OID{2, 16, 840, 1, 101, 3, 4, 1, 49}
 )
 
 var nullParams = []byte{0x05, 0x00}
@@ -164,8 +168,8 @@ type ICVAlg uint8
 
 const (
 	ICVHMACSHA256 ICVAlg = iota + 1 // hmacWithSHA256
-	ICVGMACAES128                   // aes128-GCM used as GMAC
-	ICVGMACAES256                   // aes256-GCM used as GMAC
+	ICVGMACAES128                   // aes128-GMAC (aes128-GCM before TISSUE 52)
+	ICVGMACAES256                   // aes256-GMAC (aes256-GCM before TISSUE 52)
 )
 
 func (a ICVAlg) String() string {
@@ -180,12 +184,22 @@ func (a ICVAlg) String() string {
 	return fmt.Sprintf("ICVAlg(%d)", uint8(a))
 }
 
-func (a ICVAlg) id() AlgorithmIdentifier {
+// id is the identifier before TISSUE 52 (aesNNN-GCM for GMAC).
+func (a ICVAlg) id() AlgorithmIdentifier { return a.idFor(false) }
+
+// idFor is the identifier to send; tissue52 selects id-aesNNN-GMAC.
+func (a ICVAlg) idFor(tissue52 bool) AlgorithmIdentifier {
 	switch a {
 	case ICVHMACSHA256:
 		return AlgorithmIdentifier{oidHMACWithSHA256, nullParams}
 	case ICVGMACAES128:
+		if tissue52 {
+			return AlgorithmIdentifier{oidAES128GMAC, nil}
+		}
 		return AlgorithmIdentifier{oidAES128GCM, nil}
+	}
+	if tissue52 {
+		return AlgorithmIdentifier{oidAES256GMAC, nil}
 	}
 	return AlgorithmIdentifier{oidAES256GCM, nil}
 }
@@ -202,14 +216,15 @@ func (a ICVAlg) keyLen() int {
 const gmacTagLen = 12
 
 // icvAlgOf maps an AlgorithmIdentifier. GMAC parameters, when present, are
-// GCMParameters; only the default ICV length of 12 is accepted.
+// GCMParameters; only the default ICV length of 12 is accepted. Both the
+// GMAC identifiers of TISSUE 52 and the earlier GCM ones are recognised.
 func icvAlgOf(a AlgorithmIdentifier) (ICVAlg, bool) {
 	switch {
 	case a.Algorithm.Equal(oidHMACWithSHA256) && (a.Parameters == nil || bytes.Equal(a.Parameters, nullParams)):
 		return ICVHMACSHA256, true
-	case a.Algorithm.Equal(oidAES128GCM) && gcmParamsOK(a.Parameters):
+	case (a.Algorithm.Equal(oidAES128GMAC) || a.Algorithm.Equal(oidAES128GCM)) && gcmParamsOK(a.Parameters):
 		return ICVGMACAES128, true
-	case a.Algorithm.Equal(oidAES256GCM) && gcmParamsOK(a.Parameters):
+	case (a.Algorithm.Equal(oidAES256GMAC) || a.Algorithm.Equal(oidAES256GCM)) && gcmParamsOK(a.Parameters):
 		return ICVGMACAES256, true
 	}
 	return 0, false

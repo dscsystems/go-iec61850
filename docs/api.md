@@ -123,9 +123,12 @@ not be the TLS one). Each end is an AE title (AP-title + AE-qualifier), and
 its certificate subject is that AE title as an object identifier
 (`pki.OIDName` with the X.520 `objectIdentifier` attribute, 2.5.4.106;
 `cmd/e2e-pki` issues test credentials and CSRs). The wire format is that of
-IEC 62351-4:2018+AMD1:2020; `Policy.Edition = e2e.Edition2018` speaks the
-first edition (its IEC code component) to peers built on it, and both ends
-must agree.
+IEC 62351-4:2018+AMD1:2020 with the TISSUE corrections in force (handshake
+diagnostics renumbered, `id-aesNNN-GMAC` ICV identifiers, attribute
+certificates ignored unless `Policy.RequireAuthorization`);
+`Policy.Corrections = e2e.CorrectionsNone` speaks AMD1 as printed.
+`Policy.Edition = e2e.Edition2018` speaks the first edition (its IEC code
+component) to peers built on it, and both ends must agree on the edition.
 
 ```go
 l, err := e2efile.Load(e2efile.Files{Cert: "client.pem", Key: "client.key", CA: []string{"ca.pem"}},

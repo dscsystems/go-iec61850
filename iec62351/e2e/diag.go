@@ -5,8 +5,11 @@ import (
 	"fmt"
 )
 
-// HandshakeDiagnostics values of the Annex B code component (register R-03:
-// Annex B inserts altSig-mismatch (19), shifting the values of clause 14.2.1).
+// HandshakeDiagnostics, identified by their values in AMD1:2020 Annex B,
+// which inserted altSig-mismatch (19). TISSUE 94 removed it again, so under
+// the default Policy.Corrections the values above 19 are sent one lower
+// (the clause 14.2.1 numbering); Policy maps them both ways and these
+// constants never change.
 const (
 	HDNoReasonGiven                 = 0
 	HDProtocolError                 = 1
@@ -70,7 +73,7 @@ var hdNames = map[int]string{
 var ddNames = map[int]string{
 	0: "no-reason-given", 1: "protocol-error", 2: "unexpected-version", 3: "encryption-not-selected",
 	4: "encryption-required", 5: "gmac-init-vector-required", 6: "gmac-nonce-required", 7: "invalid-time-value", 8: "invalid-sequence-number",
-	9: "aes-init-vector-required", 10: "unexpected-dhPublicKey", 11: "unexpected-changedCypher",
+	9: "aes-init-vector-required", 10: "unexpected-dhPublicKey", 11: "unexpected-changeKeys",
 }
 
 // HandshakeDiagName and DtDiagName name a diagnostic value.

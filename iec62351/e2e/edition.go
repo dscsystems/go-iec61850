@@ -48,13 +48,71 @@ func (e Edition) String() string {
 // maxDiag2018 is the last HandshakeDiagnostics value of the first edition.
 const maxDiag2018 = HDInvalidAttributeCertificate
 
-// diagFor maps a handshake diagnostic to one the edition defines: the
-// values amendment 1 added become protocol-error under the first edition.
-func (e Edition) diagFor(phase Phase, d int) int {
-	if e == Edition2018 && phase == PhaseHandshake && d > maxDiag2018 {
-		return HDProtocolError
+// Corrections selects which published corrections (TISSUEs of the IEC 62351
+// TISSUE database, https://iec62351.tissue-db.com/parts/4) apply on top of
+// Edition2020. They do not apply to Edition2018.
+type Corrections uint8
+
+const (
+	// CorrectionsInForce applies the TISSUEs in force through 57/2901/INF
+	// (16 July 2026). The default.
+	//
+	//   - 94: altSig-mismatch (19) removed from HandshakeDiagnostics; the
+	//     values above it are one lower on the wire.
+	//   - 52: GMAC ICVs identified as id-aes128-GMAC / id-aes256-GMAC.
+	//   - 97: an attribute certificate is ignored unless authorization is
+	//     configured (Policy.RequireAuthorization).
+	//   - 53/55: ClearToken2.iv is 12 (GCM nonce) or 16 (CBC IV) octets.
+	//   - 90: DtDiagnostics 11 is unexpected-changeKeys (a name only).
+	CorrectionsInForce Corrections = iota
+	// CorrectionsNone is IEC 62351-4:2018+AMD1:2020 as printed, for peers
+	// and test tools built before the corrections.
+	CorrectionsNone
+)
+
+// ParseCorrections reads "tissues" (also empty) or "none".
+func ParseCorrections(s string) (Corrections, error) {
+	switch s {
+	case "", "tissues", "in-force":
+		return CorrectionsInForce, nil
+	case "none":
+		return CorrectionsNone, nil
+	}
+	return CorrectionsInForce, fmt.Errorf("e2e: unknown corrections %q (tissues or none)", s)
+}
+
+func (p *Policy) tissues() bool {
+	return p.Edition == Edition2020 && p.Corrections == CorrectionsInForce
+}
+
+// hdToWire maps a handshake diagnostic (the constants of this package, in
+// the numbering of AMD1 Annex B) to the value the policy sends.
+func (p *Policy) hdToWire(d int) int {
+	switch {
+	case d < 0:
+		return d
+	case p.Edition == Edition2018:
+		if d > maxDiag2018 {
+			return HDProtocolError
+		}
+	case p.tissues():
+		if d == HDAltSigMismatch {
+			return HDProtocolError
+		}
+		if d > HDAltSigMismatch {
+			return d - 1
+		}
 	}
 	return d
+}
+
+// hdFromWire maps a received handshake diagnostic to this package's
+// constants.
+func (p *Policy) hdFromWire(w int) int {
+	if p.tissues() && w >= HDAltSigMismatch {
+		return w + 1
+	}
+	return w
 }
 
 func oidElem(a AlgorithmIdentifier) *asn1.Element { return asn1.OIDElem(asn1.TagOID, a.Algorithm) }

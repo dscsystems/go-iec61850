@@ -625,7 +625,7 @@ On the server, a failure in steps 4–9 → HandshakeSecReject: `diag` present f
 
 **Data transfer**, in [B] 14.4 order: environment context id (`invalid-pci`, `protocol-error`) → structure (`protocol-error`) → `encryption-not-selected` / `encryption-required` → Authenticator (`invalid-icv-algorithm` alarm, `gmac-nonce-required`, invalid ICV alarm) → ClearToken2 (`unexpected-version`, 5.5 rules, `aes-init-vector-required`, flag rules). A failure → DtSecAbort in ABRT. Then close the connection, fail every pending request, and run no further callbacks.
 
-## 7.2 Diagnostic code values (Annex B baseline)
+## 7.2 Diagnostic code values
 
 | HandshakeDiagnostics | Value | DtDiagnostics | Value |
 | --- | --- | --- | --- |
@@ -640,7 +640,7 @@ On the server, a failure in steps 4–9 → HandshakeSecReject: `diag` present f
 | invalid-public-key-certificate | 8 | invalid-sequence-number | 8 |
 | invalid-certification-path | 9 | aes-init-vector-required | 9 |
 | invalid-time-value | 10 | unexpected-dhPublicKey | 10 |
-| dhGroup-not-supported | 11 | unexpected-changedCypher | 11 |
+| dhGroup-not-supported | 11 | unexpected-changeKeys (TISSUE 90) | 11 |
 | illegal-dhGroup-selected | 12 | **OsiDiagnostics** | |
 | icv-algorithms-not-supported | 13 | no-reason-given | 0 |
 | encrypt-algorithms-not-supported | 14 | protocol-error | 1 |
@@ -648,16 +648,16 @@ On the server, a failure in steps 4–9 → HandshakeSecReject: `diag` present f
 | invalid-attribute-certificate | 16 | invalid-pci | 3 |
 | encr-mode-aea-not-supported | 17 | | |
 | ae-is-required | 18 | | |
-| altSig-mismatch | 19 | | |
-| aea-select-but-encryp-not-supp | 20 | | |
-| invalid-ae-algorithm | 21 | | |
-| single-ae-algorithm-required | 22 | | |
-| ae-not-used | 23 | | |
-| invalid-encryption-algorithm | 24 | | |
-| single-encrypt-algo-required | 25 | | |
-| single-icv-algo-required | 26 | | |
+| altSig-mismatch | 19 → removed | | |
+| aea-select-but-encryp-not-supp | 20 → 19 | | |
+| invalid-ae-algorithm | 21 → 20 | | |
+| single-ae-algorithm-required | 22 → 21 | | |
+| ae-not-used | 23 → 22 | | |
+| invalid-encryption-algorithm | 24 → 23 | | |
+| single-encrypt-algo-required | 25 → 24 | | |
+| single-icv-algo-required | 26 → 25 | | |
 
-Clause 14.2 numbers the handshake list without `altSig-mismatch`, so values 19–25 there are shifted. It numbers the DtDiagnostics differently again. All of these are encoded as ENUMERATED values from one table in code (`e2e/diag.go`) and pinned by vector tests (R-03).
+"a → b" is AMD1 Annex B as printed → after TISSUE 94 (in force since 16 July 2026), which removed `altSig-mismatch` and so restored the clause 14.2.1 numbering. The code keeps the Annex B values as its constants and maps them on the wire by policy: TISSUE numbering by default, Annex B with `Corrections = CorrectionsNone`, and values above 16 sent as `protocol-error` under `Edition2018` (R-03, R-27).
 
 ## 7.3 Encryption-mode negotiation (server) and checks (client)
 
@@ -1574,18 +1574,18 @@ Status values: **Open** (to be resolved in WP0.4), **Adopted** (a default chosen
 | --- | --- | --- | --- | --- | --- |
 | R-01 | Code components | Annexes A, B, D, F printed (scan) | IEC archive URL in [B] 1.2 | Archive `IEC_62351-4.ASN.1_XSD.full` obtained (manifest dated 2018-04-19, publication IEC 62351-4:2018). It is the **first-edition** module set and predates AMD1. Diff in 19.5 | Closed (see R-27) |
 | R-02 | Application context name | `e2eMmsAC` = 1.0.62351.4.2.1 (15.2.2) | T68/T69: 1.0.62351.4.1.2.1.1 | Send [B]; as a server, accept the [T] value only with the named setting `AcceptT100AppContext` (test campaigns) | Adopted |
-| R-03 | Diagnostic numbering | clause 14.2 lists vs Annex B (`altSig-mismatch(19)`, DtDiagnostics gap at 5) | — | Annex B values (7.2). The 2018 module agrees for 0–16 and defines DtDiagnostics 5 = `gmac-init-vector-required`; under `Edition2018` handshake values above 16 are sent as `protocol-error` | Closed |
+| R-03 | Diagnostic numbering | clause 14.2.1 list vs Annex B (`altSig-mismatch(19)`); DtDiagnostics gap at 5 | [T] built on Annex B; TISSUE 94 asks for tests ≥ 19 to be repeated | **TISSUE 94** (in force): `altSig-mismatch` removed, values above it one lower. Default; Annex B numbering with `CorrectionsNone`; 2018 module stops at 16 (7.2) | Closed |
 | R-04 | Authenticator tagging | 13.4.2 `[0] nonce`, `algorithm`, `[1] icv`; Annex B untagged, `algo` | — | Annex B; the clause-13 variant only as a named setting. The 2018 code component is also untagged (`nonce OCTET STRING OPTIONAL, algo, icv OCTET STRING OPTIONAL`) | Closed |
 | R-05 | ClearToken1 `version` | body: mandatory; Annex B: DEFAULT {v1} | T55 #7: check bit 0 | Always emit; accept absence | Adopted |
 | R-06 | Sequence number | resets to 0 when the time changes (13.3.2 d), 14.4.3 d)) | T62–T65 #6: always +1 | [B] | Adopted; raise with the laboratory |
 | R-07 | Diagnostics for alarm and mode cases | alarm → diag absent; k), t), x), g) codes | T50 #2/#5/#9, T51–54 #6 `no-reason-given`; T49 #11, T49 #15, T50 #12, T54 #7 other codes | [B]; `AlarmDiagnostic` setting and a documented mapping for the others | Adopted |
-| R-08 | AEAD nonce and parameters | 13.3.1.1 i) 1) nonce excluded from the proposal; `ClearToken2.iv` is CBC-only, `SIZE(16)`; `auth` absent with AE | T64/T65: `iv` "if dynamic parameters", `auth` "checked for presence" | AE not declared (DEC-3) | Open |
+| R-08 | AEAD nonce and parameters | 13.3.1.1 i) 1) nonce excluded from the proposal; `ClearToken2.iv` CBC-only, `SIZE(16)`; `auth` absent with AE | T64/T65: `iv` "if dynamic parameters", `auth` "checked for presence" | **TISSUE 53/55** (in force): `InitializationVector ::= OCTET STRING (SIZE (12 \| 16))`, 12 = GCM nonce, 16 = CBC IV; the AE IV travels in `ClearToken2.iv`; a GMAC nonce stays in `Authenticator.nonce`. The decoder accepts 12 or 16. Still unstated: `auth` presence with AE (R-29). AE not declared (DEC-3) | Partly resolved |
 | R-09 | CBC padding | not specified | — | PKCS#7 | Open |
-| R-10 | TLS suite numbers | T3/T10: `0xC09E`, `0xC023`, `0xC024`; T8: `0x0030` named DHE_DSS; T10: DH_RSA_AES_256_GCM "SHA256" | IANA: `0x009E`, `0xC02B`, `0xC02C`; `0x0030` = DH_DSS; `0x00A1` = SHA384 | Use the IANA number of the **named** suite; guard test against `0xC023` and `0xC024` | Adopted |
+| R-10 | TLS suite numbers | T3/T10: `0xC09E`, `0xC023`, `0xC024`; T8: `0x0030` named DHE_DSS; T10: DH_RSA_AES_256_GCM "SHA256" | IANA: `0x009E`, `0xC02B`, `0xC02C`; `0x0030` = DH_DSS; `0x00A1` = SHA384 | Use the IANA number of the **named** suite; guard test against `0xC023` and `0xC024` | Adopted; confirmed by **TISSUE 129** (in force), which also corrects Table 8 to `TLS_DHE_DSS_WITH_AES_128_CBC_SHA` 0x0032 (not implementable in Go). TISSUE 171 (drafting) revises the references again |
 | R-11 | Key lengths | "combined length of keys" | — | HMAC-SHA-256 key 32; AES 16 or 32 per algorithm | Adopted; vector |
 | R-12 | HKDF `h0 = 0` | representation unspecified | — | Vector-driven choice among {empty, `00`, 32 × `00`} | Open (blocking) |
 | R-13 | DH public value and Z encoding | not specified | — | MODP: 256 octets big-endian, Z the same; EC: SEC1 uncompressed, Z = X (32) | Open |
-| R-14 | ECDSA signature value encoding in `Signature.sign` | not specified | — | DER `Ecdsa-Sig-Value` | Open |
+| R-14 | ECDSA signature value encoding in `Signature.sign` | not specified; `ecdsa-with-SHA256-Algorithm` is annotated "IETF RFC 5758" | — | DER `Ecdsa-Sig-Value`: RFC 5758 §3.2 defers to RFC 3279 §2.2.3 (X.509/CMS context, applied here by reference); parameters omitted | Adopted, pending a peer vector |
 | R-15 | `hmac` field value | "HMAC algorithm"; "hash in 8.4 shall be supported" | — | `hmacWithSHA256` (NULL params); `id-sha256` accepted only with a named setting | Adopted |
 | R-16 | `icvAlgID` order | text: preference order; schema: SET | T56 #17 | Encode in preference order (DER SET OF sorting not applied, as BER allows); server picks the first supported in received order | Adopted |
 | R-17 | `pp` for TASE.2 | `-503`, `-702` and `-802` all listed | — | `"IEC 60870-6-503"` | Open |
@@ -1595,17 +1595,25 @@ Status values: **Open** (to be resolved in WP0.4), **Adopted** (a default chosen
 | R-21 | Editorial errors in [T] | — | T49 #21/#22 are server stimuli; T55 #23 says `token3`; T65 #13 says "unencrypted"; rekey rows cite "table 27 or 28" | Treat as editorial; record in the PIXIT | Adopted |
 | R-22 | DH group 23 | 23 = secp256r1 "according to RFC 5114" | IKE registry: 19 = secp256r1, 23 = MODP-2048/224 | Protocol code points 14, 23, 28 as in [B] and T55 | Adopted |
 | R-23 | Brainpool | Table 11 m; group 28 optional | — | Release 2 verification only; declare N before that | Adopted |
-| R-24 | Part 3 edition | [B] 2014+A1:2018 | [T] 2023; T5 cites 2014/AMD2:2020 | Declare the implemented TLS profile explicitly in the PIXIT | Open |
+| R-24 | Part 3 edition | [B] 2014+A1:2018 | [T] 2023; T5 cites 2014/AMD2:2020 | IEC 62351-3:2023 (ed. 2) cancels and replaces 2014, AMD1:2018 and AMD2:2020 (adds a TLS 1.3 profile). Which edition a campaign applies is for the laboratory; declare the implemented TLS profile in the PIXIT | Open |
 | R-25 | E2E subject attribute type | G.6.2: X.520 `objectIdentifier` | — | `id-at-objectIdentifier` = {id-at 106} = **2.5.4.106** (ITU-T X.501 UsefulDefinitions, X.520 SelectedAttributeTypes, 10/2019); 2.5.4.82 is `permission`. Issued and required by default; `Policy.AcceptAnyAEAttributeType` for legacy certificates | Closed |
 | R-26 | Go `crypto/x509` and OID-valued subjects | — | — | Parse with a placeholder subject, restore the raw fields (19.3) | Adopted |
 | R-27 | Wire-format edition | 2018 code component: ClearToken1 `…assoID, time, dHKey, hmac` with `hmac` a bare OID, `encr-mode` aea = SET OF OID, non-aea = untagged SEQUENCE {[0] SET OF OID, [1] SET OF OID}; AMD1 Annex B: `…assoID, dHKey, hmac (AlgorithmIdentifier), time`, aea = SEQUENCE OF AlgorithmIdentifier, non-aea = [0] SEQUENCE {[0] SEQUENCE OF, [1] SET OF} | [T] tests AMD1 | AMD1 (`Edition2020`) by default; `Policy.Edition = Edition2018` for first-edition peers. Both encodings are checked against an independent `encoding/asn1` oracle | Adopted |
 | R-28 | `ApplData` in the OSI environment | 2018 Annex F gives only the generic template `ApplData ::= <top-level type>` ("a synonym for the top-level entry"), so the MMS PDU itself; AMD1 F.3 specifies an EXTERNAL naming the MMS presentation context. The code component imports `Virtual-API` but does not ship it | — | Follows the edition (R-27); the 2018 reading is an interpretation to confirm with a first-edition peer | Adopted |
 | R-29 | `EncrTransfer.auth` | 2018: mandatory, with `icv` absent for aea; AMD1: OPTIONAL | — | Applies to WP9 only (encryption not built) | Open |
+| R-30 | GMAC ICV identifiers | 8.7/Table 11: `aes128-GCM` {aes 6}, `aes256-GCM` {aes 46} used as GMAC | — | **TISSUE 52** (in force): `aes128-GMAC` {aes 9}, `aes256-GMAC` {aes 49} (RFC 9044), PARMS `GCMParameters`. Sent by default; both forms accepted; the server echoes the client's identifier and both ends keep the negotiated one, so corrected and uncorrected peers interoperate. TISSUE 60 (editorial, not in force) would make the PARMS NULL | Adopted |
+| R-31 | Received attribute certificate | 13.3.1.1 k) silent on absence/handling | T50 "aa" row expects `invalid-attribute-certificate` | **TISSUE 97** (in force): validate per IEC 62351-8 if authorization is configured, otherwise ignore. Default: ignored with an `attribute-certificate-ignored` event; `Policy.RequireAuthorization` refuses it (62351-8 validation not implemented) | Adopted |
+| R-32 | Server AE / non-AE support | Table 9 conditional on the referencing standard | — | **TISSUE 95** (in force): the server shall support both, so Table 11 c[5]–c[7] are mandatory for servers. Our server cannot claim server conformance until WP9 (encryption, AE) is built; PICS 8.1 says so | Open (WP9) |
+| R-33 | Other in-force TISSUEs | — | — | 90: DtDiagnostics 11 renamed `unexpected-changeKeys` (name only, adopted). 92: AssoAbort has four elements with `osiDiag` (already so). 78: other key usages are ignored (already so: digitalSignature and keyAgreement required, others ignored). 77: DH 14 and ECDH 23 mandatory, 28 optional in Table 11 (PICS). 130: wording of item 21 (`invalid-ae-algorithm`), relevant with AE only | Adopted |
+| R-34 | TISSUEs not yet in force | — | — | 60 and 64 (algorithm PARMS NULL in ClearToken1, IV out of ClearToken1), 96 (OSI-SecAsso references), 101 (rekey overlap: clarifying text, possibly symmetric `changedKey`), 171 (cipher-suite references; drafting). Track; no code change | Open |
 
 # 18. References
 
 - **[B]** BS EN IEC 62351-4:2018+A1:2020 — Power systems management and associated information exchange — Data and communications security — Part 4: Profiles including MMS and derivatives.
 - **[T]** PD IEC TS 62351-100-4:2023 — Part 100-4: Cybersecurity conformance testing for IEC 62351-4.
+- IEC 62351-4:2018 edition 1.0 and its code component `IEC_62351-4.ASN.1_XSD.full` (2018-04-19).
+- IEC 62351 TISSUE database, Part 4: <https://iec62351.tissue-db.com/parts/4> (TISSUEs 52, 53, 55, 60, 64, 77, 78, 90, 92, 94, 95, 96, 97, 101, 129, 130, 171); in force through 57/2901/INF (16 July 2026).
+- IETF RFC 9044 (AES-GMAC in CMS: id-aes128-GMAC, id-aes256-GMAC); ITU-T X.501 and X.520 (10/2019) modules.
 - IEC TS 62351-100-3 (T-profile conformance tests); IEC 62351-3:2014+A1:2018 and IEC 62351-3:2023; IEC 62351-9 (key management); IEC 62351-14 (security event logging); IEC 62351-6:2020 (IEC 61850 security PICS).
 - ITU-T X.227 (ACSE), X.226 / ISO 8823 (presentation), X.225 / ISO 8327 (session), X.224 / ISO 8073 (transport), X.690 (BER/DER), X.509 and X.520.
 - IETF RFC 1006, 2104 (HMAC), 3526 (MODP groups), 5084 (AES-GCM in CMS), 5114, 5280, 5480, 5639 and 6954 (brainpool), 5869 (HKDF), 7427.
@@ -1704,3 +1712,26 @@ Changes:
 | Tests: 2018 association and transfer, edition mismatch → `protocol-error`, MMS over TCP under both editions, the diode chain with a first-edition device leg and a 2020 DMZ leg | `edition_test.go`, `mms/e2e_test.go`, datadiode-mms `test/e2e` |
 
 The libiec61850 interoperability suite still passes (16/16). libiec61850 has no E2E support, so it cannot confirm either edition.
+
+## 19.6 Published corrections (TISSUEs) as the default (12 October 2026)
+
+The IEC 62351 TISSUE database (<https://iec62351.tissue-db.com/parts/4>) lists 18 issues for Part 4 (2018, Edition 1.1). Most of those marked *In Force* go into force through 57/2901/INF on 16 July 2026, and several are flagged *Must Implement*. Part 100-4 has none. The pages summarise the changes; the exact text is in 57/2901/INF and the attachment `20250103_iec62351-4-tissue_annex-b.pdf`, which need a sign-in and have not been read. Where a page leaves the final wording open, the register says so.
+
+`Policy.Corrections` selects the behaviour for `Edition2020`:
+
+| Setting | Meaning |
+| --- | --- |
+| `CorrectionsInForce` (default) | TISSUEs 94 (handshake numbering), 52 (GMAC identifiers), 97 (attribute certificates ignored), 53/55 (IV 12 or 16 octets), 90 (name) |
+| `CorrectionsNone` | AMD1:2020 as printed, for peers and test tools built before the TISSUEs (including campaigns run on the original [T] diagnostics for values ≥ 19) |
+
+`Edition2018` is unaffected. Receivers stay lenient where it is safe: both GMAC identifiers are recognised whatever the setting, and the IV decoder takes 12 or 16 octets.
+
+| Change | Where |
+| --- | --- |
+| `Corrections`, `ParseCorrections`; handshake diagnostics mapped to and from the wire (`hdToWire`, `hdFromWire`); received rejections reported with this package's constants | `iec62351/e2e/edition.go`, `assoc.go`, `diag.go` |
+| `id-aes128-GMAC` / `id-aes256-GMAC`; the negotiated identifier is kept per association and sent in every Authenticator | `alg.go`, `assoc.go` |
+| Attribute certificates ignored unless `Policy.RequireAuthorization`; event `attribute-certificate-ignored` | `assoc.go`, `config.go`, `events.go` |
+| `-e2e-corrections` on the tools; `corrections` in the diode's `e2e` blocks | `e2efile/flags.go`; datadiode-mms `internal/config`, `internal/e2eprofile`, README |
+| Tests: wire numbering in all three modes with a round trip; GMAC identifiers for corrected, mixed and uncorrected pairs with data both ways; attribute certificate ignored; IV sizes | `iec62351/e2e/tissue_test.go`, `edition_test.go` |
+
+Compatibility: a peer built on AMD1 as printed reads handshake diagnostics 19–25 from a corrected peer one value too low; that only affects the diagnosis of a failed handshake, never a successful association. Set `CorrectionsNone` for such peers, or for a test campaign that still expects the Annex B values.
