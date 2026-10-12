@@ -37,6 +37,15 @@ go run ./cmd/ied-server -scl testdata/simpleIO_direct_control.cid -addr :10102 -
 go run ./cmd/ied-client -addr 127.0.0.1:10102 test
 ```
 
+Over TLS (IEC 62351-3), `ied-client` takes its certificate and the
+server's CA; the server certificate must name the host of `-addr`
+(`-tls-server-name` or `-tls-no-server-name` to change that):
+
+```sh
+go run ./cmd/ied-client -addr 192.168.10.5:3782 \
+  -tls-cert client.pem -tls-key client.key -tls-ca ca.pem -tls-crl ca.crl scan
+```
+
 Read a value programmatically:
 
 ```go
