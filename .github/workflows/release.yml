@@ -66,9 +66,116 @@ jobs:
             *.tar.gz
             *.zip
 
+  # The same commands built with the OpenSSL TLS engine (build tag openssl,
+  # package iec62351/ossltls), which adds the IEC 62351-4 native-mode suite
+  # crypto/tls lacks (TLS_DHE_RSA_WITH_AES_128_GCM_SHA256). cgo needs a
+  # native toolchain, so each platform builds on its own runner. OpenSSL is
+  # linked statically: the binaries need no libssl, Homebrew or DLLs.
+  build-openssl:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04: glibc 2.35, so the binaries run on any newer distribution.
+          - { os: ubuntu-22.04, goos: linux, goarch: amd64 }
+          - { os: ubuntu-22.04-arm, goos: linux, goarch: arm64 }
+          - { os: macos-14, goos: darwin, goarch: arm64 }
+          - { os: windows-latest, goos: windows, goarch: amd64 }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # MSYS2's MINGW64 shell on Windows (gcc and OpenSSL for cgo).
+        shell: ${{ matrix.goos == 'windows' && 'msys2 {0}' || 'bash' }}
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - if: matrix.goos == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit # keeps setup-go's Go on PATH
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-openssl mingw-w64-x86_64-pkgconf zip
+
+      - name: OpenSSL (static) for cgo
+        run: |
+          case "${{ matrix.goos }}" in
+            linux)
+              sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+              libdir="/usr/lib/$(gcc -dumpmachine)"; incdir=/usr/include; extra="-ldl -pthread" ;;
+            darwin)
+              brew list openssl@3 >/dev/null 2>&1 || brew install openssl@3
+              prefix="$(brew --prefix openssl@3)"
+              libdir="$prefix/lib"; incdir="$prefix/include"; extra="" ;;
+            windows)
+              libdir=/mingw64/lib; incdir=/mingw64/include
+              extra="-lws2_32 -lgdi32 -lcrypt32 -luser32 -ladvapi32 -lbcrypt" ;;
+          esac
+          test -f "$libdir/libssl.a" && test -f "$libdir/libcrypto.a"
+          # pkg-config files naming the static archives, so the cgo directive
+          # "#cgo pkg-config: libssl libcrypto" links them, not shared ones.
+          pc="$RUNNER_TEMP/openssl-static"
+          mkdir -p "$pc"
+          printf 'Name: libcrypto\nDescription: OpenSSL libcrypto (static)\nVersion: 3\nCflags: -I%s\nLibs: %s/libcrypto.a %s\n' \
+            "$incdir" "$libdir" "$extra" > "$pc/libcrypto.pc"
+          printf 'Name: libssl\nDescription: OpenSSL libssl (static)\nVersion: 3\nRequires: libcrypto\nCflags: -I%s\nLibs: %s/libssl.a\n' \
+            "$incdir" "$libdir" > "$pc/libssl.pc"
+          pcdir="$pc"
+          [ "${{ matrix.goos }}" = windows ] && pcdir="$(cygpath -m "$pc")"
+          echo "PKG_CONFIG_LIBDIR=$pcdir" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$pcdir" >> "$GITHUB_ENV"
+
+      - name: Test the OpenSSL engine
+        run: go test -tags openssl ./iec62351/ossltls ./mms
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          ext=""
+          [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
+          for cmd in cmd/*/; do
+            name=$(basename "$cmd")
+            go build -tags openssl -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
+          done
+
+      - name: Check OpenSSL is linked statically
+        run: |
+          bin=dist/ied-client
+          case "${{ matrix.goos }}" in
+            linux) deps=$(ldd "$bin") ;;
+            darwin) deps=$(otool -L "$bin") ;;
+            windows) bin=dist/ied-client.exe; deps=$(objdump -p "$bin" | grep 'DLL Name') ;;
+          esac
+          echo "$deps"
+          if echo "$deps" | grep -Ei 'libssl|libcrypto'; then
+            echo "::error::OpenSSL is linked dynamically"; exit 1
+          fi
+          "$bin" -h 2>&1 | grep -q -- -tls-openssl
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME//\//-}"
+          archive="go-iec61850_${version}_${{ matrix.goos }}_${{ matrix.goarch }}_openssl"
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "../${archive}.zip" ./*
+          else
+            tar czf "../${archive}.tar.gz" ./*
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-iec61850_${{ matrix.goos }}_${{ matrix.goarch }}_openssl
+          path: |
+            *.tar.gz
+            *.zip
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, build-openssl]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
