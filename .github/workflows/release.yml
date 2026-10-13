@@ -69,8 +69,10 @@ jobs:
   # The same commands built with the OpenSSL TLS engine (build tag openssl,
   # package iec62351/ossltls), which adds the IEC 62351-4 native-mode suite
   # crypto/tls lacks (TLS_DHE_RSA_WITH_AES_128_GCM_SHA256). cgo needs a
-  # native toolchain, so each platform builds on its own runner. OpenSSL is
-  # linked statically: the binaries need no libssl, Homebrew or DLLs.
+  # native toolchain, so each platform builds on its own runner. On Linux and
+  # macOS OpenSSL is linked statically, so the binaries need no libssl or
+  # Homebrew. MSYS2 ships only import libraries for OpenSSL, so the Windows
+  # archive carries the OpenSSL DLLs next to the executables.
   build-openssl:
     strategy:
       fail-fast: false
@@ -112,12 +114,13 @@ jobs:
               libdir="$prefix/lib"; incdir="$prefix/include"; extra="" ;;
             windows)
               # Go runs gcc and pkg-config as Windows programs: pin MSYS2's
-              # (the image also has Strawberry Perl's) and give them
-              # Windows paths, which they understand and /mingw64 they do not.
-              libdir="$(cygpath -m /mingw64/lib)"; incdir="$(cygpath -m /mingw64/include)"
-              extra="-lws2_32 -lgdi32 -lcrypt32 -luser32 -ladvapi32 -lbcrypt"
+              # (the image also has Strawberry Perl's). MSYS2's OpenSSL
+              # libraries are import libraries, so this links the DLLs,
+              # which the Build step bundles.
               echo "CC=$(cygpath -m /mingw64/bin/gcc.exe)" >> "$GITHUB_ENV"
-              echo "PKG_CONFIG=$(cygpath -m /mingw64/bin/pkg-config.exe)" >> "$GITHUB_ENV" ;;
+              echo "PKG_CONFIG=$(cygpath -m /mingw64/bin/pkg-config.exe)" >> "$GITHUB_ENV"
+              pkg-config --cflags --libs libssl
+              exit 0 ;;
           esac
           test -f "$libdir/libssl.a" && test -f "$libdir/libcrypto.a"
           # pkg-config files naming the static archives, so the cgo directive
@@ -146,20 +149,39 @@ jobs:
             name=$(basename "$cmd")
             go build -tags openssl -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
           done
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # Bundle every MinGW DLL the executables need (OpenSSL and its
+            # dependencies), so the archive runs without MSYS2.
+            for exe in dist/*.exe; do
+              ldd "$exe" | awk '$3 ~ /^\/mingw64\// {print $3}'
+            done | sort -u | while read -r dll; do cp "$dll" dist/; done
+            ls dist
+          fi
 
-      - name: Check OpenSSL is linked statically
+      - name: Check how OpenSSL is linked
         run: |
           bin=dist/ied-client
           case "${{ matrix.goos }}" in
             linux) deps=$(ldd "$bin") ;;
             darwin) deps=$(otool -L "$bin") ;;
-            windows) bin=dist/ied-client.exe; deps=$(objdump -p "$bin" | grep 'DLL Name') ;;
+            windows) bin=dist/ied-client.exe ;;
           esac
-          echo "$deps"
-          if echo "$deps" | grep -Ei 'libssl|libcrypto'; then
-            echo "::error::OpenSSL is linked dynamically"; exit 1
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # Run with only the system directory on PATH: a DLL missing from
+            # the archive stops the executable from starting.
+            usage=$(PATH=/c/Windows/System32 "$bin" -h 2>&1 || true)
+          else
+            echo "$deps"
+            if echo "$deps" | grep -Ei 'libssl|libcrypto'; then
+              echo "::error::OpenSSL is linked dynamically"; exit 1
+            fi
+            usage=$("$bin" -h 2>&1 || true)
           fi
-          "$bin" -h 2>&1 | grep -q -- -tls-openssl
+          # Captured first: grep -q on a pipe would end the program with SIGPIPE.
+          if ! printf '%s\n' "$usage" | grep -q -- -tls-openssl; then
+            printf '%s\n' "$usage"
+            echo "::error::ied-client does not run or lacks -tls-openssl"; exit 1
+          fi
 
       - name: Package
         run: |
