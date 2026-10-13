@@ -50,7 +50,7 @@ jobs:
 
       - name: Package
         run: |
-          version="${GITHUB_REF_NAME}"
+          version="${GITHUB_REF_NAME//\//-}"
           archive="go-iec61850_${version}_${GOOS}_${GOARCH}"
           cd dist
           if [ "$GOOS" = "windows" ]; then
@@ -111,8 +111,13 @@ jobs:
               prefix="$(brew --prefix openssl@3)"
               libdir="$prefix/lib"; incdir="$prefix/include"; extra="" ;;
             windows)
-              libdir=/mingw64/lib; incdir=/mingw64/include
-              extra="-lws2_32 -lgdi32 -lcrypt32 -luser32 -ladvapi32 -lbcrypt" ;;
+              # Go runs gcc and pkg-config as Windows programs: pin MSYS2's
+              # (the image also has Strawberry Perl's) and give them
+              # Windows paths, which they understand and /mingw64 they do not.
+              libdir="$(cygpath -m /mingw64/lib)"; incdir="$(cygpath -m /mingw64/include)"
+              extra="-lws2_32 -lgdi32 -lcrypt32 -luser32 -ladvapi32 -lbcrypt"
+              echo "CC=$(cygpath -m /mingw64/bin/gcc.exe)" >> "$GITHUB_ENV"
+              echo "PKG_CONFIG=$(cygpath -m /mingw64/bin/pkg-config.exe)" >> "$GITHUB_ENV" ;;
           esac
           test -f "$libdir/libssl.a" && test -f "$libdir/libcrypto.a"
           # pkg-config files naming the static archives, so the cgo directive
@@ -127,6 +132,7 @@ jobs:
           [ "${{ matrix.goos }}" = windows ] && pcdir="$(cygpath -m "$pc")"
           echo "PKG_CONFIG_LIBDIR=$pcdir" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$pcdir" >> "$GITHUB_ENV"
+          PKG_CONFIG_LIBDIR="$pcdir" PKG_CONFIG_PATH="$pcdir" pkg-config --cflags --libs libssl
 
       - name: Test the OpenSSL engine
         run: go test -tags openssl ./iec62351/ossltls ./mms
