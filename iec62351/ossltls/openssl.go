@@ -9,12 +9,105 @@ package ossltls
 #include <openssl/x509.h>
 #include <stdlib.h>
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L && !defined(DD_OPENSSL_V1)
+#error "these are OpenSSL 1.0.2 headers: build with -tags openssl,openssl_v1"
+#elif OPENSSL_VERSION_NUMBER >= 0x10100000L && defined(DD_OPENSSL_V1)
+#error "the build tag openssl_v1 needs OpenSSL 1.0.2: point pkg-config at it"
+#endif
+
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+// OpenSSL 1.0.2, the last release with the static-DH suites: the engine
+// "openssl-v1". It needs explicit initialisation and locking callbacks, and
+// names some functions differently.
+#define DD_LEGACY 1
+#include <openssl/bn.h>
+#include <openssl/dh.h>
+#include <pthread.h>
+
+static pthread_mutex_t *dd_locks;
+static void dd_lock(int mode, int n, const char *file, int line) {
+	(void)file; (void)line;
+	if (mode & CRYPTO_LOCK) pthread_mutex_lock(&dd_locks[n]);
+	else pthread_mutex_unlock(&dd_locks[n]);
+}
+static void dd_thread_id(CRYPTO_THREADID *id) { CRYPTO_THREADID_set_numeric(id, (unsigned long)pthread_self()); }
+static int dd_init(void) {
+	SSL_library_init();
+	SSL_load_error_strings();
+	int n = CRYPTO_num_locks();
+	dd_locks = OPENSSL_malloc(n * sizeof(pthread_mutex_t));
+	if (!dd_locks) return 0;
+	for (int i = 0; i < n; i++) pthread_mutex_init(&dd_locks[i], NULL);
+	CRYPTO_THREADID_set_callback(dd_thread_id);
+	CRYPTO_set_locking_callback(dd_lock);
+	return 1;
+}
+static const char *dd_version(void) { return SSLeay_version(SSLEAY_VERSION); }
+static int dd_cipher_id(const SSL_CIPHER *c) { return SSL_CIPHER_get_id(c) & 0xFFFF; }
+#define SSL_get1_peer_certificate SSL_get_peer_certificate
+#ifndef TLS1_3_VERSION
+#define TLS1_3_VERSION 0x0304
+#endif
+
+// 1.0.2 cannot switch renegotiation off. The info callback marks a
+// handshake starting after the first completed (app data 1, then 2), and
+// the engine drops the connection before anything of it is sent. App data
+// 3 exempts a connection (tests renegotiating on purpose).
+static void dd_info_cb(const SSL *cs, int where, int ret) {
+	SSL *s = (SSL *)cs;
+	(void)ret;
+	if ((where & SSL_CB_HANDSHAKE_DONE) && SSL_get_app_data(s) == NULL) SSL_set_app_data(s, (void *)1);
+	else if ((where & SSL_CB_HANDSHAKE_START) && SSL_get_app_data(s) == (void *)1) SSL_set_app_data(s, (void *)2);
+}
+static int dd_renegotiating(SSL *s) { return SSL_get_app_data(s) == (void *)2; }
+static int dd_renegotiate(SSL *s) {
+	SSL_set_app_data(s, (void *)3);
+	return SSL_renegotiate(s) == 1 && SSL_do_handshake(s) <= 0 && SSL_get_error(s, -1) == SSL_ERROR_WANT_READ;
+}
+
+// dd_tmp_dh sets the DHE group: RFC 3526 group 14 (2048 bits), the size
+// OpenSSL 3 picks for a 2048-bit RSA certificate.
+static int dd_tmp_dh(SSL_CTX *ctx) {
+	DH *dh = DH_new();
+	if (!dh) return 0;
+	dh->p = get_rfc3526_prime_2048(NULL);
+	dh->g = BN_new();
+	int r = dh->p && dh->g && BN_set_word(dh->g, 2) && SSL_CTX_set_tmp_dh(ctx, dh) == 1;
+	DH_free(dh);
+	return r;
+}
+#else
+#define DD_LEGACY 0
+static int dd_init(void) { return 1; }
+static const char *dd_version(void) { return OpenSSL_version(OPENSSL_VERSION); }
+static int dd_cipher_id(const SSL_CIPHER *c) { return SSL_CIPHER_get_protocol_id(c); }
+static int dd_renegotiating(SSL *s) { (void)s; return 0; } // SSL_OP_NO_RENEGOTIATION
+static int dd_renegotiate(SSL *s) { (void)s; return 0; }
+#endif
+
+static int dd_legacy(void) { return DD_LEGACY; }
+
 // Peer certificates are accepted during the handshake and verified in Go
 // afterwards (iec62351.Options.VerifyPeer).
 static int dd_accept_cb(int ok, X509_STORE_CTX *c) { (void)ok; (void)c; return 1; }
 
 static SSL_CTX *dd_ctx_new(int server, int minv, int maxv, const char *ciphers, const char *suites13,
                            const char *groups, int tickets) {
+#if DD_LEGACY
+	// TLS 1.2 only: 1.0.2 has no TLS 1.3, and the older versions are off.
+	(void)suites13;
+	if (minv > TLS1_2_VERSION || maxv < TLS1_2_VERSION) return NULL;
+	SSL_CTX *ctx = SSL_CTX_new(server ? SSLv23_server_method() : SSLv23_client_method());
+	if (!ctx) return NULL;
+	SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 | SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1);
+	if (SSL_CTX_set_cipher_list(ctx, ciphers) != 1 || SSL_CTX_set1_curves_list(ctx, groups) != 1 ||
+	    SSL_CTX_set_ecdh_auto(ctx, 1) != 1 || !dd_tmp_dh(ctx)) {
+		SSL_CTX_free(ctx);
+		return NULL;
+	}
+	SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
+	SSL_CTX_set_info_callback(ctx, dd_info_cb);
+#else
 	SSL_CTX *ctx = SSL_CTX_new(server ? TLS_server_method() : TLS_client_method());
 	if (!ctx) return NULL;
 	if (SSL_CTX_set_min_proto_version(ctx, minv) != 1 || SSL_CTX_set_max_proto_version(ctx, maxv) != 1 ||
@@ -25,6 +118,7 @@ static SSL_CTX *dd_ctx_new(int server, int minv, int maxv, const char *ciphers, 
 	}
 	SSL_CTX_set_dh_auto(ctx, 1);
 	SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION | SSL_OP_CIPHER_SERVER_PREFERENCE);
+#endif
 	if (!tickets) SSL_CTX_set_options(ctx, SSL_OP_NO_TICKET);
 	SSL_CTX_set_verify(ctx, server ? (SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT) : SSL_VERIFY_PEER,
 	                   dd_accept_cb);
@@ -45,6 +139,27 @@ static int dd_ctx_key(SSL_CTX *ctx, const unsigned char *der, long n) {
 	int r = SSL_CTX_use_PrivateKey(ctx, k);
 	EVP_PKEY_free(k);
 	return r == 1 && SSL_CTX_check_private_key(ctx) == 1;
+}
+
+// dd_ctx_dh adds the server's static-DH certificate and its PKCS #3 key,
+// which OpenSSL 1.0.2 keeps beside the RSA identity and serves the
+// TLS_DH_RSA_* suites with. Chain certificates added next go with it.
+static int dd_ctx_dh(SSL_CTX *ctx, const unsigned char *cert, long cn, const unsigned char *key, long kn) {
+#if DD_LEGACY
+	X509 *x = d2i_X509(NULL, &cert, cn);
+	if (!x) return 0;
+	int r = SSL_CTX_use_certificate(ctx, x);
+	X509_free(x);
+	if (r != 1) return 0;
+	EVP_PKEY *k = d2i_AutoPrivateKey(NULL, &key, kn);
+	if (!k) return 0;
+	r = SSL_CTX_use_PrivateKey(ctx, k);
+	EVP_PKEY_free(k);
+	return r == 1 && SSL_CTX_check_private_key(ctx) == 1;
+#else
+	(void)ctx; (void)cert; (void)cn; (void)key; (void)kn;
+	return 0;
+#endif
 }
 
 static SSL *dd_ssl_new(SSL_CTX *ctx, int server, const char *sni) {
@@ -89,7 +204,7 @@ static size_t dd_pending(SSL *s) { return BIO_ctrl_pending(SSL_get_wbio(s)); }
 
 static int dd_suite(SSL *s) {
 	const SSL_CIPHER *c = SSL_get_current_cipher(s);
-	return c ? SSL_CIPHER_get_protocol_id(c) : 0;
+	return c ? dd_cipher_id(c) : 0;
 }
 
 // dd_peer returns the DER of the peer's certificate i (0 the leaf, then
@@ -130,6 +245,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 	"io"
@@ -144,6 +261,18 @@ import (
 
 // Available reports whether this build includes the OpenSSL engine.
 func Available() bool { return true }
+
+// Legacy reports whether the build links OpenSSL 1.0.2 (the engine
+// "openssl-v1"): TLS 1.2 only, and in native mode the static-DH suites.
+func Legacy() bool { return C.dd_legacy() == 1 }
+
+// Version is the linked OpenSSL's version string.
+func Version() string { return C.GoString(C.dd_version()) }
+
+var (
+	initOnce sync.Once
+	initErr  error
+)
 
 // Context is an OpenSSL configuration for one role, shared by every
 // connection made with it.
@@ -164,6 +293,14 @@ func NewContext(o iec62351.Options, role Role) (*Context, error) {
 
 // newContext is NewContext with the TLS 1.2 cipher list overridden (tests).
 func newContext(o iec62351.Options, role Role, ciphers12 string) (*Context, error) {
+	initOnce.Do(func() {
+		if C.dd_init() != 1 {
+			initErr = errors.New("ossltls: cannot initialise OpenSSL")
+		}
+	})
+	if initErr != nil {
+		return nil, initErr
+	}
 	if len(o.Certificates) == 0 || len(o.Certificates[0].Certificate) == 0 {
 		return nil, errors.New("ossltls: Options.Certificates is required")
 	}
@@ -180,6 +317,15 @@ func newContext(o iec62351.Options, role Role, ciphers12 string) (*Context, erro
 			return nil, errors.New("ossltls: NativeMode is a TLS 1.2 profile")
 		}
 		maxv, ciphers = C.TLS1_2_VERSION, nativeCiphers
+	}
+	if Legacy() {
+		if o.TLS13Only {
+			return nil, fmt.Errorf("ossltls: %s has no TLS 1.3", Version())
+		}
+		maxv = C.TLS1_2_VERSION
+		if o.NativeMode {
+			ciphers = nativeCiphersV1
+		}
 	}
 	if ciphers12 != "" {
 		ciphers = ciphers12
@@ -218,6 +364,84 @@ func newContext(o iec62351.Options, role Role, ciphers12 string) (*Context, erro
 		return nil, fmt.Errorf("ossltls: private key refused by OpenSSL or does not match the certificate: %s", lastError())
 	}
 	return c, nil
+}
+
+// SetStaticDH adds a server's certificate with a fixed Diffie-Hellman key,
+// for the static-DH suites of IEC 62351-4 Table 10 (TLS_DH_RSA_*). chain is
+// the certificate and its intermediates, DER, leaf first; key is its
+// private key, PKCS #8 DER. Both must be PKCS #3 (dhKeyAgreement): OpenSSL
+// 1.0.2 serves no X9.42 (dhpublicnumber) key. It needs a Legacy build and a
+// Server context, and keeps the RSA identity for the other suites.
+func (c *Context) SetStaticDH(chain [][]byte, key []byte) error {
+	if !Legacy() {
+		return fmt.Errorf("ossltls: static DH needs OpenSSL 1.0.2 (engine openssl-v1); this build links %s", Version())
+	}
+	if c.role != Server {
+		return errors.New("ossltls: a static-DH certificate is for the server")
+	}
+	if len(chain) == 0 || len(chain[0]) == 0 || len(key) == 0 {
+		return errors.New("ossltls: static DH needs a certificate and a key")
+	}
+	leaf, err := x509.ParseCertificate(chain[0])
+	if err != nil {
+		return fmt.Errorf("ossltls: static-DH certificate: %w", err)
+	}
+	bits, ok := iec62351.DHPrimeBits(leaf)
+	if !ok {
+		return fmt.Errorf("ossltls: static-DH certificate %s holds no Diffie-Hellman key", leaf.Subject)
+	}
+	if bits < iec62351.MinDHBits {
+		return fmt.Errorf("ossltls: static-DH certificate %s: %d-bit prime, want %d or more", leaf.Subject, bits, iec62351.MinDHBits)
+	}
+	if alg, ok := keyAlgorithm(leaf.RawSubjectPublicKeyInfo, false); !ok || !alg.Equal(oidDHKeyAgreement) {
+		return fmt.Errorf("ossltls: static-DH certificate %s: the key must be PKCS #3 DH (dhKeyAgreement), not X9.42", leaf.Subject)
+	}
+	if alg, ok := keyAlgorithm(key, true); !ok || !alg.Equal(oidDHKeyAgreement) {
+		return errors.New("ossltls: static-DH key: want a PKCS #8 PKCS #3 DH (dhKeyAgreement) private key")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ctx == nil {
+		return errors.New("ossltls: context closed")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	if C.dd_ctx_dh(c.ctx, (*C.uchar)(unsafe.Pointer(&chain[0][0])), C.long(len(chain[0])),
+		(*C.uchar)(unsafe.Pointer(&key[0])), C.long(len(key))) != 1 {
+		return fmt.Errorf("ossltls: static-DH certificate or key refused, or they do not match: %s", lastError())
+	}
+	for i, der := range chain[1:] {
+		if len(der) == 0 || C.dd_ctx_cert(c.ctx, (*C.uchar)(unsafe.Pointer(&der[0])), C.long(len(der)), 1) != 1 {
+			return fmt.Errorf("ossltls: static-DH chain certificate %d refused: %s", i+1, lastError())
+		}
+	}
+	return nil
+}
+
+var oidDHKeyAgreement = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 3, 1}
+
+// keyAlgorithm returns the algorithm of a SubjectPublicKeyInfo or, with
+// private, of a PKCS #8 PrivateKeyInfo.
+func keyAlgorithm(der []byte, private bool) (asn1.ObjectIdentifier, bool) {
+	if private {
+		var k struct {
+			Version   int
+			Algorithm pkix.AlgorithmIdentifier
+			Key       []byte
+		}
+		if _, err := asn1.Unmarshal(der, &k); err != nil {
+			return nil, false
+		}
+		return k.Algorithm.Algorithm, true
+	}
+	var k struct {
+		Algorithm pkix.AlgorithmIdentifier
+		Key       asn1.BitString
+	}
+	if _, err := asn1.Unmarshal(der, &k); err != nil {
+		return nil, false
+	}
+	return k.Algorithm.Algorithm, true
 }
 
 func lastError() string {
@@ -372,6 +596,35 @@ func opError(what string, se C.int, detail string) error {
 	return fmt.Errorf("ossltls: %s: %s", what, detail)
 }
 
+// ErrRenegotiation reports a peer starting a renegotiation, which the
+// engine refuses by dropping the connection (IEC 62351-4 6.2.4 leaves
+// rekeying to the application layer).
+var ErrRenegotiation = errors.New("ossltls: peer started a renegotiation; connection dropped")
+
+// refuseRenegotiation, called with c.mu held after an operation, drops the
+// connection when that operation started a renegotiation (OpenSSL 1.0.2,
+// which cannot refuse one itself), before any of it is sent. It releases
+// c.mu when it returns an error.
+func (c *Conn) refuseRenegotiation() error {
+	if c.ssl == nil || C.dd_renegotiating(c.ssl) != 1 {
+		return nil
+	}
+	c.mu.Unlock()
+	c.raw.Close()
+	return ErrRenegotiation
+}
+
+// renegotiate starts a renegotiation from this end, exempt from the
+// refusal (tests).
+func (c *Conn) renegotiate() error {
+	c.mu.Lock()
+	if c.ssl == nil || C.dd_renegotiate(c.ssl) != 1 {
+		c.mu.Unlock()
+		return errors.New("ossltls: cannot start a renegotiation")
+	}
+	return c.flush()
+}
+
 // HandshakeContext runs the handshake if it has not run, then verifies the
 // peer with the profile's checks.
 func (c *Conn) HandshakeContext(ctx context.Context) error {
@@ -475,6 +728,9 @@ func (c *Conn) Read(b []byte) (int, error) {
 	for {
 		c.mu.Lock()
 		n, se, detail := c.op(opRead, b)
+		if err := c.refuseRenegotiation(); err != nil {
+			return 0, err
+		}
 		if err := c.flush(); err != nil && n <= 0 {
 			return 0, err
 		}
@@ -505,6 +761,9 @@ func (c *Conn) Write(b []byte) (int, error) {
 		chunk := b[:min(len(b), 16<<10)]
 		c.mu.Lock()
 		n, se, detail := c.op(opWrite, chunk)
+		if err := c.refuseRenegotiation(); err != nil {
+			return total, err
+		}
 		if err := c.flush(); err != nil {
 			return total, err
 		}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/iec62351"
+	"github.com/dscsystems/go-iec61850/iec62351/pki/pkitest"
 )
 
 type pki struct {
@@ -284,7 +285,11 @@ func TestProfile3UsesTLS13(t *testing.T) {
 	if err := <-errc; err != nil {
 		t.Fatalf("server: %v", err)
 	}
-	if v := state(c).Version; v != tls.VersionTLS13 {
+	want := uint16(tls.VersionTLS13)
+	if Legacy() {
+		want = tls.VersionTLS12 // OpenSSL 1.0.2 has no TLS 1.3
+	}
+	if v := state(c).Version; v != want {
 		t.Fatalf("version %s", tls.VersionName(v))
 	}
 	echo(t, c, 10<<10)
@@ -373,5 +378,184 @@ func TestHandshakeContextCancelled(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("cancellation took %v", d)
+	}
+}
+
+// staticDHServer is a native-mode server with an RSA identity and a
+// static-DH certificate from the same CA.
+func staticDHServer(t *testing.T) (srv endpoint, client tls.Certificate, roots *x509.CertPool, dh *pkitest.StaticDHLeaf) {
+	ca := pkitest.NewRoot("static DH CA", pkitest.RSA2048)
+	roots = x509.NewCertPool()
+	roots.AddCert(ca.Cert)
+	// The RSA identities come from the same CA.
+	p := &pki{ca: ca.Cert, caKey: ca.Key, serial: 1}
+	identity := func(cn string, ips ...net.IP) tls.Certificate { c, _ := p.leaf(t, cn, ips...); return c }
+	dh = ca.NewStaticDHLeaf("server", net.IPv4(127, 0, 0, 1))
+	ctx, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{identity("server", net.IPv4(127, 0, 0, 1))}, Roots: roots,
+		NativeMode: true}, Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ctx.Close)
+	if err := ctx.SetStaticDH([][]byte{dh.DER}, dh.Key); err != nil {
+		t.Fatal(err)
+	}
+	srv = func(raw net.Conn) (net.Conn, error) { return ctx.Handshake(context.Background(), raw) }
+	return srv, identity("client"), roots, dh
+}
+
+func TestStaticDH(t *testing.T) {
+	if !Legacy() {
+		t.Skip("static DH needs a build against OpenSSL 1.0.2")
+	}
+	for _, suite := range []struct {
+		name string
+		id   uint16
+	}{{"DH-RSA-AES128-GCM-SHA256", 0x00A0}, {"DH-RSA-AES256-GCM-SHA384", 0x00A1}, {"DH-RSA-AES128-SHA", 0x0031}} {
+		t.Run(SuiteName(suite.id), func(t *testing.T) {
+			srv, cc, roots, dh := staticDHServer(t)
+			cctx, err := newContext(iec62351.Options{Certificates: []tls.Certificate{cc}, Roots: roots, NativeMode: true,
+				ServerName: "127.0.0.1"}, Client, suite.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(cctx.Close)
+			c, errc, err := run(t, srv, func(raw net.Conn) (net.Conn, error) { return cctx.Handshake(context.Background(), raw) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := <-errc; err != nil {
+				t.Fatalf("server: %v", err)
+			}
+			st := state(c)
+			if st.CipherSuite != suite.id {
+				t.Fatalf("negotiated %s (%#04x)", SuiteName(st.CipherSuite), st.CipherSuite)
+			}
+			if len(st.PeerCertificates) == 0 || !bytes.Equal(st.PeerCertificates[0].Raw, dh.DER) {
+				t.Fatal("the server did not present its static-DH certificate")
+			}
+			echo(t, c, 50<<10)
+		})
+	}
+
+	// With every native-mode suite offered, the server still prefers
+	// forward secrecy.
+	srv, cc, roots, _ := staticDHServer(t)
+	c, errc, err := run(t, srv, osslEnd(t, iec62351.Options{Certificates: []tls.Certificate{cc}, Roots: roots,
+		NativeMode: true, ServerName: "127.0.0.1"}, Client))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	if s := state(c).CipherSuite; s != tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 {
+		t.Fatalf("negotiated %s", SuiteName(s))
+	}
+}
+
+func TestSetStaticDHChecks(t *testing.T) {
+	p := newPKI(t)
+	sc, _ := p.leaf(t, "server")
+	ctx, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{sc}, Roots: p.pool(), NativeMode: true}, Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctx.Close()
+	ca := pkitest.NewRoot("static DH CA", pkitest.RSA2048)
+	dh := ca.NewStaticDHLeaf("server")
+	if !Legacy() {
+		if err := ctx.SetStaticDH([][]byte{dh.DER}, dh.Key); err == nil {
+			t.Fatalf("OpenSSL %s accepted a static-DH certificate", Version())
+		}
+		return
+	}
+	rsaKey, _ := x509.MarshalPKCS8PrivateKey(sc.PrivateKey)
+	if err := ctx.SetStaticDH([][]byte{sc.Certificate[0]}, rsaKey); err == nil {
+		t.Fatal("accepted an RSA certificate as static DH")
+	}
+	other := ca.NewStaticDHLeaf("server")
+	if err := ctx.SetStaticDH([][]byte{dh.DER}, other.Key); err == nil {
+		t.Fatal("accepted a DH key that does not match the certificate")
+	}
+	cli, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{sc}, Roots: p.pool()}, Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	if err := cli.SetStaticDH([][]byte{dh.DER}, dh.Key); err == nil {
+		t.Fatal("a client context accepted a static-DH certificate")
+	}
+}
+
+// OpenSSL 1.0.2 cannot switch renegotiation off; the engine drops a
+// connection whose peer starts one. (OpenSSL 3 refuses it itself.)
+func TestRenegotiationRefused(t *testing.T) {
+	if !Legacy() {
+		t.Skip("OpenSSL 3 refuses renegotiation with SSL_OP_NO_RENEGOTIATION")
+	}
+	p := newPKI(t)
+	sc, _ := p.leaf(t, "server", net.IPv4(127, 0, 0, 1))
+	cc, _ := p.leaf(t, "client")
+	sctx, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{sc}, Roots: p.pool(), NativeMode: true}, Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sctx.Close()
+	cctx, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{cc}, Roots: p.pool(), NativeMode: true,
+		ServerName: "127.0.0.1"}, Client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cctx.Close()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	srvErr := make(chan error, 1)
+	go func() {
+		raw, err := ln.Accept()
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		c, err := sctx.Handshake(context.Background(), raw)
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 64)
+		for {
+			if _, err := c.Read(buf); err != nil {
+				srvErr <- err
+				return
+			}
+		}
+	}()
+	raw, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc, err := cctx.Handshake(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer nc.Close()
+	c := nc.(*Conn)
+	if _, err := c.Write([]byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.renegotiate(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-srvErr:
+		if !errors.Is(err, ErrRenegotiation) {
+			t.Fatalf("server: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server did not drop the renegotiating client")
 	}
 }

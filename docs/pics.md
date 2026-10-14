@@ -354,7 +354,7 @@ a writable one.
 | IEC 62351-9 TISSUEs (none in force; accepted or editorial) | — | — | 121: auth values 2 = HMAC-SHA256-128, 3 = HMAC-SHA256, as implemented. 149: HASH(2)–(4) take Ni_b/Nr_b without the payload header, as implemented. 170: TEK integrity and encryption keys are drawn independently, as implemented. 123: a member whose HASH check fails sends nothing to the key server, as implemented. 169: `61850_UDP_Tunnel` moves to 1.0.62351.9.61850.8.1.3 (group OIDs are the application's). 168 (open): a fresh, clear 16-octet IV per message would replace the RFC 2409 IV chaining implemented here; not adopted until published. 160: HMAC-SHA-384/512 (auth 6/7) not implemented |
 | IEC 62351-4 E2E security, native mode (OSI) | Y | Y | packages `iec62351/e2e`, `iec62351/e2e/osi`; see 8.1 for the declared profile |
 | IEC 62351-4 A-profile (compatibility mode) | Y | Y | package `iec62351/aprofile`; see 8.1 |
-| IEC 62351-4 native-mode TLS profile (Table 10) | P | P | `iec62351.Options.NativeMode` on crypto/tls, or on OpenSSL with package `iec62351/ossltls` (build tag `openssl`, cgo), which adds DHE_RSA; see 8.1 |
+| IEC 62351-4 native-mode TLS profile (Table 10) | P | P | `iec62351.Options.NativeMode` on crypto/tls, or on OpenSSL with package `iec62351/ossltls` (build tag `openssl`, cgo), which adds DHE_RSA, and on OpenSSL 1.0.2 (tags `openssl,openssl_v1`) the static DH_RSA suites; see 8.1 |
 | IEC 62351-6 on Ethernet | N | N | |
 | IEC 62351-8 role-based access control | N | N | the server offers write and control hooks (`OnWrite`, `OnControl`) for an application's own policy |
 
@@ -372,11 +372,11 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 | T9 Use of authenticated encryption | N | N | not built (WP9). TISSUE 95 makes AE and non-AE mandatory for a server, so server conformance to Table 9 is not claimed (R-32) |
 | T9 Non-use of AE | Y | Y | clear transfer; E2E encryption (AES-CBC) not yet implemented |
 | T10 TLS_RSA_WITH_AES_128_CBC_SHA256 0x003C (m) | Y | Y | `NativeMode`, both engines; offered last (no forward secrecy) |
-| T10 TLS_DH_RSA_WITH_AES_128_GCM_SHA256 0x00A0 (m) | N | N | static DH: not implemented by Go, and removed from OpenSSL in 1.1.0. Likewise the optional 0x0031 and 0x00A1 |
+| T10 TLS_DH_RSA_WITH_AES_128_GCM_SHA256 0x00A0 (m) | Y | Y | static DH, likewise the optional 0x00A1 and 0x0031: only in a build against OpenSSL 1.0.2 (tags `openssl,openssl_v1`); not implemented by Go, and removed from OpenSSL in 1.1.0. A server needs a PKCS #3 DH certificate (`ossltls.Context.SetStaticDH`); offered after the forward-secret suites, before 0x003C |
 | T10 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 0x009E (m; printed 0xC0,0x9E) | Y | Y | OpenSSL engine only (`ossltls`, `ied-client -tls-openssl`); not implemented by Go crypto/tls. Group from `SSL_CTX_set_dh_auto` (2048-bit or larger) |
 | T10 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 0xC02B (m; printed 0xC0,0x23) | Y | Y | |
 | T10 ECDHE_RSA AES-128/256-GCM, ECDHE_ECDSA AES-256-GCM (o) | Y | Y | AES-256 printed 0xC0,0x24, IANA 0xC02C. Both engines prefer forward-secret suites: ECDHE, then DHE, then RSA key exchange |
-| TLS renegotiation ([B] 6.2.4) | N | N | not implemented by Go; refused by the OpenSSL engine (`SSL_OP_NO_RENEGOTIATION`); E2E rekeys at the application layer |
+| TLS renegotiation ([B] 6.2.4) | N | N | not implemented by Go; refused by the OpenSSL engine (`SSL_OP_NO_RENEGOTIATION`; on OpenSSL 1.0.2, which lacks it, the connection is dropped, `ossltls.ErrRenegotiation`); E2E rekeys at the application layer |
 | T11 rsaEncryption, secp256r1 | Y | Y | |
 | T11 brainpoolP256r1 (m) | N | N | not supported by Go `crypto/x509` |
 | T11 sha256WithRSAEncryption, ecdsa-with-SHA256 | Y | Y | |

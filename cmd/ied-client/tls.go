@@ -45,7 +45,7 @@ func (f *tlsFlags) register(fs *flag.FlagSet) {
 	fs.BoolVar(&f.NativeMode, "tls-native", false, "IEC 62351-4 native-mode TLS profile instead of IEC 62351-3")
 	fs.BoolVar(&f.AllowStaleCRL, "tls-allow-stale-crl", false, "accept a CRL past its next update")
 	fs.BoolVar(&f.OpenSSL, "tls-openssl", false,
-		"run TLS on OpenSSL, for the suites crypto/tls lacks (DHE_RSA_AES_128_GCM in native mode); needs a build with -tags openssl")
+		"run TLS on OpenSSL, for the suites crypto/tls lacks (DHE_RSA_AES_128_GCM in native mode, and DH_RSA on OpenSSL 1.0.2); needs a build with -tags openssl, or openssl,openssl_v1 for OpenSSL 1.0.2")
 }
 
 func (f *tlsFlags) enabled() bool { return f.Cert != "" }

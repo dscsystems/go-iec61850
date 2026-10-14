@@ -1,12 +1,19 @@
 // Package ossltls is a TLS engine for the IEC 62351 profiles built on
 // OpenSSL, for the cipher suites Go's crypto/tls does not implement: above
 // all TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 (0x009E), mandatory in the IEC
-// 62351-4 native-mode profile (Table 10). It needs cgo, OpenSSL 3 (libssl
+// 62351-4 native-mode profile (Table 10). It needs cgo, OpenSSL (libssl
 // and libcrypto, found with pkg-config) and the build tag openssl; without
 // them Available reports false and NewContext fails with ErrUnavailable.
 //
-// The static-DH suites of Table 10 (TLS_DH_RSA_*, 0x0031, 0x00A0, 0x00A1)
-// cannot be offered: OpenSSL removed static Diffie-Hellman in 1.1.0.
+// The package builds against OpenSSL 3, or with the build tags
+// openssl,openssl_v1 against OpenSSL 1.0.2 (Legacy, the engine
+// "openssl-v1"): a separate build, since both cannot be linked into one
+// binary. OpenSSL
+// removed static Diffie-Hellman in 1.1.0, so only a 1.0.2 build offers the
+// static-DH suites of Table 10 (TLS_DH_RSA_*, 0x00A0 mandatory, 0x00A1,
+// 0x0031), with the server's DH certificate from Context.SetStaticDH. It
+// has no TLS 1.3. OpenSSL 1.0.2 has been out of support since 2019: use
+// such a build only for a peer that needs these suites.
 //
 // OpenSSL does not parse certificates whose subject is an IEC 62351-4 AE
 // title (an X.520 objectIdentifier attribute), so both ends' TLS
@@ -50,11 +57,21 @@ const (
 	profileCiphers = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:" +
 		"ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
 	tls13Suites = "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384"
-	groups      = "P-256:P-384"
+	// Native mode on OpenSSL 1.0.2 adds the static-DH suites after the
+	// forward-secret ones, before RSA key exchange: DH_RSA_AES_128_GCM
+	// 0x00A0 (m), DH_RSA_AES_256_GCM 0x00A1 and DH_RSA_AES_128_CBC_SHA 0x0031.
+	nativeCiphersV1 = "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES128-GCM-SHA256:" +
+		"ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:" +
+		"DH-RSA-AES128-GCM-SHA256:DH-RSA-AES256-GCM-SHA384:DH-RSA-AES128-SHA:AES128-SHA256"
+	groups = "P-256:P-384"
 )
 
 // NativeModeSuites are the IANA values native mode offers, in order.
 var NativeModeSuites = []uint16{0xC02B, 0xC02F, 0x009E, 0xC02C, 0xC030, 0x003C}
+
+// NativeModeSuitesV1 are the IANA values native mode offers on OpenSSL
+// 1.0.2 (Legacy), in order.
+var NativeModeSuitesV1 = []uint16{0xC02B, 0xC02F, 0x009E, 0xC02C, 0xC030, 0x00A0, 0x00A1, 0x0031, 0x003C}
 
 // SuiteName names a negotiated cipher suite, including those crypto/tls
 // does not know.
@@ -64,6 +81,12 @@ func SuiteName(id uint16) string {
 		return "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"
 	case 0x003C:
 		return "TLS_RSA_WITH_AES_128_CBC_SHA256"
+	case 0x00A0:
+		return "TLS_DH_RSA_WITH_AES_128_GCM_SHA256"
+	case 0x00A1:
+		return "TLS_DH_RSA_WITH_AES_256_GCM_SHA384"
+	case 0x0031:
+		return "TLS_DH_RSA_WITH_AES_128_CBC_SHA"
 	}
 	return tls.CipherSuiteName(id)
 }
