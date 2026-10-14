@@ -64,7 +64,9 @@ since 2019. A separate build links it statically, with the build tags
 `openssl,openssl_v1`: it offers them in native mode, has no TLS 1.3, and a
 server serves them with a certificate holding a PKCS #3 Diffie-Hellman key
 (`ossltls.Context.SetStaticDH`). `iec62351/ossltls/openssl-v1.sh` builds
-OpenSSL 1.0.2u (checksum-verified) for it:
+OpenSSL 1.0.2u (checksum-verified) for it, on Linux or in an MSYS2 MINGW64
+shell on Windows; on Linux, `OPENSSL_V1_CROSS=x86_64-w64-mingw32-`
+cross-compiles it for Windows with MinGW-w64:
 
 ```sh
 iec62351/ossltls/openssl-v1.sh ~/.cache/openssl-1.0.2u

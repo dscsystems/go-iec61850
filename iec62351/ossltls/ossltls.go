@@ -12,8 +12,9 @@
 // removed static Diffie-Hellman in 1.1.0, so only a 1.0.2 build offers the
 // static-DH suites of Table 10 (TLS_DH_RSA_*, 0x00A0 mandatory, 0x00A1,
 // 0x0031), with the server's DH certificate from Context.SetStaticDH. It
-// has no TLS 1.3. OpenSSL 1.0.2 has been out of support since 2019: use
-// such a build only for a peer that needs these suites.
+// has no TLS 1.3. It builds on Linux and, with MinGW-w64, for Windows
+// (openssl-v1.sh builds the library). OpenSSL 1.0.2 has been out of support
+// since 2019: use such a build only for a peer that needs these suites.
 //
 // OpenSSL does not parse certificates whose subject is an IEC 62351-4 AE
 // title (an X.520 objectIdentifier attribute), so both ends' TLS

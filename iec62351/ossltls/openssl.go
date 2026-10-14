@@ -22,22 +22,42 @@ package ossltls
 #define DD_LEGACY 1
 #include <openssl/bn.h>
 #include <openssl/dh.h>
-#include <pthread.h>
 
-static pthread_mutex_t *dd_locks;
+#ifdef _WIN32
+// Windows (MinGW-w64): critical sections and thread IDs, so the binary
+// needs no winpthreads DLL. NOCRYPT keeps wincrypt.h, whose X509_NAME and
+// friends clash with OpenSSL's, out.
+#define WIN32_LEAN_AND_MEAN
+#define NOCRYPT
+#include <windows.h>
+typedef CRITICAL_SECTION dd_mutex;
+#define dd_mutex_init(m) InitializeCriticalSection(m)
+#define dd_mutex_lock(m) EnterCriticalSection(m)
+#define dd_mutex_unlock(m) LeaveCriticalSection(m)
+#define dd_self() ((unsigned long)GetCurrentThreadId())
+#else
+#include <pthread.h>
+typedef pthread_mutex_t dd_mutex;
+#define dd_mutex_init(m) pthread_mutex_init(m, NULL)
+#define dd_mutex_lock(m) pthread_mutex_lock(m)
+#define dd_mutex_unlock(m) pthread_mutex_unlock(m)
+#define dd_self() ((unsigned long)pthread_self())
+#endif
+
+static dd_mutex *dd_locks;
 static void dd_lock(int mode, int n, const char *file, int line) {
 	(void)file; (void)line;
-	if (mode & CRYPTO_LOCK) pthread_mutex_lock(&dd_locks[n]);
-	else pthread_mutex_unlock(&dd_locks[n]);
+	if (mode & CRYPTO_LOCK) dd_mutex_lock(&dd_locks[n]);
+	else dd_mutex_unlock(&dd_locks[n]);
 }
-static void dd_thread_id(CRYPTO_THREADID *id) { CRYPTO_THREADID_set_numeric(id, (unsigned long)pthread_self()); }
+static void dd_thread_id(CRYPTO_THREADID *id) { CRYPTO_THREADID_set_numeric(id, dd_self()); }
 static int dd_init(void) {
 	SSL_library_init();
 	SSL_load_error_strings();
 	int n = CRYPTO_num_locks();
-	dd_locks = OPENSSL_malloc(n * sizeof(pthread_mutex_t));
+	dd_locks = OPENSSL_malloc(n * sizeof(dd_mutex));
 	if (!dd_locks) return 0;
-	for (int i = 0; i < n; i++) pthread_mutex_init(&dd_locks[i], NULL);
+	for (int i = 0; i < n; i++) dd_mutex_init(&dd_locks[i]);
 	CRYPTO_THREADID_set_callback(dd_thread_id);
 	CRYPTO_set_locking_callback(dd_lock);
 	return 1;

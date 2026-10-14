@@ -44,16 +44,47 @@ jobs:
 
   openssl-v1:
     # The same engine on OpenSSL 1.0.2 (tags openssl,openssl_v1): the static
-    # DH_RSA suites of IEC 62351-4 Table 10.
-    runs-on: ubuntu-latest
+    # DH_RSA suites of IEC 62351-4 Table 10. openssl-v1.sh builds it, on
+    # Windows with MSYS2's MinGW-w64 gcc, make and perl.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.os == 'windows-latest' && 'msys2 {0}' || 'bash' }}
+    env:
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.26" }
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit # keeps setup-go's Go on PATH
+          install: >-
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf make perl curl
+      - if: runner.os == 'Windows'
+        # Go runs gcc and pkg-config as Windows programs: pin MSYS2's.
+        run: |
+          echo "CC=$(cygpath -m /mingw64/bin/gcc.exe)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG=$(cygpath -m /mingw64/bin/pkg-config.exe)" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
         with:
-          path: ~/openssl-1.0.2u
+          path: ${{ runner.temp }}/openssl-1.0.2u
           key: openssl-1.0.2u-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('iec62351/ossltls/openssl-v1.sh') }}
-      - run: echo "PKG_CONFIG_LIBDIR=$(iec62351/ossltls/openssl-v1.sh ~/openssl-1.0.2u)" >> "$GITHUB_ENV"
+      - run: echo "PKG_CONFIG_LIBDIR=$(iec62351/ossltls/openssl-v1.sh '${{ runner.temp }}/openssl-1.0.2u')" >> "$GITHUB_ENV"
       - run: go vet -tags openssl,openssl_v1 ./...
-      - run: go test -tags openssl,openssl_v1 -race ./iec62351/... ./mms ./client ./cmd/ied-client
+      - if: runner.os == 'Linux'
+        run: go test -tags openssl,openssl_v1 -race ./iec62351/... ./mms ./client ./cmd/ied-client
+      - if: runner.os == 'Windows'
+        run: go test -tags openssl,openssl_v1 ./iec62351/... ./mms ./client ./cmd/ied-client
+      - if: runner.os == 'Windows'
+        name: The executable needs no MinGW DLL
+        run: |
+          go build -tags openssl,openssl_v1 -o ied-client.exe ./cmd/ied-client
+          ldd ied-client.exe
+          if ldd ied-client.exe | grep -i /mingw64/; then exit 1; fi
