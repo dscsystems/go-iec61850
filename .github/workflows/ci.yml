@@ -41,3 +41,19 @@ jobs:
       - run: sudo apt-get install -y libssl-dev pkg-config && openssl version
       - run: go vet -tags openssl ./...
       - run: go test -tags openssl -race ./iec62351/... ./mms ./client ./cmd/ied-client
+
+  openssl-v1:
+    # The same engine on OpenSSL 1.0.2 (tags openssl,openssl_v1): the static
+    # DH_RSA suites of IEC 62351-4 Table 10.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - uses: actions/cache@v4
+        with:
+          path: ~/openssl-1.0.2u
+          key: openssl-1.0.2u-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('iec62351/ossltls/openssl-v1.sh') }}
+      - run: echo "PKG_CONFIG_LIBDIR=$(iec62351/ossltls/openssl-v1.sh ~/openssl-1.0.2u)" >> "$GITHUB_ENV"
+      - run: go vet -tags openssl,openssl_v1 ./...
+      - run: go test -tags openssl,openssl_v1 -race ./iec62351/... ./mms ./client ./cmd/ied-client

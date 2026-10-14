@@ -13,6 +13,12 @@ import (
 // Available reports whether this build includes the OpenSSL engine.
 func Available() bool { return false }
 
+// Legacy reports false: this build links no OpenSSL.
+func Legacy() bool { return false }
+
+// Version is empty: this build links no OpenSSL.
+func Version() string { return "" }
+
 // Context is unavailable in this build.
 type Context struct{}
 
@@ -34,6 +40,9 @@ func (*Context) Handshake(context.Context, net.Conn) (net.Conn, error) { return 
 
 // Listener panics, as Conn does.
 func (*Context) Listener(net.Listener) net.Listener { panic(ErrUnavailable) }
+
+// SetStaticDH fails: this build has no OpenSSL.
+func (*Context) SetStaticDH([][]byte, []byte) error { return ErrUnavailable }
 
 // Close does nothing.
 func (*Context) Close() {}

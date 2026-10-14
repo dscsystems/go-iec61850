@@ -58,6 +58,20 @@ go build -tags openssl -o ied-client ./cmd/ied-client
   -tls-cert client.pem -tls-key client.key -tls-ca ca.pem scan
 ```
 
+The static-DH suites of the same table (TLS_DH_RSA_*, 0x00A0 mandatory,
+0x00A1, 0x0031) exist only in OpenSSL 1.0.2, which has been out of support
+since 2019. A separate build links it statically, with the build tags
+`openssl,openssl_v1`: it offers them in native mode, has no TLS 1.3, and a
+server serves them with a certificate holding a PKCS #3 Diffie-Hellman key
+(`ossltls.Context.SetStaticDH`). `iec62351/ossltls/openssl-v1.sh` builds
+OpenSSL 1.0.2u (checksum-verified) for it:
+
+```sh
+iec62351/ossltls/openssl-v1.sh ~/.cache/openssl-1.0.2u
+PKG_CONFIG_LIBDIR=~/.cache/openssl-1.0.2u/pkgconfig \
+  go build -tags openssl,openssl_v1 -o ied-client ./cmd/ied-client
+```
+
 Read a value programmatically:
 
 ```go

@@ -12,8 +12,11 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 )
 
@@ -37,6 +40,10 @@ var Curves = []tls.CurveID{tls.CurveP256, tls.CurveP384, tls.CurveP521}
 
 // MinRSABits is the smallest RSA key accepted from a peer.
 const MinRSABits = 2048
+
+// MinDHBits is the smallest prime accepted for a peer certificate's fixed
+// Diffie-Hellman key (the static-DH suites, TLS_DH_RSA_*).
+const MinDHBits = 2048
 
 // Options configure one end of a TLS connection under the profile.
 type Options struct {
@@ -268,10 +275,50 @@ func checkKey(c *x509.Certificate) error {
 			return fmt.Errorf("%w: %s in %s", ErrWeakKey, k.Curve.Params().Name, c.Subject)
 		}
 	case ed25519.PublicKey:
+	case nil:
+		// crypto/x509 leaves Diffie-Hellman keys unparsed.
+		bits, ok := DHPrimeBits(c)
+		if !ok {
+			return fmt.Errorf("%w: unsupported key algorithm in %s", ErrWeakKey, c.Subject)
+		}
+		if bits < MinDHBits {
+			return fmt.Errorf("%w: %d-bit DH in %s", ErrWeakKey, bits, c.Subject)
+		}
 	default:
 		return fmt.Errorf("%w: %T in %s", ErrWeakKey, k, c.Subject)
 	}
 	return nil
+}
+
+var (
+	oidDHKeyAgreement = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 3, 1} // PKCS #3
+	oidDHPublicNumber = asn1.ObjectIdentifier{1, 2, 840, 10046, 2, 1}     // X9.42
+)
+
+// DHPrimeBits returns the size of the prime of a certificate's
+// Diffie-Hellman key, PKCS #3 (dhKeyAgreement) or X9.42 (dhpublicnumber);
+// ok is false when the key is not a Diffie-Hellman key.
+func DHPrimeBits(c *x509.Certificate) (bits int, ok bool) {
+	var spki struct {
+		Algorithm pkix.AlgorithmIdentifier
+		Key       asn1.BitString
+	}
+	if rest, err := asn1.Unmarshal(c.RawSubjectPublicKeyInfo, &spki); err != nil || len(rest) > 0 {
+		return 0, false
+	}
+	if a := spki.Algorithm.Algorithm; !a.Equal(oidDHKeyAgreement) && !a.Equal(oidDHPublicNumber) {
+		return 0, false
+	}
+	// Both parameter forms are a SEQUENCE starting with the prime.
+	var params asn1.RawValue
+	if _, err := asn1.Unmarshal(spki.Algorithm.Parameters.FullBytes, &params); err != nil {
+		return 0, false
+	}
+	var prime *big.Int
+	if _, err := asn1.Unmarshal(params.Bytes, &prime); err != nil || prime.Sign() <= 0 {
+		return 0, false
+	}
+	return prime.BitLen(), true
 }
 
 // checkRevoked looks c up in the CRLs its issuer signed.
