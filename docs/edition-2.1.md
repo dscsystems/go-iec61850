@@ -42,9 +42,19 @@ does not need, and wrong for a genuine schema change that would change the
 meaning of a value. The compromise:
 
 ```go
-m, err := scl.LoadModel("device.cid", scl.Strict(true))   // fail on any diagnostic
-for _, d := range m.Diagnostics {                         // or inspect them
+m, err := scl.LoadModel("device.cid")                     // permissive: inspect them
+if err != nil {
+    log.Fatal(err)
+}
+for _, d := range m.Diagnostics {
     log.Printf("%s", d)
+}
+_, err = scl.LoadModel("device.cid", scl.Strict(true))    // fail on any diagnostic
+var serr *scl.Error
+if errors.As(err, &serr) {                                // no model: they are on the error
+    for _, d := range serr.Diagnostics {
+        log.Printf("%s", d)
+    }
 }
 s, _ := scl.ParseFile("device.cid")
 for name, paths := range s.Dropped() {                    // elements not decoded

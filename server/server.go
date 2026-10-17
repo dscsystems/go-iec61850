@@ -110,6 +110,7 @@ const (
 	ConnectionRefused
 )
 
+// String returns "opened", "closed" or "refused".
 func (c ConnectionState) String() string {
 	switch c {
 	case ConnectionOpened:
@@ -142,7 +143,9 @@ type ConnectionEvent struct {
 
 // Identity is returned by the Identify service.
 type Identity struct {
-	Vendor, Model, Revision string
+	Vendor   string // vendorName
+	Model    string // modelName
+	Revision string // revision
 }
 
 // Option configures a Server.
@@ -322,6 +325,12 @@ func New(m *model.Model, opts ...Option) *Server {
 // OnWrite registers a handler consulted before applying a client write.
 // Returning a non-nil error (for example server.ErrAccessDenied) rejects
 // the write with the corresponding MMS DataAccessError.
+//
+// The handler runs while the server holds the model's write lock, so that
+// the check and the change it guards are one step for every client. It
+// must therefore return promptly, and must not call Update or Read on the
+// server: those take the same lock and deadlock. A handler that has more
+// to change does it from another goroutine, for instance go srv.Update(...).
 func (s *Server) OnWrite(h func(da *model.DataAttribute, v *mms.Value) error) {
 	s.writeH = h
 }

@@ -1,15 +1,7 @@
-// Package scl parses IEC 61850-6 SCL files (ICD, CID, SCD, IID) with the
-// standard library XML decoder and instantiates the runtime object model
-// of the model package.
-//
-// The parser covers the common subset needed to configure a server or a
-// GOOSE subscriber: IEDs with access points, servers, logical devices and
-// nodes, data type templates, datasets, report/GOOSE/SV/log/setting-group
-// control blocks, initial values (DOI/SDI/DAI) and the Communication
-// section. Substation topology, Services capabilities, KDC/certificate
-// elements and private extensions are decoded loosely or ignored.
-// See parse.go for the entry points and the package contract, and
-// edition.go for the SCL editions recognised.
+// The SCL document types the parser decodes into. The package
+// documentation is in parse.go; edition.go lists the SCL editions
+// recognised.
+
 package scl
 
 // Substation is the substation section of a system configuration. It is

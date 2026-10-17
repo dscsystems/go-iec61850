@@ -14,10 +14,10 @@
 // so any SCL namespace revision is accepted, and an unrecognised element,
 // basic type or functional constraint is recorded as a Diagnostic rather
 // than failing the load: one construct from a newer schema or a vendor
-// extension must not make a whole IED unreadable. Use Strict to turn
-// diagnostics into an error, and read the resulting model.Diagnostics to
-// see what was not understood. See Edition for the version a document
-// declares.
+// extension must not make a whole IED unreadable. After a permissive load,
+// model.Diagnostics lists what was not understood; Strict turns any
+// diagnostic into an *Error, which carries them, and returns no model. See
+// Edition for the version a document declares.
 package scl
 
 import (

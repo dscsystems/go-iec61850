@@ -18,6 +18,8 @@ type Diagnostic struct {
 	Message string
 }
 
+// String returns "path: message", or the message alone when the
+// diagnostic has no path.
 func (d Diagnostic) String() string {
 	if d.Path == "" {
 		return d.Message

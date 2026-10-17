@@ -269,7 +269,7 @@ a writable one.
 | Parameter CBB proposed | str1, str2, vnam, valt, vlis (the set 8-1 makes mandatory); the negotiated set is the intersection with the peer's |
 | Maximum PDU size | 65001 octets proposed; the negotiated value limits every response, and reports are segmented to it |
 | Maximum outstanding requests | 10 (server); the client uses what the server grants |
-| Data structure nesting level | 10 |
+| Data structure nesting level | 5 proposed by the client, 10 by the server |
 | Application context | MMS; the ACSI context is accepted from a peer and proposed with `client.WithApplicationContext` |
 | Presentation contexts | negotiated by identifier |
 | Object name scopes | domain-specific and VMD-specific; not association-specific |

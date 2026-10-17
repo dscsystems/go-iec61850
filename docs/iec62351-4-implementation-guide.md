@@ -20,7 +20,7 @@ colorlinks: true
 | Normative sources | **[B]** BS EN IEC 62351-4:2018+A1:2020 (consolidated IEC 62351-4 ed. 1.1); **[T]** PD IEC TS 62351-100-4:2023 (E2E conformance test cases) |
 | Code baselines | **[R]** `go-iec61850` at `2b7bb9620ae2`; **[D]** `datadiode-mms` at `7221d40be6cb`; **[S]** `tase2` at `e689c2b93211` |
 | Toolchain checked | Go 1.27.1 (`crypto/tls`, `crypto/ecdh`, `crypto/hkdf`, `crypto/x509` behaviour quoted below was verified against it) |
-| Status | Engineering plan. It does not claim or certify conformance |
+| Status | Engineering plan, written before the implementation; it does not claim or certify conformance. Native mode and the A-profile are implemented: the conformance declaration is [pics.md](pics.md) §8.1. §8 (gap analysis) and §9 (API) record the design as planned; the shipped API differs, see the note at the head of §9 |
 
 Page references: [B] printed page = PDF page − 7; [T] printed page = PDF page − 2. Both PDFs are scanned images. They were OCR'd for this revision, and every table quoted here (cipher suites, conformance tables, OSI subclasses) was checked against the page image. Code components (Annexes A, B, D) were read from the scan. Do **not** generate production code from OCR. Obtain the machine-readable archive named in [B] 1.2 (section 17, item R-01).
 
@@ -775,6 +775,25 @@ Each gap has an id that the work packages refer to. "Blocker" means E2E cannot w
 | G-SEC-6 | `docs/pics.md` rows 133 and 349 say N | Update only with evidence (WP12) |
 
 # 9. Library architecture and API
+
+> **Status: design sketch, superseded by the implementation.** The shipped
+> API differs from the sketch below; godoc (`go doc
+> github.com/dscsystems/go-iec61850/iec62351/e2e`, `…/mms`, `…/server`)
+> is authoritative. The main differences:
+>
+> | Sketch | As implemented |
+> | --- | --- |
+> | `iec62351/e2e/pdu_codec.go`, `token.go` | `pdu.go`; token handling in `assoc.go` |
+> | `SecurityEvent` in `events.go` | `e2e.Event`, delivered to `OnEvent` of `e2e.ClientConfig`/`ServerConfig` |
+> | `internal/cryptox/brainpool/` | not implemented (brainpool keys are refused); `internal/cryptox/dh` only |
+> | `Policy.UnverifiedAttributeCertificates` | `Policy.AcceptUnverifiedAttributeCertificates` |
+> | `PeerSecurity.VerifiedChain [][]byte`, `.TLS` | `VerifiedChain []*x509.Certificate`; no TLS field |
+> | `mms.ApplicationSecurity`, `AppSecurity*`, `Options.AppSecurity`, `AcceptOptions.Accept` | `mms.Options.E2E` (`*e2e.ClientConfig`); `mms.AcceptOptions.E2E` (`*e2e.ServerConfig`) and `E2ERequired`; admission through `AcceptOptions.Authenticate`, which sees the peer's `e2e.PeerSecurity` |
+> | `Options.KeepAlive net.KeepAliveConfig` | `Options.KeepAlive *net.KeepAliveConfig` |
+> | `Conn.CloseContext` | `Conn.Close`; under E2E its release exchange is bounded by `Options.ReleaseTimeout` |
+> | `server.WithE2E(cfg, accept ...mms.ApplicationSecurity)` | `server.WithE2E(cfg *e2e.ServerConfig, required bool)` |
+> | `server.WithMaxHandshakes` | not implemented; `server.WithMaxConnections` and `WithHandshakeTimeout` bound setup |
+> | `cmd/e2e-teq/`, `examples/e2e-client`, `examples/e2e-server` | not implemented; `cmd/e2e-pki` issues test credentials |
 
 ## 9.1 Package layout
 

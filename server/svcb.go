@@ -24,9 +24,9 @@ import (
 // SVControlEvent describes a change of a sampled-value control block made
 // by a client or by the end of its association.
 type SVControlEvent struct {
-	Device *model.LogicalDevice
-	Node   *model.LogicalNode
-	Block  *model.SVControl
+	Device *model.LogicalDevice // the logical device holding the block
+	Node   *model.LogicalNode   // the logical node holding the block
+	Block  *model.SVControl     // the block, after the change
 	// Unicast is set for a USVCB (FC US).
 	Unicast bool
 	// Enabled is SvEna after the change.

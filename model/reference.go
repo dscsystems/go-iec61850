@@ -73,6 +73,7 @@ func (r ObjectReference) Child(name string) ObjectReference {
 	return r + ObjectReference("."+name)
 }
 
+// String returns the reference as written, such as "LD/LN.DO.DA".
 func (r ObjectReference) String() string { return string(r) }
 
 // ToMMS converts the reference plus FC to an MMS (domain, itemID) pair:

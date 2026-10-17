@@ -1,8 +1,9 @@
 # API reference
 
-This is a practical, example-driven reference for the public API. Every
-symbol here also carries godoc; run `go doc github.com/dscsystems/go-iec61850/<pkg>`
-for the authoritative signatures.
+This is a practical, example-driven reference for the public API. The
+functions and types it presents carry godoc as well; run
+`go doc github.com/dscsystems/go-iec61850/<pkg>` for the authoritative
+signatures.
 
 Contents:
 
@@ -62,7 +63,7 @@ mms.NewArray(a, b, c)       // elements
 
 v.Type()      // mms.Type
 v.Bool(); v.Int64(); v.Int32(); v.Uint64(); v.Float64(); v.Float32()
-v.Text()      // string content of string types
+v.Text()      // string content of string types; a best-effort rendering of any other
 v.Bytes()     // raw octets (octet strings, bit strings, time types)
 v.Bit(i); v.BitLen()          // bit strings
 v.Len(); v.Index(i); v.Children()  // arrays and structures
@@ -395,6 +396,13 @@ srv.OnWrite(func(da *model.DataAttribute, v *mms.Value) error {
 
 Written values raise reports like process updates do.
 
+`OnWrite` and `OnControl` handlers run while the server holds the model's
+write lock, so the check and the change it guards are atomic for every
+client. A handler must return promptly and must not call `srv.Update` or
+`srv.Read`, which take the same lock and deadlock. To change other values,
+do it from another goroutine (`go srv.Update(...)`), or take the
+termination over with `DeferTermination` as below.
+
 ### Control handlers
 
 ```go
@@ -476,8 +484,10 @@ Errors surface as typed values usable with `errors.As`: `*mms.ServiceError`
 (confirmed error / reject) and `mms.DataAccessError` (per-item, also
 returned inline inside read results as a value — check `v.AccessError()`).
 
-The server transport primitive is `mms.AcceptConn(net.Conn) (*ServerConn, error)`
-with a `Handler`; `server` builds on it.
+The server transport primitives are `mms.AcceptConn(net.Conn) (*ServerConn, error)`
+and `mms.AcceptConnOpts(net.Conn, mms.AcceptOptions)`, which complete the
+association handshake; `ServerConn.Serve(Handler)` then answers requests.
+`server` builds on `AcceptConnOpts`.
 
 ---
 
@@ -665,8 +675,9 @@ eth, err := ethernet.Open("eth0", ethernet.EtherTypeGOOSE, ethernet.EtherTypeSV)
 ```
 
 Linux AF_PACKET backend; requires `CAP_NET_RAW` (or root). On non-Linux
-platforms `Open` returns an error — build with the `pcap` tag for a capture
-backend, or use `ethernet.Pipe()` for tests and simulation.
+platforms `Open` returns an error: no capture-library backend is implemented.
+Use `ethernet.Pipe()` for tests and simulation, or R-GOOSE/R-SV over UDP
+(`rsession`), which works on every platform.
 
 ---
 

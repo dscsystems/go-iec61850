@@ -156,3 +156,18 @@ func mustParse(t *testing.T, der []byte) *x509.Certificate {
 	}
 	return c.Certificate
 }
+
+// A forged value carrying the peer's certificate and a current time does not
+// take that time value: the genuine one that follows is still accepted.
+func TestForgeryDoesNotPoisonReplayCache(t *testing.T) {
+	_, cred, ver, now := setup(t)
+	genuine, _ := cred.Sign(now)
+	forged := &Value{Certificate: cred.Certificate, Time: genuine.Time,
+		Signature: make([]byte, len(genuine.Signature))}
+	if _, err := ver.Verify(forged); !errors.Is(err, ErrSignature) {
+		t.Fatalf("forged value: %v", err)
+	}
+	if _, err := ver.Verify(genuine); err != nil {
+		t.Fatalf("genuine value after a forgery: %v", err)
+	}
+}

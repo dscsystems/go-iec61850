@@ -239,8 +239,9 @@ tested with `ethernet.Pipe()` (an in-memory interface) so no NIC is needed.
 
 - Pure Go, no cgo. Cross-compiles to linux/windows/darwin.
 - GOOSE/SV raw sockets are Linux-only (`AF_PACKET`). Other platforms return
-  an error from `ethernet.Open`; a `pcap` build tag is the intended
-  extension point.
+  an error from `ethernet.Open`. No capture-library backend exists; one
+  behind a `pcap` build tag would be the extension point. R-GOOSE/R-SV
+  (`rsession`, over UDP) work on every platform.
 
 ## Code style
 
@@ -250,11 +251,12 @@ exported symbol in complete sentences. Match the surrounding package.
 
 ## Licensing
 
-Apache-2.0. **Never copy or mechanically translate code** from GPL-licensed
+The library is licensed under the GNU General Public License v3 (see
+`LICENSE`). **Never copy or mechanically translate code** from GPL-licensed
 IEC 61850 implementations, including the C stack the interop harness builds
 and wendy512/iec61850. They may be run as interop peers and read to understand
 *observable protocol behaviour* only. IEC standard text must not be reproduced
-beyond short factual references. See `PLAN.md` §12.
+beyond short factual references.
 
 ## Repository map
 
@@ -269,7 +271,14 @@ beyond short factual references. See `PLAN.md` §12.
 | `server/` | ACSI server (reporting, control, setting groups, files) |
 | `ethernet/` | raw L2 + AF_PACKET + `Pipe` |
 | `goose/`, `sv/` | process-bus pub/sub |
-| `cmd/` | `ied-client`, `ied-server`, `goose-sniff`, `iedx` |
+| `rsession/` | R-GOOSE / R-SV session protocol (IEC 61850-90-5) and its security, over UDP |
+| `gdoi/` | IEC 62351-9 group key distribution (key server, group member) |
+| `iec62351/` | IEC 62351-3 TLS profile; `ossltls/` its OpenSSL engine (cgo, build tag `openssl`) |
+| `iec62351/e2e/`, `e2e/osi/`, `e2e/e2efile/` | IEC 62351-4 end-to-end security, its OSI mapping, credential and trust loading from files |
+| `iec62351/aprofile/` | IEC 62351-4 A-profile (compatibility mode) |
+| `iec62351/pki/` | certificate handling shared by the security profiles |
+| `internal/cryptox/` | cryptographic helpers (`dh`: Diffie-Hellman groups) |
+| `cmd/` | `ied-client`, `ied-server`, `goose-sniff`, `iedx`, `e2e-pki` |
 | `examples/` | runnable snippets |
 | `interop/` | bidirectional interop harness |
 | `testdata/` | SCL files and fixtures |

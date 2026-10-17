@@ -98,9 +98,15 @@ func (co *ControlObject) Model() model.CtlModel { return co.model }
 
 // ControlError carries the additional cause of a failed control.
 type ControlError struct {
+	// AddCause is the server's additional cause, AddCauseNone when it gave
+	// none.
 	AddCause model.AddCause
-	Stage    string // "select" or "operate"
-	Err      error
+	// Stage is the step that failed: "select", "operate", "termination"
+	// (a negative or missing CommandTermination) or "cancel".
+	Stage string
+	// Err is the underlying error: a service or data access error, or the
+	// context's error.
+	Err error
 }
 
 func (e *ControlError) Error() string {

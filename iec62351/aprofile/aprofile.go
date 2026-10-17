@@ -185,8 +185,9 @@ func (v *Verifier) now() time.Time {
 	return time.Now()
 }
 
-// Verify checks val in the order of 11.2.3.2 c) to f) and returns the
-// peer's certificate.
+// Verify checks val against 11.2.3.2 c) to f) and returns the peer's
+// certificate. The replay check comes last, after the signature, so only
+// authentic values are recorded.
 func (v *Verifier) Verify(val *Value) (*pki.Certificate, error) {
 	now := v.now()
 	cert, err := pki.ParseCertificate(val.Certificate)
@@ -208,12 +209,15 @@ func (v *Verifier) Verify(val *Value) (*pki.Certificate, error) {
 	if d := now.Sub(t); d > MaxClockSkew || d < -MaxClockSkew {
 		return nil, fmt.Errorf("%w: %s, local %s", ErrTime, val.Time, now.UTC().Format(timeLayout))
 	}
-	if err := v.remember(val, now); err != nil {
-		return nil, err
-	}
+	// The signature is checked before the time value is recorded: a forged
+	// value would otherwise take the genuine peer's time value and have its
+	// own association refused as a replay.
 	h := sha256.Sum256(val.Time)
 	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, h[:], val.Signature); err != nil {
 		return nil, ErrSignature
+	}
+	if err := v.remember(val, now); err != nil {
+		return nil, err
 	}
 	return cert, nil
 }
