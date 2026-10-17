@@ -5,7 +5,7 @@ package ethernet
 import "errors"
 
 // Open is unavailable on this platform: the AF_PACKET backend is
-// Linux-only. Non-Linux platforms need a capture-library backend.
+// Linux-only, and no capture-library backend is implemented.
 func Open(ifname string, etherTypes ...uint16) (Interface, error) {
-	return nil, errors.New("ethernet: raw ethernet only supported on linux (build with pcap tag for other platforms)")
+	return nil, errors.New("ethernet: raw Ethernet is only supported on Linux (AF_PACKET); no capture backend exists for this platform")
 }

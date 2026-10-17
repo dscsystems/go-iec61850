@@ -58,7 +58,8 @@ func WithTLSHandshake(h func(ctx context.Context, raw net.Conn) (net.Conn, error
 // WithPassword sets an ACSE authentication password.
 func WithPassword(pw string) Option { return func(o *mms.Options) { o.Password = pw } }
 
-// WithTimeout bounds the connection handshake.
+// WithTimeout bounds the whole connection establishment — TCP, TLS and the
+// association handshake — as one budget (mms.Options.ConnectTimeout).
 func WithTimeout(d time.Duration) Option { return func(o *mms.Options) { o.ConnectTimeout = d } }
 
 // WithApplicationContext selects the ACSE application context the client

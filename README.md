@@ -91,6 +91,8 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 - [docs/iec62351-4-implementation-guide.md](docs/iec62351-4-implementation-guide.md) — IEC 62351-4 implementation plan, wire contract, interpretations and status
 - [docs/pics.md](docs/pics.md) — Protocol Implementation Conformance Statement (ACSI models and services, MMS, GOOSE, SV, security)
 - [docs/edition-2.1.md](docs/edition-2.1.md) — the detailed IEC 61850 Edition 2.1 conformance record
+- [docs/open-server-interoperability.md](docs/open-server-interoperability.md) — verification against iec61850_open_server (`interop/run-open-server.sh`)
+- [docs/rust-interoperability.md](docs/rust-interoperability.md) — verification against iec61850-rust (`interop/run-rust.sh`)
 - [SKILL.md](SKILL.md) — task-oriented guide for building apps (agent-friendly)
 - [examples/](examples) — runnable programs: `read`, `server`, `report-monitor`, `goose-subscribe`, `control`
 - godoc: `go doc github.com/dscsystems/go-iec61850/client` (etc.)
@@ -103,8 +105,9 @@ v, err := c.Read(ctx, "simpleIOGenericIO/GGIO1.AnIn1.mag.f", model.MX)
 | `server` | High-level ACSI server driven by an SCL or programmatic model |
 | `goose`, `sv` | GOOSE and Sampled Values publish/subscribe over `ethernet` |
 | `rsession` | R-GOOSE / R-SV session protocol (IEC 61850-90-5) with its message security; an `ethernet.Interface` over UDP |
-| `iec62351` | IEC 62351-3 TLS profile for the MMS client and server |
-| `iec62351/e2e`, `iec62351/e2e/osi`, `iec62351/pki` | IEC 62351-4 end-to-end security (native mode) for MMS, its OSI mapping, and the E2E certificate handling |
+| `iec62351` | IEC 62351-3 TLS profile for the MMS client and server; `iec62351/ossltls` is its optional OpenSSL engine (cgo, build tag `openssl`) |
+| `iec62351/e2e`, `iec62351/e2e/osi`, `iec62351/pki` | IEC 62351-4 end-to-end security (native mode) for MMS, its OSI mapping, and the E2E certificate handling; `iec62351/e2e/e2efile` loads credentials and trust from files |
+| `iec62351/aprofile` | IEC 62351-4 A-profile (compatibility mode): certificate-based ACSE authentication |
 | `gdoi` | IEC 62351-9 group key distribution: GDOI key server and group member |
 | `scl` | SCL file parsing and model building |
 | `model` | IEC 61850 object model, functional constraints, Quality/Timestamp types |
@@ -138,8 +141,8 @@ IEC61850_C_CLIENT=/path/to/client_example1 go test ./server/ -run CClient
 
 Initial-release; the API may change until v1. All packages build without cgo
 and cross-compile to Linux, Windows and macOS. GOOSE and SV raw-socket
-transport is Linux-only (AF_PACKET); other platforms need a capture
-backend.
+transport is Linux-only (AF_PACKET); no capture backend for other platforms
+is implemented. R-GOOSE/R-SV over UDP (`rsession`) is portable.
 
 Implemented: MMS client/server, browse/read/write, datasets, reporting
 (URCB and buffered BRCB with EntryID resync, GI/integrity/data-change),

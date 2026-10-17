@@ -45,6 +45,7 @@ var acsiClassNames = [...]string{
 	ACSIGoCB: "GoCB", ACSIGsCB: "GsCB", ACSIMSVCB: "MSVCB", ACSIUSVCB: "USVCB",
 }
 
+// String returns the ACSI class name, such as "BRCB" or "DATA-SET".
 func (a ACSIClass) String() string {
 	if int(a) < len(acsiClassNames) {
 		return acsiClassNames[a]

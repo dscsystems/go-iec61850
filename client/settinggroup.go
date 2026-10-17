@@ -14,11 +14,11 @@ import (
 // alternative parameter sets in protection IEDs.
 type SettingGroup struct {
 	c   *Client
-	Ref model.ObjectReference
+	Ref model.ObjectReference // "LD/LN.SP.SGCB"
 
-	NumOfSG uint8
-	ActSG   uint8
-	EditSG  uint8
+	NumOfSG uint8 // number of setting groups, numbered from 1
+	ActSG   uint8 // the active group
+	EditSG  uint8 // the group being edited, 0 when none
 
 	domain string
 	item   string // "LN$SP$SGCB"

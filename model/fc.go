@@ -54,6 +54,9 @@ var fcNames = [...]string{
 	SR: "SR",
 }
 
+// String returns the functional constraint's mnemonic as MMS names use
+// it, such as "ST" or "MX"; "*" for ALL, "" for FCNone, "??" for
+// FCUnknown.
 func (fc FC) String() string {
 	if int(fc) < len(fcNames) {
 		return fcNames[fc]

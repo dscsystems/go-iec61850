@@ -35,25 +35,25 @@ type SVCB struct {
 	Ref     model.ObjectReference // "LD/LN.name"
 	Unicast bool                  // a USVCB (FC US), else an MSVCB (FC MS)
 
-	SvEna bool
+	SvEna bool   // the block is publishing
 	Resv  bool   // a USVCB's reservation; false for an MSVCB
 	SvID  string // MsvID or UsvID
 	// DataSet is the data set reference in MMS notation, "LD/LN$name".
 	DataSet    string
-	ConfRev    uint32
-	SmpRate    uint32
-	OptFlds    model.SVOpts
-	SmpMod     model.SmpMod
-	DstAddress PhyComAddr
-	NoASDU     uint32
+	ConfRev    uint32       // configuration revision; the stream carries it
+	SmpRate    uint32       // samples per SmpMod unit
+	OptFlds    model.SVOpts // optional fields in each ASDU
+	SmpMod     model.SmpMod // what SmpRate counts per
+	DstAddress PhyComAddr   // where the stream is sent
+	NoASDU     uint32       // ASDUs per message
 }
 
 // PhyComAddr is the destination of a GOOSE or sampled-value stream.
 type PhyComAddr struct {
-	Addr     [6]byte
-	Priority uint8
-	VID      uint16
-	AppID    uint16
+	Addr     [6]byte // destination MAC address
+	Priority uint8   // VLAN priority (802.1Q PCP)
+	VID      uint16  // VLAN identifier
+	AppID    uint16  // application identifier
 }
 
 // GetSVCB reads the sampled-value control block at ref ("LD/LLN0.msvcb01")

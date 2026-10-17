@@ -46,6 +46,8 @@ var typeNames = [...]string{
 	TypeDataAccessError: "data-access-error",
 }
 
+// String returns the type's name as diagnostics print it, such as
+// "visible-string"; "type(n)" for an unknown type.
 func (t Type) String() string {
 	if int(t) < len(typeNames) && typeNames[t] != "" {
 		return typeNames[t]
@@ -67,8 +69,11 @@ type Value struct {
 	children []*Value
 }
 
-// Constructors.
+// Constructors. Each returns a new Value that owns its contents: slices
+// passed in are copied, and the Value may be modified without affecting
+// the caller's data.
 
+// NewBool returns an MMS boolean.
 func NewBool(v bool) *Value {
 	n := int64(0)
 	if v {
@@ -77,16 +82,37 @@ func NewBool(v bool) *Value {
 	return &Value{typ: TypeBoolean, num: n}
 }
 
-func NewInt8(v int8) *Value   { return &Value{typ: TypeInteger, num: int64(v)} }
+// NewInt8 returns an MMS integer (TypeInteger), encoded in as few octets as
+// the value needs; the width only bounds the argument. NewInt16, NewInt32
+// and NewInt64 are the same for wider arguments.
+func NewInt8(v int8) *Value { return &Value{typ: TypeInteger, num: int64(v)} }
+
+// NewInt16 returns an MMS integer; see NewInt8.
 func NewInt16(v int16) *Value { return &Value{typ: TypeInteger, num: int64(v)} }
+
+// NewInt32 returns an MMS integer; see NewInt8.
 func NewInt32(v int32) *Value { return &Value{typ: TypeInteger, num: int64(v)} }
+
+// NewInt64 returns an MMS integer; see NewInt8.
 func NewInt64(v int64) *Value { return &Value{typ: TypeInteger, num: v} }
 
-func NewUint8(v uint8) *Value   { return &Value{typ: TypeUnsigned, num: int64(v)} }
+// NewUint8 returns an MMS unsigned (TypeUnsigned), encoded in as few
+// octets as the value needs. NewUint16 and NewUint32 are the same for
+// wider arguments.
+func NewUint8(v uint8) *Value { return &Value{typ: TypeUnsigned, num: int64(v)} }
+
+// NewUint16 returns an MMS unsigned; see NewUint8.
 func NewUint16(v uint16) *Value { return &Value{typ: TypeUnsigned, num: int64(v)} }
+
+// NewUint32 returns an MMS unsigned; see NewUint8.
 func NewUint32(v uint32) *Value { return &Value{typ: TypeUnsigned, num: int64(v)} }
 
+// NewFloat32 returns an MMS floating point in IEEE 754 single precision
+// (FLOAT32 in IEC 61850).
 func NewFloat32(v float32) *Value { return &Value{typ: TypeFloat32, flt: float64(v)} }
+
+// NewFloat64 returns an MMS floating point in IEEE 754 double precision
+// (FLOAT64 in IEC 61850).
 func NewFloat64(v float64) *Value { return &Value{typ: TypeFloat64, flt: v} }
 
 // NewBitString returns a bit string of length bits, all zero.
@@ -101,14 +127,20 @@ func NewBitStringBits(bits []byte, length int) *Value {
 	return &Value{typ: TypeBitString, bytes: b, bitLen: length}
 }
 
+// NewOctetString returns an MMS octet string over a copy of b.
 func NewOctetString(b []byte) *Value {
 	c := make([]byte, len(b))
 	copy(c, b)
 	return &Value{typ: TypeOctetString, bytes: c}
 }
 
+// NewVisibleString returns an MMS visible string (VisString in IEC 61850):
+// printable ASCII is what a peer expects.
 func NewVisibleString(s string) *Value { return &Value{typ: TypeVisibleString, bytes: []byte(s)} }
-func NewMMSString(s string) *Value     { return &Value{typ: TypeMMSString, bytes: []byte(s)} }
+
+// NewMMSString returns an MMS string (Unicode255 in IEC 61850), UTF-8
+// encoded.
+func NewMMSString(s string) *Value { return &Value{typ: TypeMMSString, bytes: []byte(s)} }
 
 // NewUTCTime returns an IEC 61850 UtcTime value (8 octets: seconds,
 // 24-bit second fraction, time quality).
@@ -160,10 +192,14 @@ func NewBinaryTimeRaw(b []byte) (*Value, error) {
 	return &Value{typ: TypeBinaryTime, bytes: append([]byte(nil), b...)}, nil
 }
 
+// NewArray returns an MMS array of the given elements, which it does not
+// copy. Elements of one array should share a type.
 func NewArray(elements ...*Value) *Value {
 	return &Value{typ: TypeArray, children: elements}
 }
 
+// NewStructure returns an MMS structure of the given members, in order,
+// which it does not copy.
 func NewStructure(members ...*Value) *Value {
 	return &Value{typ: TypeStructure, children: members}
 }
@@ -177,6 +213,7 @@ func NewDataAccessError(code DataAccessError) *Value {
 // Accessors. Numeric accessors convert between integer widths; accessing
 // a Value with the wrong family returns the zero value.
 
+// Type returns the value's MMS type, TypeNone for a nil Value.
 func (v *Value) Type() Type {
 	if v == nil {
 		return TypeNone
@@ -184,8 +221,11 @@ func (v *Value) Type() Type {
 	return v.typ
 }
 
+// Bool returns a boolean's value; false for any other type.
 func (v *Value) Bool() bool { return v != nil && v.typ == TypeBoolean && v.num != 0 }
 
+// Int64 returns an integer, unsigned or boolean as an int64, and a
+// floating point truncated toward zero; 0 for any other type.
 func (v *Value) Int64() int64 {
 	if v == nil {
 		return 0
@@ -199,9 +239,14 @@ func (v *Value) Int64() int64 {
 	return 0
 }
 
-func (v *Value) Int32() int32   { return int32(v.Int64()) }
+// Int32 is Int64 converted to int32, which truncates a wider value.
+func (v *Value) Int32() int32 { return int32(v.Int64()) }
+
+// Uint64 is Int64 converted to uint64: a negative integer wraps around.
 func (v *Value) Uint64() uint64 { return uint64(v.Int64()) }
 
+// Float64 returns a floating point, or an integer or unsigned converted to
+// float64; 0 for any other type.
 func (v *Value) Float64() float64 {
 	if v == nil {
 		return 0
@@ -215,6 +260,7 @@ func (v *Value) Float64() float64 {
 	return 0
 }
 
+// Float32 is Float64 converted to float32.
 func (v *Value) Float32() float32 { return float32(v.Float64()) }
 
 // Text returns the string content for string types, and a best-effort

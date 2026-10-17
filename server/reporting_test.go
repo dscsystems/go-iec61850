@@ -122,3 +122,61 @@ func countDollar(s string) int {
 	}
 	return n
 }
+
+// Integrity reports write SqNum into the model while clients read it. Run
+// with -race: the writer must hold the model's write lock, not share the
+// read lock with the readers.
+func TestIntegrityReportsDoNotRaceReads(t *testing.T) {
+	addr, _ := startServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr, client.WithTimeout(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	lds, _ := c.LogicalDevices(ctx)
+	ld := lds[0]
+	names, _ := c.MMS().GetNameList(ctx, 0, ld)
+	var rcbName string
+	for _, n := range names {
+		if len(n) > 8 && n[:8] == "LLN0$RP$" && countDollar(n) == 2 {
+			rcbName = n[8:]
+			break
+		}
+	}
+	if rcbName == "" {
+		t.Skip("no unbuffered RCB in demo model")
+	}
+	rcbRef := model.ObjectReference(ld + "/LLN0.RP." + rcbName)
+	rcb, err := c.GetRCB(ctx, rcbRef)
+	if err != nil {
+		t.Fatalf("GetRCB: %v", err)
+	}
+	rcb.OptFlds = model.OptSeqNum
+	rcb.TrgOps = model.TrgIntegrity
+	rcb.IntgPd = 5 * time.Millisecond
+	reports := make(chan struct{}, 1024)
+	sub, err := c.EnableReporting(ctx, rcb, func(*client.Report) {
+		select {
+		case reports <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("EnableReporting: %v", err)
+	}
+	defer sub.Disable(context.Background())
+
+	sqNum := model.ObjectReference(ld + "/LLN0." + rcbName + ".SqNum")
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := c.Read(ctx, sqNum, model.RP); err != nil {
+			t.Fatalf("read SqNum: %v", err)
+		}
+	}
+	if len(reports) == 0 {
+		t.Fatal("no integrity report arrived")
+	}
+}

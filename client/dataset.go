@@ -10,15 +10,15 @@ import (
 
 // DataSet is the result of reading a named dataset.
 type DataSet struct {
-	Ref     model.ObjectReference
-	Members []DataSetEntry
+	Ref     model.ObjectReference // "LD/LN.name"
+	Members []DataSetEntry        // in dataset order
 }
 
 // DataSetEntry is one dataset member with its value.
 type DataSetEntry struct {
-	Ref   model.ObjectReference
-	FC    model.FC
-	Value *mms.Value
+	Ref   model.ObjectReference // the member, "LD/LN.DO.DA"
+	FC    model.FC              // the member's functional constraint
+	Value *mms.Value            // its value, or a DataAccessError value
 }
 
 // datasetRefToMMS converts an IEC 61850 dataset reference "LD/LN.DataSet"

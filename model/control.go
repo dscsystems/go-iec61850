@@ -14,6 +14,8 @@ const (
 	CtlSBOEnhanced    CtlModel = 4
 )
 
+// String returns the control model's name in lower-case hyphenated form,
+// such as "sbo-with-enhanced-security"; "ctlModel(n)" for an unknown value.
 func (c CtlModel) String() string {
 	switch c {
 	case CtlStatusOnly:
@@ -52,6 +54,8 @@ const (
 	OrCatProcess          OrCat = 8
 )
 
+// String returns the originator category in lower-case hyphenated form,
+// such as "remote-control"; "orCat(n)" for an unknown value.
 func (o OrCat) String() string {
 	names := [...]string{
 		"not-supported", "bay-control", "station-control", "remote-control",
@@ -119,6 +123,9 @@ const (
 	AddCauseNone AddCause = 255
 )
 
+// String returns the cause's IEC 61850-7-2 name in lower-case hyphenated
+// form, such as "blocked-by-interlocking"; "addCause(n)" for an unknown
+// code.
 func (a AddCause) String() string {
 	names := map[AddCause]string{
 		0: "unknown", 1: "not-supported", 2: "blocked-by-switching-hierarchy",

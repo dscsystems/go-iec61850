@@ -119,7 +119,9 @@ demultiplex in the callback if you need several filters.
    Hand work to your own goroutine/channel.
 3. **`Update` is the only way to change server values**, and it is atomic.
    Never mutate the model tree directly; changes made outside `Update` are
-   not reported and race with readers.
+   not reported and race with readers. But never call `Update` or `Read`
+   from inside an `OnWrite`/`OnControl` handler: it runs under the same
+   lock and deadlocks. Use `go srv.Update(...)` from the handler instead.
 4. **GOOSE/SV are Linux-only** via AF_PACKET. Guard `ethernet.Open` errors
    and document the requirement. Use `ethernet.Pipe()` for tests.
 5. **Buffered reports (BRCB)** need `rcb.ResyncEntryID` (from a prior
@@ -128,6 +130,9 @@ demultiplex in the callback if you need several filters.
    create, and before sharing across goroutines that write.
 7. **Dataset/RCB/log references use `.` in the API** (`LD/LN.Measurements`,
    `LD/LN.RP.rcb01`), not MMS `$` notation — the library converts.
+   Exception: the `DataSet` attribute of `client.RCB` and `client.SVCB` is
+   the control block's own value, in MMS notation (`LD/LN$Measurements`):
+   that is what `GetRCB`/`GetSVCB` return and what to write back.
 
 ## Testing your app
 
@@ -176,8 +181,17 @@ built, so one odd construct cannot make an IED unreadable. `SCL.Dropped()`
 reports the elements the parser does not decode, with their paths.
 
 ```go
-m, err := scl.LoadModel("device.cid", scl.Strict(true))  // or omit Strict
+m, err := scl.LoadModel("device.cid")                     // permissive
+if err != nil { log.Fatal(err) }
 for _, d := range m.Diagnostics { log.Printf("%s", d) } // what was not understood
+
+// Strict fails on any diagnostic and returns no model: read them from the error.
+if _, err := scl.LoadModel("device.cid", scl.Strict(true)); err != nil {
+    var serr *scl.Error
+    if errors.As(err, &serr) {
+        for _, d := range serr.Diagnostics { log.Printf("%s", d) }
+    }
+}
 s, _ := scl.ParseFile("device.cid")
 log.Printf("edition %s", s.Edition())                    // 2007B4
 ```
@@ -200,4 +214,7 @@ readable — use `model.ParseFCLenient` and `model.FCText` for it.
   `goose-subscribe`, `control`).
 - `cmd/` — full apps to copy patterns from (`ied-client`, `ied-server`,
   `iedx` TUI, `goose-sniff`).
+- `docs/open-server-interoperability.md`, `docs/rust-interoperability.md`
+  — verification against other implementations, with their harnesses
+  (`interop/run-open-server.sh`, `interop/run-rust.sh`).
 - `docs/developer-guide.md` — only if extending the library itself.

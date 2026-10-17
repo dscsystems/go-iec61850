@@ -14,13 +14,13 @@ import (
 type ControlCtx struct {
 	Ref       model.ObjectReference // the controllable object, e.g. "LD/LN.SPCSO1"
 	Value     *mms.Value            // ctlVal
-	Origin    model.OrCat
-	OrIdent   string
-	CtlNum    uint8
-	Test      bool
-	Interlock bool
-	Synchro   bool
-	Select    bool // true for the select phase (SBOw), false for operate
+	Origin    model.OrCat           // originator category of the request
+	OrIdent   string                // originator identification
+	CtlNum    uint8                 // the client's control number for this sequence
+	Test      bool                  // the client flagged it as a test command
+	Interlock bool                  // Check bit 1: the client asks for the interlock check
+	Synchro   bool                  // Check bit 0: the client asks for the synchrocheck
+	Select    bool                  // true for the select phase (SBOw), false for operate
 
 	// T is the operate timestamp the client sent. It is the client's
 	// statement of when it decided to operate, not of when the server
@@ -58,13 +58,20 @@ func (c *ControlCtx) OrIdentLen() int { return len(c.OrIdent) }
 
 // ControlHandler decides whether a control is allowed and applies its
 // effect. Returning model.AddCauseNone accepts the command; any other
-// value rejects it with that additional cause.
+// value rejects it with that additional cause. It runs under the model
+// lock; see OnControl.
 type ControlHandler func(*ControlCtx) model.AddCause
 
 // OnControl registers a handler for the controllable object at ref. Both
 // the select (SBOw) and operate phases are delivered; inspect ctx.Select.
 // If no handler is registered, operates are accepted and the object's
 // sibling stVal (FC ST) is set to the control value.
+//
+// The handler runs while the server holds the model's write lock, so that
+// the check and the change it guards are one step for every client. It
+// must therefore return promptly, and must not call Update or Read on the
+// server: those take the same lock and deadlock. A handler that has more
+// to change does it from another goroutine, for instance go srv.Update(...).
 func (s *Server) OnControl(ref model.ObjectReference, h ControlHandler) {
 	s.ctlMu.Lock()
 	if s.controls == nil {

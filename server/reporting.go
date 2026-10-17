@@ -248,8 +248,10 @@ func (rm *reportManager) releaseLocked(rs *rcbState) {
 			rs.resvIP = ip
 			var t *time.Timer
 			t = time.AfterFunc(time.Duration(tms)*time.Second, func() {
-				rm.s.mu.RLock()
-				defer rm.s.mu.RUnlock()
+				// The write lock: syncResvLocked writes Resv and Owner
+				// into the model, which reads hold the read lock to see.
+				rm.s.mu.Lock()
+				defer rm.s.mu.Unlock()
 				rs.mu.Lock()
 				defer rs.mu.Unlock()
 				if rs.resvTimer == t && rs.owner == nil {
@@ -374,9 +376,12 @@ func (rs *rcbState) purgeLocked() {
 
 // disableConn releases every block a closing connection had enabled or
 // reserved.
+//
+// It takes the model's write lock: disabling flushes pending reports and
+// releasing syncs Resv and Owner, both of which write RCB attributes.
 func (rm *reportManager) disableConn(conn *mms.ServerConn) {
-	rm.s.mu.RLock()
-	defer rm.s.mu.RUnlock()
+	rm.s.mu.Lock()
+	defer rm.s.mu.Unlock()
 	for _, rs := range rm.reg {
 		rs.mu.Lock()
 		if rs.conn == conn {
@@ -397,13 +402,15 @@ func (rm *reportManager) integrityLoop(rs *rcbState, pd time.Duration, stop chan
 		case <-stop:
 			return
 		case <-t.C:
-			rm.s.mu.RLock()
+			// The write lock: a report writes SqNum, EntryID and
+			// TimeofEntry into the model.
+			rm.s.mu.Lock()
 			rs.mu.Lock()
 			if rs.intgStop == stop {
 				rm.reportAllLocked(rs, model.ReasonIntegrity)
 			}
 			rs.mu.Unlock()
-			rm.s.mu.RUnlock()
+			rm.s.mu.Unlock()
 		}
 	}
 }
@@ -508,8 +515,9 @@ func (rm *reportManager) eventLocked(rs *rcbState, e *reportEntry) {
 		p := &reportEntry{}
 		rs.pending = p
 		rs.pendTimer = time.AfterFunc(bufTm, func() {
-			rm.s.mu.RLock()
-			defer rm.s.mu.RUnlock()
+			// The write lock: the flushed report writes RCB attributes.
+			rm.s.mu.Lock()
+			defer rm.s.mu.Unlock()
 			rs.mu.Lock()
 			defer rs.mu.Unlock()
 			if rs.pending == p {

@@ -183,6 +183,7 @@ const (
 	GSSE
 )
 
+// String returns "GOOSE" or "GSSE".
 func (t GSType) String() string {
 	if t == GSSE {
 		return "GSSE"
@@ -230,6 +231,8 @@ const (
 	SecPerSmp
 )
 
+// String returns the SCL spelling: "SmpPerPeriod", "SmpPerSec" or
+// "SecPerSmp".
 func (m SmpMod) String() string {
 	switch m {
 	case SmpPerSec:

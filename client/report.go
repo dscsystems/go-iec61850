@@ -16,13 +16,13 @@ import (
 // are written to the server.
 type RCB struct {
 	Ref      model.ObjectReference // "LD/LN.RP.name" or "LD/LN.BR.name"
-	Buffered bool
+	Buffered bool                  // a BRCB (FC BR), else a URCB (FC RP)
 
-	RptID   string
-	DataSet string // MMS notation, e.g. "LD/LN$DataSet"
-	ConfRev uint32
-	OptFlds model.OptFlds
-	TrgOps  model.TrgOps
+	RptID   string        // the report identifier carried in each report
+	DataSet string        // MMS notation, e.g. "LD/LN$DataSet"
+	ConfRev uint32        // configuration revision; reports carry it
+	OptFlds model.OptFlds // optional fields included in each report
+	TrgOps  model.TrgOps  // the triggers that cause a report
 	BufTm   uint32        // ms, integrity/dchg buffering
 	IntgPd  time.Duration // integrity period
 
@@ -92,16 +92,18 @@ func (c *Client) GetRCB(ctx context.Context, ref model.ObjectReference) (*RCB, e
 }
 
 // Report is one decoded report delivered to a subscriber.
+//
+// A field the RCB's OptFlds did not include is left at its zero value.
 type Report struct {
-	RptID       string
-	SeqNum      uint32
-	DataSet     string
-	ConfRev     uint32
-	EntryID     []byte
-	BufOvfl     bool
-	SubSeqNum   uint32
-	MoreFollows bool
-	TimeOfEntry time.Time
+	RptID       string    // the RCB's RptID
+	SeqNum      uint32    // sequence number (OptFlds seq-num)
+	DataSet     string    // dataset reference (OptFlds data-set)
+	ConfRev     uint32    // the RCB's ConfRev (OptFlds conf-revision)
+	EntryID     []byte    // a BRCB report's entry ID, for ResyncEntryID (OptFlds entryID)
+	BufOvfl     bool      // the BRCB discarded reports (OptFlds buffer-overflow)
+	SubSeqNum   uint32    // segment number of a report split over several messages
+	MoreFollows bool      // further segments of this report follow
+	TimeOfEntry time.Time // when the report was generated (OptFlds report-time-stamp)
 	Entries     []ReportEntry
 }
 
@@ -109,8 +111,8 @@ type Report struct {
 type ReportEntry struct {
 	Index  int                   // position in the dataset
 	Ref    model.ObjectReference // resolved from the dataset, if known
-	FC     model.FC
-	Reason model.ReasonCode
+	FC     model.FC              // the member's functional constraint, if known
+	Reason model.ReasonCode      // why it was included (OptFlds reason-for-inclusion)
 	Value  *mms.Value
 }
 

@@ -16,10 +16,10 @@ type LastApplError struct {
 	// Error is 0 no error, 1 unknown, 2 timeout test not ok, 3 operator
 	// test not ok; the reason for a refusal is in AddCause.
 	Error    int
-	Origin   model.OrCat
-	OrIdent  []byte
-	CtlNum   uint8
-	AddCause model.AddCause
+	Origin   model.OrCat    // the refused request's originator category
+	OrIdent  []byte         // and originator identification
+	CtlNum   uint8          // the refused request's control number
+	AddCause model.AddCause // why it was refused
 }
 
 // LastApplError returns the most recent LastApplError the server reported

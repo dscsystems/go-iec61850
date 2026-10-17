@@ -50,6 +50,7 @@ func (q Quality) WithValidity(v Validity) Quality { return q&^3 | Quality(v&3) }
 // Is reports whether all flag bits in mask are set.
 func (q Quality) Is(mask Quality) bool { return q&mask == mask }
 
+// String returns "good", "invalid", "questionable" or "reserved".
 func (v Validity) String() string {
 	switch v {
 	case ValidityGood:
@@ -62,6 +63,8 @@ func (v Validity) String() string {
 	return "reserved"
 }
 
+// String returns the validity followed by each set detail flag, joined by
+// "|", such as "questionable|old-data|test".
 func (q Quality) String() string {
 	parts := []string{q.Validity().String()}
 	for _, f := range []struct {
@@ -118,6 +121,7 @@ const (
 	DbposBad          Dbpos = 3 // 11
 )
 
+// String returns "intermediate", "off", "on" or "bad".
 func (d Dbpos) String() string {
 	switch d {
 	case DbposIntermediate:
@@ -182,6 +186,8 @@ func TrgOpsFromValue(v *mms.Value) TrgOps {
 	return t
 }
 
+// String returns the set trigger options joined by "|", from "dchg",
+// "qchg", "dupd", "period" and "gi"; "none" when none is set.
 func (t TrgOps) String() string {
 	var parts []string
 	for _, f := range []struct {
@@ -253,6 +259,8 @@ const (
 	ReasonApplTrigger   ReasonCode = 1 << 6
 )
 
+// String returns the set reasons joined by "|", from "dchg", "qchg",
+// "dupd", "integrity", "gi" and "app-trigger"; "none" when none is set.
 func (rc ReasonCode) String() string {
 	var parts []string
 	for _, f := range []struct {
