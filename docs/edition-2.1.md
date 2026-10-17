@@ -397,6 +397,17 @@ every IED's GOOSE addressing is missing.
   name or, for IED certificates without one, by common name. Refused
   peers are reported for the security event log. No renegotiation, and no
   session resumption on the server.
+- **IEC 62351-4 end-to-end security**, native mode (packages
+  `iec62351/e2e`, `iec62351/e2e/osi`; `client.WithE2E`, `server.WithE2E`):
+  the signed handshake with Diffie-Hellman key agreement (groups 14 and
+  23), clear data transfer with HMAC-SHA-256 or AES-GMAC integrity,
+  rekeying, signed release and the security aborts; RSA (2048 bits or
+  more) and ECDSA P-256 signatures.
+- **IEC 62351-4 A-profile** (compatibility mode), package
+  `iec62351/aprofile` (`client.WithAProfile`, `server.WithAProfile`):
+  certificate, time and signature in the ACSE authentication value, with
+  the 10-minute window and replay cache. It runs over TLS, which a lab
+  option relaxes. The declaration is in [pics.md](pics.md) §8.1.
 
 ### Not implemented
 
@@ -409,10 +420,10 @@ every IED's GOOSE addressing is missing.
 - **AES-GMAC** authentication of SPDUs (64 and 128 bits), and a key that
   both signs and encrypts: GCM already authenticates, and the one other
   implementation's layout for both cannot be verified.
-- **IEC 62351-4** end-to-end (A-profile) security: ACSE authentication is
-  a password, not the certificate-based mechanism. Its mechanism OIDs and
-  ASN.1 are in the standard only, and no reference implementation exists
-  to check against; it waits for the text.
+- **IEC 62351-4 E2E encryption**: AES-CBC encryption and AES-GCM
+  authenticated encryption of the data transfer, and brainpool keys. They
+  are refused with the matching diagnostics; transfer is clear, with
+  integrity protection.
 - **IEC 62351-6 on Ethernet**, under 8-1 above.
 - **IEC 62351-8** role-based access control. The access-token ASN.1 and
   the mandatory role-to-right table are in the standard only (the

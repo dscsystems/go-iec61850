@@ -139,6 +139,8 @@ func fsName(name string) (string, bool) {
 // MMS file error codes (class file, 11).
 const (
 	errClassFile         = 11
+	fileBusy             = 2
+	filePositionInvalid  = 5
 	fileAccessDenied     = 6
 	fileNonExistent      = 7
 	fileDuplicateName    = 8

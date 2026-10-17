@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -92,9 +93,7 @@ func (c *Conn) Abort() error {
 	c.closeErr = ErrAborted
 	c.mu.Unlock()
 
-	c.writeMu.Lock()
-	c.fr.sendAbort()
-	c.writeMu.Unlock()
+	c.sendClosing(func() error { return c.fr.sendAbort() })
 	err := c.raw.Close()
 	<-c.readerDone
 	c.mu.Lock()
@@ -115,8 +114,19 @@ type Outstanding struct {
 func (o *Outstanding) InvokeID() uint32 { return o.id }
 
 // Start sends a confirmed request and returns without waiting for its
-// response. Wait collects it; Cancel asks the server to abandon it.
+// response. Wait collects it; Cancel asks the server to abandon it. Sending
+// is not bounded; StartContext bounds it.
 func (c *Conn) Start(service *asn1.Element) (*Outstanding, error) {
+	return c.StartContext(context.Background(), service)
+}
+
+// StartContext is Start with sending bounded by ctx: nothing is sent once
+// ctx has ended, and a send still waiting or blocked when it ends gives up
+// (see send for what an interrupted write does to the association).
+func (c *Conn) StartContext(ctx context.Context, service *asn1.Element) (*Outstanding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	if c.state != StateConnected {
 		err := c.closeErr
@@ -133,11 +143,12 @@ func (c *Conn) Start(service *asn1.Element) (*Outstanding, error) {
 		asn1.UintElem(asn1.TagInteger, uint64(id)),
 		service,
 	).Encode()
-	c.log.Debug("mms: tx PDU", "hex", fmt.Sprintf("%x", req))
-	c.writeMu.Lock()
-	err := c.fr.sendMMS(req)
-	c.writeMu.Unlock()
-	if err != nil {
+	// Formatting a PDU as hex costs time proportional to its size, so it is
+	// done only when it will be logged.
+	if c.log.Enabled(ctx, slog.LevelDebug) {
+		c.log.Debug("mms: tx PDU", "hex", fmt.Sprintf("%x", req))
+	}
+	if err := c.send(ctx, func() error { return c.fr.sendMMS(req) }); err != nil {
 		c.mu.Lock()
 		delete(c.pending, id)
 		c.mu.Unlock()
@@ -190,10 +201,8 @@ func (c *Conn) Cancel(ctx context.Context, invokeID uint32) error {
 		delete(c.cancels, invokeID)
 		c.mu.Unlock()
 	}()
-	c.writeMu.Lock()
-	err := c.fr.sendMMS(asn1.UintElem(tagCancelRequest, uint64(invokeID)).Encode())
-	c.writeMu.Unlock()
-	if err != nil {
+	pdu := asn1.UintElem(tagCancelRequest, uint64(invokeID)).Encode()
+	if err := c.send(ctx, func() error { return c.fr.sendMMS(pdu) }); err != nil {
 		return err
 	}
 	select {
@@ -455,9 +464,7 @@ func (c *Conn) serveRequest(content []byte) {
 	} else {
 		out = asn1.Cons(tagConfirmedResponse, asn1.UintElem(asn1.TagInteger, uint64(id)), resp).Encode()
 	}
-	c.writeMu.Lock()
-	c.fr.sendMMS(out)
-	c.writeMu.Unlock()
+	c.send(context.Background(), func() error { return c.fr.sendMMS(out) })
 }
 
 // File service error codes of class file (11).

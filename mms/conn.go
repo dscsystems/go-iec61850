@@ -36,8 +36,9 @@ type Options struct {
 	Password string
 	// Initiate overrides the negotiated MMS parameters.
 	Initiate *InitiateRequest
-	// ConnectTimeout bounds the TCP + association handshake. Zero means
-	// no explicit deadline beyond the context.
+	// ConnectTimeout bounds the whole establishment — TCP, TLS and the
+	// association handshake — as one budget. Zero means no explicit
+	// deadline beyond the context, which is honoured throughout.
 	ConnectTimeout time.Duration
 	// Logger receives protocol diagnostics; nil discards them.
 	Logger *slog.Logger
@@ -117,7 +118,10 @@ type Conn struct {
 	// aprofilePeer is the server's A-profile certificate.
 	aprofilePeer *x509.Certificate
 
-	writeMu sync.Mutex
+	// wlock serialises PDUs onto the transport. It is a channel rather
+	// than a mutex so that a request can stop waiting for it when its
+	// context ends (send).
+	wlock chan struct{}
 
 	mu       sync.Mutex
 	nextID   uint32
@@ -197,7 +201,12 @@ func (s State) String() string {
 
 // Dial establishes an MMS association to a "host:port" address.
 func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
-	d := net.Dialer{Timeout: opts.ConnectTimeout}
+	if opts.ConnectTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, opts.ConnectTimeout)
+		defer cancel()
+	}
+	d := net.Dialer{}
 	if opts.KeepAlive != nil {
 		d.KeepAliveConfig = *opts.KeepAlive
 	} else if opts.E2E != nil {
@@ -222,21 +231,40 @@ func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
 		}
 		raw = sec
 	}
-	c, err := newClientConn(raw, opts)
+	c, err := newClientConn(ctx, raw, opts)
 	if err != nil {
 		raw.Close()
+		if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
+			err = fmt.Errorf("%w (%w)", err, cerr)
+		}
 		return nil, err
 	}
 	return c, nil
 }
 
-func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
+// aLongTimeAgo is a deadline in the past: setting it interrupts a blocked
+// read or write at once.
+var aLongTimeAgo = time.Unix(1, 0)
+
+func newClientConn(ctx context.Context, raw net.Conn, opts Options) (*Conn, error) {
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	if opts.ConnectTimeout > 0 {
-		raw.SetDeadline(time.Now().Add(opts.ConnectTimeout))
+	// The handshake's reads and writes are bounded by ctx: by its deadline,
+	// and by its cancellation, which interrupts them.
+	if dl, ok := ctx.Deadline(); ok {
+		raw.SetDeadline(dl)
+	}
+	stop := context.AfterFunc(ctx, func() { raw.SetDeadline(aLongTimeAgo) })
+	defer stop()
+	// handshakeDone lifts the handshake's bounds from the established
+	// connection, failing if ctx ended in the meantime.
+	handshakeDone := func() error {
+		if !stop() {
+			return ctx.Err()
+		}
+		return raw.SetDeadline(time.Time{})
 	}
 
 	// COTP handshake.
@@ -261,8 +289,8 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		if opts.ConnectTimeout > 0 {
-			raw.SetDeadline(time.Time{})
+		if err := handshakeDone(); err != nil {
+			return nil, err
 		}
 		return startConn(raw, fr, logger, negotiated, responding, opts), nil
 	}
@@ -335,8 +363,8 @@ func newClientConn(raw net.Conn, opts Options) (*Conn, error) {
 		return nil, fmt.Errorf("mms: initiate response: %w", err)
 	}
 
-	if opts.ConnectTimeout > 0 {
-		raw.SetDeadline(time.Time{})
+	if err := handshakeDone(); err != nil {
+		return nil, err
 	}
 
 	c := startConn(raw, &framing{cotp: ct, mmsContext: presentation.ContextMMS, acseContext: presentation.ContextACSE},
@@ -399,6 +427,7 @@ func startConn(raw net.Conn, fr *framing, logger *slog.Logger, negotiated Initia
 		nextID:         1,
 		pending:        make(map[uint32]chan result),
 		readerDone:     make(chan struct{}),
+		wlock:          make(chan struct{}, 1),
 		releaseTimeout: rt,
 		concluded:      make(chan struct{}, 1),
 		released:       make(chan error, 1),
@@ -553,7 +582,9 @@ func (c *Conn) dispatch(pdu []byte) {
 		c.log.Warn("mms: bad PDU", "err", err)
 		return
 	}
-	c.log.Debug("mms: rx PDU", "tag", tag.String(), "len", len(pdu), "hex", fmt.Sprintf("%x", pdu))
+	if c.log.Enabled(context.Background(), slog.LevelDebug) {
+		c.log.Debug("mms: rx PDU", "tag", tag.String(), "len", len(pdu), "hex", fmt.Sprintf("%x", pdu))
+	}
 	switch tag {
 	case tagConfirmedResponse, tagConfirmedError:
 		id, body, err := splitInvoke(content)
@@ -688,13 +719,63 @@ func (c *Conn) failAll(err error) {
 }
 
 // call sends a confirmed request wrapping the fully-encoded service
-// element and waits for the matching response.
+// element and waits for the matching response, both bounded by ctx.
 func (c *Conn) call(ctx context.Context, service *asn1.Element) ([]byte, error) {
-	o, err := c.Start(service)
+	o, err := c.StartContext(ctx, service)
 	if err != nil {
 		return nil, err
 	}
 	return o.Wait(ctx)
+}
+
+// closeWriteGrace bounds the conclude, release or abort that Close and Abort
+// try to send. Closing the transport is what ends a writer stalled on the
+// socket, so it must not wait behind one.
+const closeWriteGrace = 2 * time.Second
+
+// send writes one PDU under the write lock, bounded by ctx. Nothing is sent
+// once ctx has ended; waiting for another writer stops when ctx ends; and a
+// write still blocked on the socket when ctx ends is interrupted. An
+// interrupted write may have sent part of its PDU, after which the stream
+// cannot be trusted, so the transport is then closed and every outstanding
+// request fails.
+func (c *Conn) send(ctx context.Context, write func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case c.wlock <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-c.wlock }()
+	if ctx.Done() == nil {
+		return write()
+	}
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		c.raw.SetWriteDeadline(aLongTimeAgo)
+		close(fired)
+	})
+	err := write()
+	if stop() {
+		return err
+	}
+	<-fired
+	if err != nil {
+		c.raw.Close() // the reader then fails every outstanding request
+		return fmt.Errorf("mms: write interrupted, association closed: %w", ctx.Err())
+	}
+	c.raw.SetWriteDeadline(time.Time{})
+	return nil
+}
+
+// sendClosing is send for the PDUs that end an association, bounded by
+// closeWriteGrace.
+func (c *Conn) sendClosing(write func() error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), closeWriteGrace)
+	defer cancel()
+	return c.send(ctx, write)
 }
 
 // Close releases the association (best-effort MMS conclude) and closes
@@ -714,10 +795,8 @@ func (c *Conn) Close() error {
 	if c.fr.sec != nil {
 		c.closeE2E()
 	} else {
-		c.writeMu.Lock()
 		conclude := asn1.Prim(tagConcludeRequest, nil).Encode()
-		c.fr.sendMMS(conclude)
-		c.writeMu.Unlock()
+		c.sendClosing(func() error { return c.fr.sendMMS(conclude) })
 	}
 
 	err := c.raw.Close()
@@ -815,10 +894,8 @@ func (c *Conn) PeerSecurity() E2EPeer {
 func (c *Conn) closeE2E() {
 	timer := time.NewTimer(c.releaseTimeout)
 	defer timer.Stop()
-	c.writeMu.Lock()
-	err := c.fr.sendMMS(asn1.Prim(tagConcludeRequest, nil).Encode())
-	c.writeMu.Unlock()
-	if err != nil {
+	conclude := asn1.Prim(tagConcludeRequest, nil).Encode()
+	if err := c.sendClosing(func() error { return c.fr.sendMMS(conclude) }); err != nil {
 		return
 	}
 	select {
@@ -828,10 +905,7 @@ func (c *Conn) closeE2E() {
 	case <-timer.C:
 		return
 	}
-	c.writeMu.Lock()
-	err = c.fr.sendRelease(false)
-	c.writeMu.Unlock()
-	if err != nil {
+	if err := c.sendClosing(func() error { return c.fr.sendRelease(false) }); err != nil {
 		return
 	}
 	select {

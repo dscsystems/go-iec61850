@@ -17,10 +17,17 @@ type FileEntry struct {
 // FileOpen opens a file for reading and returns the file-read state
 // machine id and the file size (MMS fileOpen, ISO 9506-2 service 72).
 func (c *Conn) FileOpen(ctx context.Context, name string) (frsmID int32, size uint32, err error) {
+	return c.FileOpenAt(ctx, name, 0)
+}
+
+// FileOpenAt is FileOpen with the transfer starting at byte offset pos
+// (initialPosition), for a resumed or partial download. size is still the
+// whole file's.
+func (c *Conn) FileOpenAt(ctx context.Context, name string, pos uint32) (frsmID int32, size uint32, err error) {
 	req := asn1.Cons(asn1.ContextConstructed(svcFileOpen),
 		asn1.Cons(asn1.ContextConstructed(0), // fileName [0] SEQUENCE OF GraphicString
 			asn1.Prim(asn1.TagGraphicString, []byte(name))),
-		asn1.UintElem(asn1.ContextPrimitive(1), 0), // initialPosition [1]
+		asn1.UintElem(asn1.ContextPrimitive(1), uint64(pos)), // initialPosition [1]
 	)
 	resp, err := c.call(ctx, req)
 	if err != nil {
