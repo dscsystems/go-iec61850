@@ -45,6 +45,8 @@ type handler struct {
 	// readTracking holds the service tracking a read request owes (a
 	// select by reading SBO), applied once its read lock is released.
 	readTracking []func(changeSet)
+	// files is the association's open files (MMS file services).
+	files *assocFiles
 }
 
 // flushReadTracking applies the tracking a read request queued, under the

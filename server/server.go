@@ -447,7 +447,11 @@ func (s *Server) serveConn(raw net.Conn) {
 
 	s.log.Info("server: association established", "peer", sc.Peer)
 	s.notifyConn(ConnectionEvent{Peer: peer, Addr: addr, State: ConnectionOpened, Open: open, Conn: sc})
-	if err := sc.Serve(&handler{s: s}); err != nil && err != net.ErrClosed {
+	h := &handler{s: s}
+	// Files the client left open are released with the association, so a
+	// client that disconnects mid-transfer leaks nothing.
+	defer h.releaseFiles()
+	if err := sc.Serve(h); err != nil && err != net.ErrClosed {
 		s.log.Debug("server: association ended", "peer", sc.Peer, "err", err)
 	}
 }

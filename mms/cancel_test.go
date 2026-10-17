@@ -107,9 +107,7 @@ func TestConcludeEncoding(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.writeMu.Lock()
-		c.fr.sendMMS(pdu)
-		c.writeMu.Unlock()
+		c.send(ctx, func() error { return c.fr.sendMMS(pdu) })
 		select {
 		case <-c.Done():
 		case <-ctx.Done():
