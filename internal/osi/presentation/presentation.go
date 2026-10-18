@@ -321,8 +321,10 @@ func ParseCP(pdu []byte) (CP, error) {
 
 // parseContextList decodes a context-definition-list. Each entry is
 // PresentationContextDefinition ::= SEQUENCE { presentation-context-identifier
-// INTEGER, abstract-syntax, transfer-syntax-name }, and the last may instead
-// be the abbreviated form without a transfer syntax.
+// INTEGER, abstract-syntax-name OID, transfer-syntax-name-list SEQUENCE OF
+// OID }. An entry that lists no transfer syntax proposes none this library
+// can use and is rejected. A bare OID after the abstract syntax, outside
+// the list, is taken as a transfer syntax for peers that encode it so.
 func parseContextList(content []byte) []Context {
 	dec := asn1.NewDecoder(content)
 	var out []Context
@@ -346,7 +348,8 @@ func parseContextList(content []byte) []Context {
 					c.ID = int(n)
 				}
 			case asn1.TagOID:
-				// The abbreviated form names the transfer syntax directly.
+				// The abstract syntax, or a transfer syntax a peer put
+				// outside the list.
 				oid, err := asn1.DecodeOID(v)
 				if err != nil {
 					return out

@@ -36,6 +36,7 @@ import (
 
 	"github.com/dscsystems/go-iec61850/client"
 	"github.com/dscsystems/go-iec61850/iec62351/e2e/e2efile"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
@@ -49,8 +50,8 @@ func main() {
 	timeout := flag.Duration("timeout", 20*time.Second, "overall timeout for the command's operations")
 	var e2eFlags e2efile.Flags
 	e2eFlags.Register(flag.CommandLine, false)
-	var tlsF tlsFlags
-	tlsF.register(flag.CommandLine)
+	tlsF := tlsflags.Flags{Name: "ied-client"}
+	tlsF.Register(flag.CommandLine)
 	var apF apFlags
 	apF.register(flag.CommandLine)
 	flag.Parse()
@@ -70,8 +71,8 @@ func main() {
 	if *password != "" {
 		opts = append(opts, client.WithPassword(*password))
 	}
-	if tlsF.enabled() {
-		opt, err := tlsF.option(*addr)
+	if tlsF.Enabled() {
+		opt, err := tlsF.Option(*addr)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ied-client: tls: %v\n", err)
 			os.Exit(1)
@@ -79,7 +80,7 @@ func main() {
 		opts = append(opts, opt)
 	}
 	if apF.enabled() {
-		cfg, err := apF.config(tlsF.enabled())
+		cfg, err := apF.config(tlsF.Enabled())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ied-client: A-profile: %v\n", err)
 			os.Exit(1)

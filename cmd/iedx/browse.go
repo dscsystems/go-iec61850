@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dscsystems/go-iec61850/mms"
-	"github.com/dscsystems/go-iec61850/model"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dscsystems/go-iec61850/mms"
+	"github.com/dscsystems/go-iec61850/model"
 )
 
 type node struct {

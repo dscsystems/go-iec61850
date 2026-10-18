@@ -139,7 +139,7 @@ IEC61850_C_CLIENT=/path/to/client_example1 go test ./server/ -run CClient
 
 ## Status
 
-Initial-release; the API may change until v1. All packages build without cgo
+Initial release; the API may change until v1. All packages build without cgo
 and cross-compile to Linux, Windows and macOS. GOOSE and SV raw-socket
 transport is Linux-only (AF_PACKET); no capture backend for other platforms
 is implemented. R-GOOSE/R-SV over UDP (`rsession`) is portable.
@@ -147,7 +147,8 @@ is implemented. R-GOOSE/R-SV over UDP (`rsession`) is portable.
 Implemented: MMS client/server, browse/read/write, datasets, reporting
 (URCB and buffered BRCB with EntryID resync, GI/integrity/data-change),
 control (all four models: direct/SBO, normal/enhanced), setting groups
-(SGCB), file services (directory and streamed read), log queries
-(readJournal by time and after-entry), GOOSE and SV pub/sub, SCL parsing,
-R-GOOSE/R-SV with HMAC or AES-GCM message security, TLS transport under
-the IEC 62351-3 profile.
+(SGCB), file services (directory, streamed read, and with a writable
+store SetFile, DeleteFile and RenameFile), logs (readJournal by time and
+after-entry, journal status, and clearing with InitializeJournal), GOOSE
+and SV pub/sub, SCL parsing, R-GOOSE/R-SV with HMAC or AES-GCM message
+security, TLS transport under the IEC 62351-3 profile.

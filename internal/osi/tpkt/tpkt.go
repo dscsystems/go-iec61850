@@ -12,9 +12,9 @@ import (
 const (
 	headerLen = 4
 	version   = 3
-	// MaxPacket bounds a single TPKT to guard against hostile length
-	// fields; 61850 payloads are far smaller.
-	MaxPacket = 1 << 20
+	// MaxPacket is the largest TPKT, header included: its length field
+	// is 16 bits (RFC 1006).
+	MaxPacket = 0xffff
 )
 
 // WritePacket frames payload as a TPKT and writes it to w.
@@ -23,13 +23,12 @@ func WritePacket(w io.Writer, payload []byte) error {
 	if total > MaxPacket {
 		return fmt.Errorf("tpkt: packet of %d bytes exceeds max %d", total, MaxPacket)
 	}
-	var hdr [headerLen]byte
-	hdr[0] = version
-	binary.BigEndian.PutUint16(hdr[2:], uint16(total))
-	if _, err := w.Write(hdr[:]); err != nil {
-		return err
-	}
-	_, err := w.Write(payload)
+	// One write for the whole frame, so a failure cannot leave a header
+	// on the wire without its payload.
+	frame := make([]byte, headerLen, total)
+	frame[0] = version
+	binary.BigEndian.PutUint16(frame[2:], uint16(total))
+	_, err := w.Write(append(frame, payload...))
 	return err
 }
 

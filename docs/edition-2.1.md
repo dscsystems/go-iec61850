@@ -407,6 +407,15 @@ every IED's GOOSE addressing is missing.
   name or, for IED certificates without one, by common name. Refused
   peers are reported for the security event log. No renegotiation, and no
   session resumption on the server.
+- **TLS on OpenSSL**, package `iec62351/ossltls` (build tag `openssl`,
+  cgo; `client.WithTLSHandshake`, `ied-client -tls-openssl`): the same
+  profile on OpenSSL 3, with TLS 1.3 limited to the AES-GCM suites, plus
+  the suites Go does not implement. In the IEC 62351-4 native-mode
+  profile (`iec62351.Options.NativeMode`, TLS 1.2) that is
+  TLS_DHE_RSA_WITH_AES_128_GCM_SHA256 (0x009E); a build against OpenSSL
+  1.0.2 (tags `openssl,openssl_v1`) adds the static TLS_DH_RSA suites
+  0x00A0, 0x00A1 and 0x0031. On `crypto/tls` those suites are not
+  available. The suite-by-suite declaration is in [pics.md](pics.md) §8.1.
 - **IEC 62351-4 end-to-end security**, native mode (packages
   `iec62351/e2e`, `iec62351/e2e/osi`; `client.WithE2E`, `server.WithE2E`):
   the signed handshake with Diffie-Hellman key agreement (groups 14 and
@@ -439,11 +448,12 @@ every IED's GOOSE addressing is missing.
   the mandatory role-to-right table are in the standard only (the
   extension OID, 1.2.840.10070.8.1, is public; its content is not); it
   waits for the text.
-- **Periodic session key renewal** on TLS connections. Go does not
-  initiate TLS 1.3 key updates, and the profile does not renegotiate TLS
-  1.2. Under TLS 1.3 the cipher suite is Go's choice among its AES-GCM
-  and ChaCha20-Poly1305 suites; IEC 62351-3 names only the AES-GCM ones,
-  and Go does not let a configuration exclude the other.
+- **Periodic session key renewal** on TLS connections. Neither engine
+  initiates TLS 1.3 key updates, and the profile does not renegotiate TLS
+  1.2. On `crypto/tls`, the TLS 1.3 cipher suite is also Go's choice
+  among its AES-GCM and ChaCha20-Poly1305 suites: IEC 62351-3 names only
+  the AES-GCM ones, and Go does not let a configuration exclude the
+  other. The OpenSSL engine offers only the AES-GCM ones.
 
 ### Where the references disagree
 

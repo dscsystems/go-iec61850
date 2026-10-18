@@ -130,9 +130,17 @@ func (bs BitString) SetBit(i int, v bool) {
 // AppendBitString appends bit string content octets (padding count prefix
 // then packed bits).
 func AppendBitString(dst []byte, bs BitString) []byte {
-	pad := len(bs.Bits)*8 - bs.Length
-	dst = append(dst, byte(pad))
-	return append(dst, bs.Bits...)
+	// Length decides the content: Bits is cut or zero-extended to the
+	// octets it needs, so a hand-built BitString whose Bits disagree with
+	// Length still encodes with padding 0..7.
+	length := max(bs.Length, 0)
+	need := (length + 7) / 8
+	dst = append(dst, byte(need*8-length))
+	if len(bs.Bits) >= need {
+		return append(dst, bs.Bits[:need]...)
+	}
+	dst = append(dst, bs.Bits...)
+	return append(dst, make([]byte, need-len(bs.Bits))...)
 }
 
 // DecodeBitString decodes bit string content octets. The returned Bits
@@ -176,9 +184,15 @@ func AppendFloat64(dst []byte, v float64) []byte {
 func DecodeFloat(content []byte) (float64, error) {
 	switch len(content) {
 	case 5: // exponent width octet + float32
+		if content[0] != 8 {
+			return 0, fmt.Errorf("float32 with exponent width %d: %w", content[0], ErrBadValue)
+		}
 		v := uint32(content[1])<<24 | uint32(content[2])<<16 | uint32(content[3])<<8 | uint32(content[4])
 		return float64(math.Float32frombits(v)), nil
 	case 9:
+		if content[0] != 11 {
+			return 0, fmt.Errorf("float64 with exponent width %d: %w", content[0], ErrBadValue)
+		}
 		var v uint64
 		for _, b := range content[1:] {
 			v = v<<8 | uint64(b)

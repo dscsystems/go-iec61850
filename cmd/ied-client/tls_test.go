@@ -20,6 +20,7 @@ import (
 
 	"github.com/dscsystems/go-iec61850/client"
 	"github.com/dscsystems/go-iec61850/iec62351"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 	"github.com/dscsystems/go-iec61850/scl"
 	"github.com/dscsystems/go-iec61850/server"
 )
@@ -98,8 +99,8 @@ func TestTLSFlags(t *testing.T) {
 	defer srv.Close()
 	addr := ln.Addr().String()
 
-	dial := func(f tlsFlags) error {
-		cfg, err := f.config(addr)
+	dial := func(f tlsflags.Flags) error {
+		cfg, err := f.Config(addr)
 		if err != nil {
 			return err
 		}
@@ -113,7 +114,7 @@ func TestTLSFlags(t *testing.T) {
 		_, err = c.LogicalDevices(ctx)
 		return err
 	}
-	ok := tlsFlags{Cert: cliCert, Key: cliKey, CA: fileList{caPath}}
+	ok := tlsflags.Flags{Cert: cliCert, Key: cliKey, CA: tlsflags.FileList{caPath}}
 
 	if err := dial(ok); err != nil {
 		t.Fatalf("TLS association: %v", err)
@@ -139,16 +140,16 @@ func TestTLSFlags(t *testing.T) {
 	crlPath := filepath.Join(dir, "ca.crl")
 	os.WriteFile(crlPath, pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}), 0o600)
 	revoked := ok
-	revoked.CRL = fileList{crlPath}
+	revoked.CRL = tlsflags.FileList{crlPath}
 	if err := dial(revoked); !errors.Is(err, iec62351.ErrRevoked) {
 		t.Fatalf("a revoked server certificate: %v", err)
 	}
 
-	for name, f := range map[string]tlsFlags{
-		"no key": {Cert: cliCert, CA: fileList{caPath}},
+	for name, f := range map[string]tlsflags.Flags{
+		"no key": {Cert: cliCert, CA: tlsflags.FileList{caPath}},
 		"no CA":  {Cert: cliCert, Key: cliKey},
 	} {
-		if _, err := f.config(addr); err == nil {
+		if _, err := f.Config(addr); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}

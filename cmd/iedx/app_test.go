@@ -4,9 +4,10 @@ import (
 	"net"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 	"github.com/dscsystems/go-iec61850/scl"
 	"github.com/dscsystems/go-iec61850/server"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // drain runs a command and feeds any resulting messages back into the app,
@@ -47,7 +48,7 @@ func startServer(t *testing.T) string {
 
 func TestAppConnectAndBrowse(t *testing.T) {
 	addr := startServer(t)
-	a := newApp(addr, "", false)
+	a := newApp(addr, "", &tlsflags.Flags{})
 	a.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 
 	// Connect (synchronously in the test).
@@ -99,7 +100,7 @@ func TestAppConnectAndBrowse(t *testing.T) {
 
 func TestAppTabsAndMouse(t *testing.T) {
 	addr := startServer(t)
-	a := newApp(addr, "", false)
+	a := newApp(addr, "", &tlsflags.Flags{})
 	a.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	drain(t, a, a.connect())
 

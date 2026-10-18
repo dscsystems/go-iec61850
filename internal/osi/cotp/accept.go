@@ -41,14 +41,7 @@ func Accept(rw io.ReadWriteCloser) (*Conn, error) {
 			val := params[2 : 2+plen]
 			switch {
 			case code == paramTPDUSize && plen == 1:
-				sizeCode = val[0]
-				// Class 0 allows 128 (7) to 2048 (11) octets.
-				if sizeCode < 7 {
-					sizeCode = 7
-				}
-				if sizeCode > 11 {
-					sizeCode = 11
-				}
+				sizeCode = clampSizeCode(val[0])
 				c.maxTPDU = 1 << sizeCode
 			case (code == paramSrcTSAP || code == paramDstTSAP) && plen > MaxTSEL:
 				return nil, fmt.Errorf("cotp: transport selector of %d octets exceeds %d", plen, MaxTSEL)

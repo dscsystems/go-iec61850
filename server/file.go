@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"path"
 	"sort"
 	"sync"
@@ -248,6 +249,9 @@ func (h *handler) fileRead(content []byte, maxPDU int) (*asn1.Element, error, bo
 	if maxPDU > 0 && maxPDU-fileEnvelope < size {
 		size = max(maxPDU-fileEnvelope, 1)
 	}
+	if id < math.MinInt32 || id > math.MaxInt32 {
+		return nil, fileErr(fileNonExistent), true
+	}
 	chunk, more, err := h.assocFiles().read(int32(id), size)
 	if err != nil {
 		return nil, err, true
@@ -264,7 +268,7 @@ func (h *handler) fileClose(content []byte) (*asn1.Element, error, bool) {
 	if err != nil {
 		return nil, err, true
 	}
-	if !h.assocFiles().close(int32(id)) {
+	if id < math.MinInt32 || id > math.MaxInt32 || !h.assocFiles().close(int32(id)) {
 		return nil, fileErr(fileNonExistent), true
 	}
 	return asn1.Prim(asn1.ContextPrimitive(svcFileClose), nil), nil, true

@@ -736,6 +736,14 @@ func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp prese
 	if err != nil {
 		return nil, err
 	}
+	// Every refusal from here on releases the association: its identifier
+	// and key material stay registered otherwise.
+	accepted := false
+	defer func() {
+		if !accepted {
+			r.assoc.Close()
+		}
+	}()
 	if opts.Authenticate != nil {
 		ar := AssociationRequest{Peer: raw.RemoteAddr(), Called: identityFromACSE(areq.Called),
 			Calling: identityFromACSE(areq.Calling), Security: r.assoc.Peer()}
@@ -762,9 +770,9 @@ func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp prese
 	initResp := EncodeInitiateResponse(answer)
 	opts.trace("tx InitiateResponse", initResp)
 	if err := e2eServerAccept(ct, cp, areq, r, initResp, sres.CalledSSEL, opts.trace); err != nil {
-		r.assoc.Close()
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}
+	accepted = true
 	sc := &ServerConn{
 		fr: r.fr, raw: raw, Peer: raw.RemoteAddr(),
 		MaxPDU:  int(answer.LocalDetail),

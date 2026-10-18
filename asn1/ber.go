@@ -108,6 +108,9 @@ func AppendTag(dst []byte, t Tag) []byte {
 // AppendLength appends definite-form length octets for content length n.
 func AppendLength(dst []byte, n int) []byte {
 	switch {
+	case n < 0:
+		// A negative length would encode as 0x80, the indefinite form.
+		panic(fmt.Sprintf("asn1: negative length %d", n))
 	case n < 0x80:
 		return append(dst, byte(n))
 	case n <= 0xff:

@@ -372,7 +372,10 @@ func ParseAARE(apdu []byte) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("acse: not an AARE: %w", err)
 	}
-	res := &Result{Accepted: true}
+	// result is mandatory: only a result that decodes as accepted(0)
+	// accepts the association.
+	res := &Result{}
+	sawResult := false
 	inner := asn1.NewDecoder(content)
 	for inner.More() {
 		tag, c, err := inner.ReadTLV()
@@ -386,9 +389,11 @@ func ParseAARE(apdu []byte) (*Result, error) {
 		switch tag {
 		case asn1.ContextConstructed(2): // result
 			n, err := asn1.DecodeInt(firstInt(c))
-			if err == nil && n != 0 {
-				res.Accepted = false
+			if err != nil {
+				return nil, fmt.Errorf("acse: malformed AARE result: %w", err)
 			}
+			sawResult = true
+			res.Accepted = n == 0
 			res.Result = int(n)
 		case asn1.ContextConstructed(3): // result-source-diagnostic
 			res.Diagnostic = parseDiagnostic(c)
@@ -409,6 +414,9 @@ func ParseAARE(apdu []byte) (*Result, error) {
 			}
 			res.UserData, _ = parseUserInfo(c)
 		}
+	}
+	if !sawResult {
+		return nil, fmt.Errorf("acse: AARE without a result")
 	}
 	return res, nil
 }

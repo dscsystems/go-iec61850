@@ -241,3 +241,27 @@ func TestTimeQualityOctet(t *testing.T) {
 		}
 	}
 }
+
+// A hand-built bit string is made consistent: its octets follow length.
+func TestNewBitStringBitsFollowsLength(t *testing.T) {
+	v := NewBitStringBits([]byte{0xff}, 12)
+	if v.BitLen() != 12 || len(v.Bytes()) != 2 || v.Bit(11) {
+		t.Errorf("12 bits from one octet: len %d, octets % x", v.BitLen(), v.Bytes())
+	}
+	v.SetBit(11, true) // must not panic
+	if v := NewBitStringBits([]byte{0xff, 0xff}, 3); len(v.Bytes()) != 1 {
+		t.Errorf("3 bits kept %d octets", len(v.Bytes()))
+	}
+}
+
+// UtcTime seconds are unsigned 32-bit: a time outside the range is clamped
+// to its ends instead of wrapping to an unrelated date.
+func TestUTCTimeClampsRange(t *testing.T) {
+	if got := NewUTCTime(time.Unix(-5, 0), 0).Time(); !got.Equal(time.Unix(0, 0)) {
+		t.Errorf("before 1970 = %v, want the epoch", got)
+	}
+	late := NewUTCTime(time.Unix(1<<33, 0), 0).Time()
+	if late.Unix() != 1<<32-1 {
+		t.Errorf("after 2106 = %v (%d), want %d", late, late.Unix(), int64(1<<32-1))
+	}
+}

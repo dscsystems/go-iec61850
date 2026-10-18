@@ -87,6 +87,8 @@ func Connect(rw io.ReadWriteCloser, opts Options) (*Conn, error) {
 	if opts.TPDUSizeCode == 0 {
 		opts.TPDUSizeCode = 10 // 1024 octets
 	}
+	// Class 0 allows 128 (7) to 2048 (11) octets, as Accept enforces.
+	opts.TPDUSizeCode = clampSizeCode(opts.TPDUSizeCode)
 	c := &Conn{
 		rw:      rw,
 		srcRef:  1,
@@ -101,6 +103,12 @@ func Connect(rw io.ReadWriteCloser, opts Options) (*Conn, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// clampSizeCode limits a TPDU size code to class 0's 7 (128 octets) to 11
+// (2048 octets).
+func clampSizeCode(code uint8) uint8 {
+	return min(max(code, 7), 11)
 }
 
 func (c *Conn) sendCR(sizeCode uint8) error {
@@ -140,8 +148,12 @@ func (c *Conn) recvCC() error {
 	if len(body) < 5 {
 		return fmt.Errorf("cotp: short CC")
 	}
-	// body = destRef(2) srcRef(2) class(1) params...; the peer's srcRef is
-	// our destination reference.
+	// body = destRef(2) srcRef(2) class(1) params...; the CC's destRef
+	// answers our CR's srcRef (ISO 8073), and the peer's srcRef is our
+	// destination reference.
+	if ref := binary.BigEndian.Uint16(body[0:2]); ref != c.srcRef {
+		return fmt.Errorf("cotp: CC for reference %d, sent %d", ref, c.srcRef)
+	}
 	c.dstRef = binary.BigEndian.Uint16(body[2:4])
 	if len(body) > 5 {
 		c.parseParams(body[5:])
@@ -158,8 +170,12 @@ func (c *Conn) parseParams(params []byte) {
 		}
 		val := params[2 : 2+plen]
 		if code == paramTPDUSize && plen == 1 {
-			if sz := 1 << val[0]; sz > 0 && sz < c.maxTPDU {
-				c.maxTPDU = sz
+			// The responder may only lower the size, within class 0's
+			// range; a code outside it is ignored.
+			if val[0] >= 7 && val[0] <= 11 {
+				if sz := 1 << val[0]; sz < c.maxTPDU {
+					c.maxTPDU = sz
+				}
 			}
 		}
 		params = params[2+plen:]

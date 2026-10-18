@@ -101,6 +101,12 @@ func (sc *ServerConn) runDeferred(invokeID uint32, fn func(context.Context) (*as
 // sendResponse sends a confirmed response, or a resource error when it
 // would exceed the negotiated PDU size.
 func (sc *ServerConn) sendResponse(invokeID uint32, resp *asn1.Element) error {
+	if resp == nil {
+		// A handler that returned neither a response nor an error: the
+		// service element is mandatory, so answer with service other
+		// rather than send a PDU the peer cannot decode.
+		return sc.sendError(invokeID, &ServiceError{Class: 4, Code: 0})
+	}
 	out := asn1.Cons(tagConfirmedResponse,
 		asn1.UintElem(asn1.TagInteger, uint64(invokeID)),
 		resp,
