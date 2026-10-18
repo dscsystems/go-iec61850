@@ -479,7 +479,7 @@ func TestSetStaticDHChecks(t *testing.T) {
 	if err := ctx.SetStaticDH([][]byte{dh.DER}, other.Key); err == nil {
 		t.Fatal("accepted a DH key that does not match the certificate")
 	}
-	cli, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{sc}, Roots: p.pool()}, Client)
+	cli, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{sc}, Roots: p.pool(), ServerName: "server"}, Client)
 	if err != nil {
 		t.Fatal(err)
 	}
