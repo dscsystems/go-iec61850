@@ -25,11 +25,21 @@ jobs:
         with: { go-version: "1.26" }
       - name: Short fuzz on every package with fuzz targets
         # Discovered rather than listed, so a new target is fuzzed without
-        # editing this file; -fuzz takes one package at a time.
+        # editing this file; -fuzz takes one package at a time. A crash
+        # writes its input under testdata/fuzz and fails the job; a failure
+        # without one (the fuzzer's own "context deadline exceeded" when
+        # -fuzztime ends mid-minimization) is retried once.
         run: |
           for pkg in $(grep -rl --include='*_test.go' '^func Fuzz' . | xargs -n1 dirname | sed 's|^\./||; s|^|./|' | sort -u); do
             for f in $(go test -list 'Fuzz.*' "$pkg" | grep '^Fuzz' || true); do
-              go test -run=NONE -fuzz="^$f$" -fuzztime=10s "$pkg"
+              if ! go test -run=NONE -fuzz="^$f$" -fuzztime=10s "$pkg"; then
+                if [ -n "$(git status --porcelain -- "$pkg/testdata/fuzz")" ]; then
+                  git status --porcelain -- "$pkg/testdata/fuzz"
+                  exit 1
+                fi
+                echo "::warning::$pkg $f failed without a crashing input; retrying"
+                go test -run=NONE -fuzz="^$f$" -fuzztime=10s "$pkg"
+              fi
             done
           done
 
