@@ -220,15 +220,22 @@ type ServerAt struct {
 	LDInst  string `xml:"ldInst,attr"`
 }
 
-// Security is a security participant entry of an access point.
+// Security is a GOOSESecurity or SMVSecurity entry of an access point: a
+// certificate the access point uses for that service (SCL tCertificate).
 type Security struct {
-	IEDName      string `xml:"iedName,attr"`
-	APName       string `xml:"apName,attr"`
-	LDInst       string `xml:"ldInst,attr"`
-	Subject      string `xml:"Subject,attr"`
-	IssuerName   string `xml:"IssuerName,attr"`
-	SerialNumber string `xml:"serialNumber,attr"`
-	XferNumber   int    `xml:"xferNumber,attr"`
+	Name         string `xml:"name,attr"`
+	Desc         string `xml:"desc,attr"`
+	SerialNumber string `xml:"serialNumber,attr"` // decimal digits
+	XferNumber   uint32 `xml:"xferNumber,attr"`
+	Subject      Cert   `xml:"Subject"`
+	IssuerName   Cert   `xml:"IssuerName"`
+}
+
+// Cert names the subject or issuer of a certificate (SCL tCert).
+type Cert struct {
+	// CommonName is "CN=..." or "none".
+	CommonName  string `xml:"commonName,attr"`
+	IDHierarchy string `xml:"idHierarchy,attr"`
 }
 
 // Server holds the logical devices visible through an access point.

@@ -7,3 +7,9 @@
 /.claude/
 /.github/
 PLAN.md
+# Binaries built at the repository root (go build ./cmd/...)
+/e2e-pki
+/goose-sniff
+/ied-client
+/ied-server
+/iedx
