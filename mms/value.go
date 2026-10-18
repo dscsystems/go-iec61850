@@ -495,7 +495,18 @@ func (v *Value) String() string {
 	return "<invalid>"
 }
 
-// TimeQuality is the IEC 61850 UtcTime quality octet.
+// TimeQuality is the IEC 61850 UtcTime quality octet, the last of the
+// eight (IEC 61850-7-2 TimeQuality, IEC 61850-8-1 UtcTime), most
+// significant bit first:
+//
+//	bit 7 (0x80)     LeapSecondsKnown
+//	bit 6 (0x40)     ClockFailure
+//	bit 5 (0x20)     ClockNotSynchronized
+//	bits 4-0 (0x1f)  TimeAccuracy: the number of significant bits of the
+//	                 fraction of a second, 0 to 24; 31 is unspecified
+//
+// It is the layout libiec61850 uses. Combine the flags with TimeAccuracy
+// or TimeAccuracyUnspecified by OR.
 type TimeQuality uint8
 
 const (
@@ -505,7 +516,8 @@ const (
 )
 
 // TimeAccuracy returns a TimeQuality declaring n bits of fraction
-// accuracy (0..24; use TimeAccuracyUnspecified for none).
+// accuracy (0..24, clamped; use TimeAccuracyUnspecified for none) with
+// TimeLeapSecondsKnown set.
 func TimeAccuracy(n int) TimeQuality {
 	if n < 0 {
 		n = 0
@@ -516,7 +528,8 @@ func TimeAccuracy(n int) TimeQuality {
 	return TimeLeapSecondsKnown | TimeQuality(n)
 }
 
-// TimeAccuracyUnspecified declares no fraction accuracy.
+// TimeAccuracyUnspecified is the accuracy field's value 31: no fraction
+// accuracy is claimed. It sets no flag.
 const TimeAccuracyUnspecified TimeQuality = 0x1f
 
 // DefaultTimeQuality is the quality this library stamps a time with when
