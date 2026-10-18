@@ -5,20 +5,27 @@
 // Usage:
 //
 //	ied-server -scl model.cid -addr :102
+//
+// TLS (IEC 62351-3): -tls-cert, -tls-key and -tls-ca, optionally -tls-crl;
+// clients must then present a certificate chaining to a -tls-ca. MMS over
+// TLS listens on port 3782 by convention (-addr :3782).
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/iec62351/e2e/e2efile"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 	"github.com/dscsystems/go-iec61850/scl"
@@ -33,6 +40,8 @@ func main() {
 	verbose := flag.Bool("v", false, "verbose logging")
 	var e2eFlags e2efile.Flags
 	e2eFlags.Register(flag.CommandLine, true)
+	tlsF := tlsflags.Flags{Name: "ied-server"}
+	tlsF.RegisterServer(flag.CommandLine)
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -87,22 +96,39 @@ func main() {
 		})
 	}
 
+	var ln net.Listener
+	if tlsF.Enabled() {
+		ln, err = tlsF.Listen(*addr)
+	} else {
+		ln, err = net.Listen("tcp", *addr)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ied-server: listen: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Simulate live process data.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go simulate(ctx, srv, m, log)
 
-	log.Info("serving", "addr", *addr, "ied", m.Name, "devices", len(m.Devices))
-	go func() {
-		if err := srv.ListenAndServe(*addr); err != nil {
-			log.Error("serve", "err", err)
-			stop()
-		}
-	}()
+	log.Info("serving", "addr", ln.Addr().String(), "tls", tlsF.Enabled(), "ied", m.Name, "devices", len(m.Devices))
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
 
-	<-ctx.Done()
-	log.Info("shutting down")
-	srv.Close()
+	select {
+	case <-ctx.Done():
+		log.Info("shutting down")
+		srv.Close()
+		if err := <-served; err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Error("serve", "err", err)
+		}
+	case err := <-served:
+		srv.Close()
+		fmt.Fprintf(os.Stderr, "ied-server: serve: %v\n", err)
+		stop()
+		os.Exit(1)
+	}
 }
 
 // simPoint is one simulated process point and the quality/timestamp

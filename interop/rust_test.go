@@ -240,11 +240,12 @@ func TestRustClientGoServer(t *testing.T) {
 	}
 	go srv.Serve(ln)
 	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	_, port, _ := net.SplitHostPort(ln.Addr().String())
 	for _, mode := range []string{"read", "static-dataset", "dynamic-dataset", "control", "report"} {
 		t.Run(mode, func(t *testing.T) {
+			// Each mode has its own budget: a slow one must not fail the rest.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 			output, err := exec.CommandContext(ctx, filepath.Join(root, "target/debug/examples/go_interop_peer"), port, mode).CombinedOutput()
 			t.Logf("Rust peer:\n%s", output)
 			if err != nil {

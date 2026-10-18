@@ -54,7 +54,8 @@ const (
 	Revoked
 	// Unknown: no CRL of the issuer is configured.
 	Unknown
-	// Unavailable: the issuer's CRL is past its next update.
+	// Unavailable: the issuer's CRLs are past their next update, carry
+	// none, are not yet valid, or were not signed by the issuer.
 	Unavailable
 )
 
@@ -115,7 +116,15 @@ func (r *RevocationChecker) Status(c, issuer *x509.Certificate, now time.Time) R
 	defer r.mu.RUnlock()
 	status := Unknown
 	for _, crl := range r.crls {
-		if !bytes.Equal(crl.RawIssuer, c.RawIssuer) || crl.CheckSignatureFrom(issuer) != nil {
+		if !bytes.Equal(crl.RawIssuer, c.RawIssuer) {
+			continue
+		}
+		if crl.CheckSignatureFrom(issuer) != nil {
+			// A CRL under the issuer's name it did not sign: coverage was
+			// meant but cannot be trusted.
+			if status == Unknown {
+				status = Unavailable
+			}
 			continue
 		}
 		for _, e := range crl.RevokedCertificateEntries {
@@ -123,7 +132,7 @@ func (r *RevocationChecker) Status(c, issuer *x509.Certificate, now time.Time) R
 				return Revoked
 			}
 		}
-		if !crl.NextUpdate.IsZero() && now.After(crl.NextUpdate) {
+		if crl.NextUpdate.IsZero() || now.After(crl.NextUpdate) || now.Before(crl.ThisUpdate) {
 			if status == Unknown {
 				status = Unavailable
 			}

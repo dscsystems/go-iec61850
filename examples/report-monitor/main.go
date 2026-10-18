@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"time"
 
 	"github.com/dscsystems/go-iec61850/client"
@@ -41,28 +42,42 @@ func main() {
 	// The callback runs on the connection's reader goroutine and must not
 	// block, so it only hands each report over; printing happens below.
 	// A report that finds the channel full is dropped rather than stall
-	// the connection.
+	// the connection, and counted; the count is printed below.
 	reports := make(chan *client.Report, 64)
+	var dropped atomic.Uint64
 	sub, err := c.EnableReporting(ctx, rcb, func(r *client.Report) {
 		select {
 		case reports <- r:
 		default:
-			log.Printf("report %q seq=%d dropped: printing is behind", r.RptID, r.SeqNum)
+			dropped.Add(1)
 		}
 	})
 	if err != nil {
 		log.Fatalf("enable reporting: %v", err)
 	}
-	defer sub.Disable(context.Background())
+	defer func() {
+		// ctx is cancelled by now: disable under a fresh, bounded one so an
+		// unresponsive server cannot hang the exit.
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := sub.Disable(dctx); err != nil {
+			log.Printf("disable reporting: %v", err)
+		}
+	}()
 
 	// General interrogation gives an immediate full snapshot.
 	if err := c.TriggerGI(ctx, rcb); err != nil {
 		log.Printf("GI: %v", err)
 	}
 
+	var reported uint64
 	for {
 		select {
 		case r := <-reports:
+			if n := dropped.Load(); n != reported {
+				fmt.Printf("(%d reports dropped: printing is behind)\n", n-reported)
+				reported = n
+			}
 			fmt.Printf("report %q seq=%d entries=%d\n", r.RptID, r.SeqNum, len(r.Entries))
 			for _, e := range r.Entries {
 				fmt.Printf("  %s [%s] = %s  (%s)\n", e.Ref, e.FC, e.Value, e.Reason)

@@ -107,7 +107,8 @@ tlsCfg, err := iec62351.ClientConfig(iec62351.Options{
     Certificates: []tls.Certificate{ownCert},
     Roots:        caPool,
     CRLs:         crls,       // optional
-    ServerName:   "IED1",     // SAN, or CN for IED certificates without one
+    ServerName:   "IED1",     // required: SAN, or CN for IED certificates without one
+                              // (or pin AllowedPeers, or opt out with AnyServerName)
     OnEvent:      func(e iec62351.Event) { log.Print(e.Err) },
 })
 c, err := client.Dial(ctx, "192.168.10.5:3782", client.WithTLS(tlsCfg))

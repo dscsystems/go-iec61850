@@ -137,9 +137,13 @@ func serve(t *testing.T, o iec62351.Options) (string, func() []iec62351.Event) {
 	}
 }
 
-// dial associates under the profile and reads one value.
+// dial associates under the profile and reads one value. The server is
+// expected to be "ied1" unless o names another.
 func dial(t *testing.T, addr string, o iec62351.Options) error {
 	t.Helper()
+	if o.ServerName == "" && !o.AnyServerName {
+		o.ServerName = "ied1"
+	}
 	cfg, err := iec62351.ClientConfig(o)
 	if err != nil {
 		t.Fatal(err)
@@ -253,6 +257,37 @@ func TestRevocation(t *testing.T) {
 	if err := dial(t, addr, iec62351.Options{Certificates: []tls.Certificate{cliCert}, Roots: root.pool()}); err != nil {
 		t.Errorf("stale CRL allowed: %v", err)
 	}
+
+	// A CRL without a next update can never be shown current: stale.
+	undated := *root.crl(t, time.Now().Add(time.Hour))
+	undated.NextUpdate = time.Time{}
+	// A CRL not yet valid is not current either.
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(2),
+		ThisUpdate: time.Now().Add(time.Hour), NextUpdate: time.Now().Add(2 * time.Hour)}, root.cert, root.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	early, _ := x509.ParseRevocationList(der)
+	// A CRL under the issuer's name that another key signed covers
+	// nothing, and must not pass as "no CRL configured".
+	impostor := newCA(t, "root").crl(t, time.Now().Add(time.Hour))
+	for name, tc := range map[string]struct {
+		crl  *x509.RevocationList
+		want error
+	}{
+		"no next update": {&undated, iec62351.ErrStaleCRL},
+		"not yet valid":  {early, iec62351.ErrStaleCRL},
+		"wrong signer":   {impostor, iec62351.ErrCRLSignature},
+	} {
+		addr, events := serve(t, iec62351.Options{Certificates: []tls.Certificate{srvCert}, Roots: root.pool(),
+			CRLs: []*x509.RevocationList{tc.crl}})
+		if err := dial(t, addr, iec62351.Options{Certificates: []tls.Certificate{cliCert}, Roots: root.pool()}); err == nil {
+			t.Errorf("%s: the CRL did not fail the connection", name)
+		}
+		if ev := events(); len(ev) == 0 || !errors.Is(ev[0].Err, tc.want) {
+			t.Errorf("%s: events %v, want %v", name, ev, tc.want)
+		}
+	}
 }
 
 func TestKeyStrengthAndPinning(t *testing.T) {
@@ -285,6 +320,29 @@ func TestKeyStrengthAndPinning(t *testing.T) {
 	}
 	if err := dial(t, addr, iec62351.Options{Certificates: []tls.Certificate{rsaCert}, Roots: root.pool()}); err == nil {
 		t.Error("a client outside the allowed set was served")
+	}
+}
+
+func TestClientServerNameRequired(t *testing.T) {
+	root := newCA(t, "root")
+	c, leaf := root.issue(t, "scada", nil)
+	base := iec62351.Options{Certificates: []tls.Certificate{c}, Roots: root.pool()}
+	if _, err := iec62351.ClientConfig(base); err == nil {
+		t.Error("a client configuration binding the server to no identity")
+	}
+	for name, o := range map[string]iec62351.Options{
+		"ServerName":    {ServerName: "ied1"},
+		"AllowedPeers":  {AllowedPeers: []*x509.Certificate{leaf}},
+		"AnyServerName": {AnyServerName: true},
+	} {
+		o.Certificates, o.Roots = base.Certificates, base.Roots
+		if _, err := iec62351.ClientConfig(o); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// A server checks client chains, never names.
+	if _, err := iec62351.ServerConfig(base); err != nil {
+		t.Errorf("server: %v", err)
 	}
 }
 

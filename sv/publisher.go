@@ -106,6 +106,11 @@ func NewLEPublisher(iface ethernet.Interface, cfg LEConfig) (*LEPublisher, error
 			cfg.SmpMod, cfg.SamplesPerCycle*cfg.NominalHz)
 	}
 	p := &LEPublisher{iface: iface, cfg: cfg, rate: cfg.SamplesPerCycle * cfg.NominalHz}
+	// smpCnt counts 0..rate-1 in 16 bits, which also keeps the sample
+	// interval above 15 µs.
+	if p.rate > 1<<16 {
+		return nil, fmt.Errorf("sv: %d samples per second overflow the 16-bit smpCnt", p.rate)
+	}
 	if p.smpRate() > 0xffff {
 		return nil, fmt.Errorf("sv: smpRate %d does not fit its 16 bits", p.smpRate())
 	}

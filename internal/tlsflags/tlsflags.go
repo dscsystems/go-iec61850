@@ -19,8 +19,8 @@ import (
 	"github.com/dscsystems/go-iec61850/iec62351/ossltls"
 )
 
-// Flags are the IEC 62351-3 TLS options: this client's certificate, the
-// authorities the server's chain must lead to, and their CRLs. Name, when
+// Flags are the IEC 62351-3 TLS options: this end's certificate, the
+// authorities the peer's chain must lead to, and their CRLs. Name, when
 // set, prefixes the refusal events written to standard error; a command
 // that owns the terminal leaves it empty.
 type Flags struct {
@@ -41,14 +41,23 @@ type FileList []string
 func (l *FileList) String() string     { return strings.Join(*l, ",") }
 func (l *FileList) Set(s string) error { *l = append(*l, s); return nil }
 
-// Register adds the -tls-* flags to fs.
+// Register adds the client's -tls-* flags to fs.
 func (f *Flags) Register(fs *flag.FlagSet) {
-	fs.StringVar(&f.Cert, "tls-cert", "", "TLS client certificate, PEM (enables TLS, IEC 62351-3)")
-	fs.StringVar(&f.Key, "tls-key", "", "TLS client private key, PEM")
-	fs.Var(&f.CA, "tls-ca", "TLS trust anchor, PEM or DER (repeatable; required with -tls-cert)")
-	fs.Var(&f.CRL, "tls-crl", "CRL, PEM or DER (repeatable)")
+	f.register(fs, "client")
 	fs.StringVar(&f.ServerName, "tls-server-name", "", "name the server certificate must carry (default: the host of -addr)")
 	fs.BoolVar(&f.NoServerName, "tls-no-server-name", false, "check the server's chain only, not its name")
+}
+
+// RegisterServer adds the server's -tls-* flags to fs.
+func (f *Flags) RegisterServer(fs *flag.FlagSet) {
+	f.register(fs, "server")
+}
+
+func (f *Flags) register(fs *flag.FlagSet, role string) {
+	fs.StringVar(&f.Cert, "tls-cert", "", "TLS "+role+" certificate, PEM (enables TLS, IEC 62351-3)")
+	fs.StringVar(&f.Key, "tls-key", "", "TLS "+role+" private key, PEM")
+	fs.Var(&f.CA, "tls-ca", "TLS trust anchor, PEM or DER (repeatable; required with -tls-cert)")
+	fs.Var(&f.CRL, "tls-crl", "CRL, PEM or DER (repeatable)")
 	fs.BoolVar(&f.TLS13Only, "tls13", false, "refuse TLS 1.2")
 	fs.BoolVar(&f.NativeMode, "tls-native", false, "IEC 62351-4 native-mode TLS profile instead of IEC 62351-3")
 	fs.BoolVar(&f.AllowStaleCRL, "tls-allow-stale-crl", false, "accept a CRL past its next update")
@@ -89,8 +98,51 @@ func (f *Flags) Config(addr string) (*tls.Config, error) {
 	return iec62351.ClientConfig(o)
 }
 
+// Listen listens on addr for TLS clients, on crypto/tls or, with
+// -tls-openssl, on OpenSSL.
+func (f *Flags) Listen(addr string) (net.Listener, error) {
+	o, err := f.load()
+	if err != nil {
+		return nil, err
+	}
+	o.OnEvent = f.onEvent("client")
+	if f.OpenSSL {
+		ctx, err := ossltls.NewContext(o, ossltls.Server)
+		if err != nil {
+			return nil, err
+		}
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		return ctx.Listener(ln), nil
+	}
+	cfg, err := iec62351.ServerConfig(o)
+	if err != nil {
+		return nil, err
+	}
+	return tls.Listen("tcp", addr, cfg)
+}
+
 // options builds the profile options for a server at addr.
 func (f *Flags) options(addr string) (iec62351.Options, error) {
+	o, err := f.load()
+	if err != nil {
+		return o, err
+	}
+	o.ServerName = f.ServerName
+	if o.ServerName == "" && !f.NoServerName {
+		if o.ServerName, _, err = net.SplitHostPort(addr); err != nil {
+			o.ServerName = addr
+		}
+	}
+	o.AnyServerName = f.NoServerName
+	o.OnEvent = f.onEvent("server")
+	return o, nil
+}
+
+// load reads the certificate, trust anchors and CRLs.
+func (f *Flags) load() (iec62351.Options, error) {
 	var none iec62351.Options
 	if f.Key == "" {
 		return none, errors.New("-tls-key is required with -tls-cert")
@@ -130,25 +182,18 @@ func (f *Flags) options(addr string) (iec62351.Options, error) {
 			crls = append(crls, crl)
 		}
 	}
-	name := f.ServerName
-	if name == "" && !f.NoServerName {
-		if name, _, err = net.SplitHostPort(addr); err != nil {
-			name = addr
-		}
-	}
 	return iec62351.Options{
 		Certificates:  []tls.Certificate{cert},
 		Roots:         roots,
 		CRLs:          crls,
 		AllowStaleCRL: f.AllowStaleCRL,
-		ServerName:    name,
 		TLS13Only:     f.TLS13Only,
 		NativeMode:    f.NativeMode,
-		OnEvent:       f.onEvent(),
 	}, nil
 }
 
-func (f *Flags) onEvent() func(iec62351.Event) {
+// onEvent reports refusals of the peer, named by its role.
+func (f *Flags) onEvent(peerRole string) func(iec62351.Event) {
 	if f.Name == "" {
 		return nil
 	}
@@ -157,7 +202,7 @@ func (f *Flags) onEvent() func(iec62351.Event) {
 		if e.Peer != nil {
 			peer = e.Peer.Subject.String()
 		}
-		fmt.Fprintf(os.Stderr, "%s: tls: server refused (%s): %v\n", f.Name, peer, e.Err)
+		fmt.Fprintf(os.Stderr, "%s: tls: %s refused (%s): %v\n", f.Name, peerRole, peer, e.Err)
 	}
 }
 

@@ -361,7 +361,8 @@ func TestVerification(t *testing.T) {
 func TestHandshakeContextCancelled(t *testing.T) {
 	p := newPKI(t)
 	cc, _ := p.leaf(t, "client")
-	ctx, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{cc}, Roots: p.pool(), NativeMode: true}, Client)
+	ctx, err := NewContext(iec62351.Options{Certificates: []tls.Certificate{cc}, Roots: p.pool(), NativeMode: true,
+		ServerName: "127.0.0.1"}, Client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -557,5 +558,49 @@ func TestRenegotiationRefused(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the server did not drop the renegotiating client")
+	}
+}
+
+// A transport that ends without close_notify is a truncation, reported as
+// io.ErrUnexpectedEOF; close_notify is the orderly io.EOF.
+func TestTruncationIsNotEOF(t *testing.T) {
+	p := newPKI(t)
+	sc, _ := p.leaf(t, "server", net.IPv4(127, 0, 0, 1))
+	cc, _ := p.leaf(t, "client")
+	so := iec62351.Options{Certificates: []tls.Certificate{sc}, Roots: p.pool()}
+	co := iec62351.Options{Certificates: []tls.Certificate{cc}, Roots: p.pool(), ServerName: "127.0.0.1"}
+	for name, tc := range map[string]struct {
+		abrupt bool
+		want   error
+	}{
+		"close_notify": {false, io.EOF},
+		"truncated":    {true, io.ErrUnexpectedEOF},
+	} {
+		t.Run(name, func(t *testing.T) {
+			goSrv := goEnd(t, so, Server)
+			srv := func(raw net.Conn) (net.Conn, error) {
+				c, err := goSrv(raw)
+				if err != nil {
+					return nil, err
+				}
+				if tc.abrupt {
+					raw.Close()
+				} else {
+					c.Close()
+				}
+				return c, nil
+			}
+			c, errc, err := run(t, srv, osslEnd(t, co, Client))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := <-errc; err != nil {
+				t.Fatalf("server: %v", err)
+			}
+			c.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if _, err := c.Read(make([]byte, 16)); err != tc.want {
+				t.Fatalf("read: %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
