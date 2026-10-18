@@ -35,7 +35,8 @@ func NewSubscriber(iface ethernet.Interface) *Subscriber {
 
 // Subscribe delivers each matching ASDU to cb from a background
 // goroutine. The callback must not block. The returned stop function ends
-// delivery.
+// delivery: no frame read after it returns is delivered. The goroutine
+// itself exits with the next frame read or when the interface closes.
 func (s *Subscriber) Subscribe(f Filter, cb func(*ASDU)) (stop func(), err error) {
 	if s.iface == nil {
 		return nil, errors.New("sv: subscriber has no interface")
@@ -69,7 +70,8 @@ func (s *Subscriber) Subscribe(f Filter, cb func(*ASDU)) (stop func(), err error
 
 // SubscribeLE delivers matching ASDUs decoded as 9-2LE samples. The
 // *LESample passed to cb is reused between calls (zero-allocation steady
-// state); copy it if you retain it beyond the callback.
+// state); copy it if you retain it beyond the callback. stop is as
+// Subscribe's.
 func (s *Subscriber) SubscribeLE(f Filter, cb func(*LESample)) (stop func(), err error) {
 	if s.iface == nil {
 		return nil, errors.New("sv: subscriber has no interface")

@@ -1096,8 +1096,9 @@ Estimates are indicative engineer-weeks (ew) for one engineer familiar with the 
 ## WP8 — Public API, tools and events (1–1.5 ew)
 
 - `client.WithE2E`, `server.WithE2E`, `WithAEIdentity`, `WithHandshakeTimeout`, `WithMaxHandshakes`, `WithKeepAlive`.
-- `cmd/ied-server` and `cmd/ied-client`: flags `-e2e-cert`, `-e2e-key`, `-e2e-path`, `-e2e-ca`, `-e2e-crl`, `-ae`, `-peer-ae`, `-e2e-icv`, `-e2e-encrypt`, `-rekey`, `-alarm-diag`. `-events json` prints every security event as JSON (this answers PIXIT "how the DUT exposes events and validation results"). `-force-rekey` and `-force-release` are interactive commands (PIXIT "how the DUT is forced to…").
-- Exit: documented in `docs/api.md` and `SKILL.md`; example programs `examples/e2e-client`, `examples/e2e-server`.
+- `cmd/ied-server` and `cmd/ied-client`: flags `-e2e-cert`, `-e2e-key`, `-e2e-path`, `-e2e-ca`, `-e2e-crl`, `-ae`, `-e2e-icv`, `-alarm-diag`, `-revocation-unavailable`, `-e2e-edition`; client only `-peer-ae`, `-e2e-group`, `-rekey`; server only `-e2e-required`, `-rekey-request` (package `iec62351/e2e/e2efile`). `-events json` prints every security event as JSON (this answers PIXIT "how the DUT exposes events and validation results"). The DUT is forced to rekey by `-rekey` (client) or `-rekey-request` (server) and to release by ending the client.
+- Exit: documented in `docs/api.md` and `SKILL.md`.
+- As built: no `-e2e-encrypt` flag (encryption is WP9), no interactive `-force-rekey`/`-force-release`, and no `examples/e2e-client`/`examples/e2e-server` (see the deviations table in 9).
 
 ## WP9 — Encryption, non-AE (1.5–2 ew; after R-09 is resolved)
 
@@ -1310,7 +1311,7 @@ Add a `SecurityStatus` record type to `internal/wire/record.go`. It is HMAC-prot
 - dd-inner: `e2e: {mode, device_ae, algorithms, assoc_id, last_handshake, last_rekey, key_epoch, alarms, incidents, rejects_by_diag{}, cert_expiry{own, device}}`.
 - dd-outer: `e2e: {mode, identity, handshakes_ok, handshakes_failed, alarms, rejects_by_diag{}, active_e2e_associations, cert_expiry}` and `inner_security` (13.6).
 
-**dd-probe:** `-e2e-cert`, `-e2e-key`, `-e2e-path`, `-e2e-ca`, `-e2e-crl`, `-ae`, `-peer-ae`, `-e2e-encrypt`. It prints the negotiated algorithms, the peer AE, the certificate chain, `assoID` and the result of each check. This is the commissioning tool for association A.
+**dd-probe:** the `-e2e-*` client flags of `ied-client` (`-e2e-cert`, `-e2e-key`, `-e2e-path`, `-e2e-ca`, `-e2e-crl`, `-ae`, `-peer-ae`, …); there is no `-e2e-encrypt` (encryption is WP9). It prints the negotiated algorithms, the peer AE, the certificate chain, `assoID` and the result of each check. This is the commissioning tool for association A.
 
 ## 13.8 Configuration schema
 

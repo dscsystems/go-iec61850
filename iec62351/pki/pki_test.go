@@ -74,6 +74,34 @@ func TestVerifyPath(t *testing.T) {
 	}
 }
 
+// TestRevocationUnavailable checks that CRLs which cannot show a
+// certificate current give Unavailable, not Good or Unknown.
+func TestRevocationUnavailable(t *testing.T) {
+	root := pkitest.NewRoot("root", pkitest.ECDSAP256)
+	leaf := root.NewE2ELeaf(ap, 1, pkitest.LeafOptions{})
+	now := time.Now()
+	undated := *root.CRL(now.Add(time.Hour))
+	undated.NextUpdate = time.Time{}
+	impostor := pkitest.NewRoot("root", pkitest.ECDSAP256).CRL(now.Add(time.Hour))
+	for name, crl := range map[string]*x509.RevocationList{
+		"no next update": &undated,
+		"wrong signer":   impostor,
+	} {
+		r := pki.NewRevocationChecker(pki.Warn, crl)
+		if s := r.Status(leaf.Cert.Certificate, root.Cert, now); s != pki.Unavailable {
+			t.Errorf("%s: status %v, want Unavailable", name, s)
+		}
+	}
+	current := pki.NewRevocationChecker(pki.Warn, root.CRL(now.Add(time.Hour)))
+	if s := current.Status(leaf.Cert.Certificate, root.Cert, now); s != pki.Good {
+		t.Errorf("current CRL: status %v", s)
+	}
+	// Before the CRL's thisUpdate (an hour ago) it is not yet valid.
+	if s := current.Status(leaf.Cert.Certificate, root.Cert, now.Add(-2*time.Hour)); s != pki.Unavailable {
+		t.Errorf("CRL not yet valid: status %v, want Unavailable", s)
+	}
+}
+
 func TestProfile(t *testing.T) {
 	root := pkitest.NewRoot("root", pkitest.ECDSAP256)
 	noKA := root.NewE2ELeaf(ap, 1, pkitest.LeafOptions{KeyUsage: x509.KeyUsageDigitalSignature})
@@ -83,6 +111,11 @@ func TestProfile(t *testing.T) {
 	weak := root.NewE2ELeaf(ap, 1, pkitest.LeafOptions{KeyType: pkitest.RSA1024})
 	if err := pki.EndEntityProfile(weak.Cert); !errors.Is(err, pki.ErrProfile) {
 		t.Fatalf("1024-bit RSA accepted: %v", err)
+	}
+	ca := root.NewE2ELeaf(ap, 1, pkitest.LeafOptions{
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyAgreement | x509.KeyUsageCertSign})
+	if err := pki.EndEntityProfile(ca.Cert); !errors.Is(err, pki.ErrProfile) {
+		t.Fatalf("keyCertSign accepted in an end entity: %v", err)
 	}
 	big := root.NewE2ELeaf(ap, 1, pkitest.LeafOptions{Padding: 9000})
 	if _, err := pki.ParseCertificate(big.DER); !errors.Is(err, pki.ErrCertTooLarge) {

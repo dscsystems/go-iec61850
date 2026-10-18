@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 	"math"
+	"net"
 	"os"
 	"os/signal"
 	"time"
@@ -62,8 +63,18 @@ func main() {
 		}
 	}()
 
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
 	log.Printf("serving %s on %s", m.Name, addr)
-	go func() { log.Fatal(srv.ListenAndServe(addr)) }()
-	<-ctx.Done()
-	srv.Close()
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
+	select {
+	case <-ctx.Done(): // Close ends Serve with net.ErrClosed: no error
+		srv.Close()
+	case err := <-served:
+		srv.Close()
+		log.Fatal(err) // the listener failed: exit non-zero
+	}
 }

@@ -55,8 +55,11 @@ type Options struct {
 	Roots *x509.CertPool
 	// CRLs are checked against every certificate of the peer's chain: one
 	// listed by a CRL its issuer signed is refused. A CRL past its next
-	// update is itself refused, and so is the connection, unless
-	// AllowStaleCRL.
+	// update, without one, or not yet valid is itself refused, and so is
+	// the connection, unless AllowStaleCRL. A certificate whose issuer has
+	// CRLs here none of which that issuer signed is refused: the list
+	// meant to cover it cannot be trusted. CRLs are not reloaded; replace
+	// the configuration to take newer ones.
 	CRLs          []*x509.RevocationList
 	AllowStaleCRL bool
 	// AllowedPeers, when not empty, restricts the peers to these
@@ -64,9 +67,13 @@ type Options struct {
 	AllowedPeers []*x509.Certificate
 	// ServerName, on a client, is the identity the server's certificate
 	// must carry: in a subject alternative name, or, for a certificate
-	// that has none (usual for IEDs), as its common name. Empty checks
-	// the chain only.
+	// that has none (usual for IEDs), as its common name. ClientConfig
+	// requires it, unless AllowedPeers pins the server or AnyServerName.
 	ServerName string
+	// AnyServerName lets a client accept any server certificate that
+	// chains to Roots, whatever it names: any device the authorities
+	// certified can then stand in for the one dialled.
+	AnyServerName bool
 	// TLS13Only refuses TLS 1.2.
 	TLS13Only bool
 	// NativeMode selects the IEC 62351-4 native-mode TLS profile (Table 10)
@@ -95,6 +102,7 @@ var (
 	ErrNoPeerCertificate = errors.New("iec62351: peer presented no certificate")
 	ErrRevoked           = errors.New("iec62351: certificate revoked")
 	ErrStaleCRL          = errors.New("iec62351: CRL past its next update")
+	ErrCRLSignature      = errors.New("iec62351: no CRL of the issuer verifies")
 	ErrWeakKey           = errors.New("iec62351: key too weak")
 	ErrNotAllowed        = errors.New("iec62351: peer certificate not in the allowed set")
 	ErrServerName        = errors.New("iec62351: server certificate does not name the server")
@@ -103,6 +111,9 @@ var (
 // ClientConfig returns the TLS configuration of an MMS client under the
 // profile, for client.WithTLS.
 func ClientConfig(o Options) (*tls.Config, error) {
+	if err := o.CheckServerName(); err != nil {
+		return nil, err
+	}
 	cfg, err := base(o)
 	if err != nil {
 		return nil, err
@@ -178,6 +189,16 @@ func base(o Options) (*tls.Config, error) {
 			return err
 		},
 	}, nil
+}
+
+// CheckServerName reports an error when a client with these options would
+// not bind the server's certificate to an identity: no ServerName, no
+// AllowedPeers and not AnyServerName.
+func (o *Options) CheckServerName() error {
+	if o.ServerName == "" && len(o.AllowedPeers) == 0 && !o.AnyServerName {
+		return errors.New("iec62351: Options.ServerName is required on a client (or AllowedPeers, or AnyServerName)")
+	}
+	return nil
 }
 
 func (o *Options) now() time.Time {
@@ -324,18 +345,34 @@ func DHPrimeBits(c *x509.Certificate) (bits int, ok bool) {
 // checkRevoked looks c up in the CRLs its issuer signed.
 func (o *Options) checkRevoked(c, issuer *x509.Certificate) error {
 	now := o.now()
+	named, signed := false, false
 	for _, crl := range o.CRLs {
-		if !bytes.Equal(crl.RawIssuer, c.RawIssuer) || crl.CheckSignatureFrom(issuer) != nil {
+		if !bytes.Equal(crl.RawIssuer, c.RawIssuer) {
 			continue
 		}
-		if !crl.NextUpdate.IsZero() && now.After(crl.NextUpdate) && !o.AllowStaleCRL {
-			return fmt.Errorf("%w: issued by %s, next update %s", ErrStaleCRL, crl.Issuer, crl.NextUpdate.Format(time.RFC3339))
+		named = true
+		if crl.CheckSignatureFrom(issuer) != nil {
+			continue
+		}
+		signed = true
+		if !o.AllowStaleCRL {
+			switch {
+			case crl.NextUpdate.IsZero():
+				return fmt.Errorf("%w: issued by %s, no next update", ErrStaleCRL, crl.Issuer)
+			case now.After(crl.NextUpdate):
+				return fmt.Errorf("%w: issued by %s, next update %s", ErrStaleCRL, crl.Issuer, crl.NextUpdate.Format(time.RFC3339))
+			case now.Before(crl.ThisUpdate):
+				return fmt.Errorf("%w: issued by %s, not valid before %s", ErrStaleCRL, crl.Issuer, crl.ThisUpdate.Format(time.RFC3339))
+			}
 		}
 		for _, e := range crl.RevokedCertificateEntries {
 			if e.SerialNumber.Cmp(c.SerialNumber) == 0 {
 				return fmt.Errorf("%w: %s (serial %s)", ErrRevoked, c.Subject, c.SerialNumber)
 			}
 		}
+	}
+	if named && !signed {
+		return fmt.Errorf("%w: issued by %s", ErrCRLSignature, issuer.Subject)
 	}
 	return nil
 }

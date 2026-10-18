@@ -263,6 +263,14 @@ func TestSmpRateFollowsSmpMod(t *testing.T) {
 	if _, err := NewLEPublisher(&frameCapture{}, LEConfig{SvID: "MU1", SmpMod: SecPerSmp}); err == nil {
 		t.Error("SecPerSmp at 4000 samples per second should be refused")
 	}
+	// smpRate per period fits 16 bits, but smpCnt cannot count the
+	// 102400 samples of each second.
+	if _, err := NewLEPublisher(&frameCapture{}, LEConfig{SvID: "MU1", SamplesPerCycle: 1024, NominalHz: 100}); err == nil {
+		t.Error("a rate overflowing smpCnt should be refused")
+	}
+	if _, err := NewLEPublisher(&frameCapture{}, LEConfig{SvID: "MU1", SamplesPerCycle: 1024, NominalHz: 64}); err != nil {
+		t.Errorf("65536 samples per second: %v", err)
+	}
 }
 
 // gmIdentity [9] (9-2 Amendment 1) round-trips as eight octets, follows

@@ -582,8 +582,10 @@ func WithE2E(cfg *e2e.ServerConfig, required bool) Option {
 // WithAProfile verifies clients authenticating with the IEC 62351-4
 // A-security profile (compatibility mode) and answers with cfg's own
 // authentication value. With required, clients that do not authenticate
-// are refused. Combine it with WithTLS: the profile requires TLS unless
-// cfg.AllowWithoutTLS.
+// are refused. Without it the profile is optional (migration): a client
+// that sends no authentication value is accepted unauthenticated, so set
+// required once every client authenticates. Combine it with WithTLS: the
+// profile requires TLS unless cfg.AllowWithoutTLS.
 func WithAProfile(cfg *aprofile.Config, required bool) Option {
 	return func(s *Server) { s.aprofile, s.apRequired = cfg, required }
 }

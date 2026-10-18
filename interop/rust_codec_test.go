@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 )
 
 // The Rust peers independently construct the same fixture and assert equality
-// when decoding Go's PDU. Compare decoded values, allowing BER boolean variants.
+// when decoding Go's PDU. The Go side compares the decoded fields with the
+// fixture, not a re-encoding, so a layout error shared by Go's encoder and
+// decoder cannot pass; comparing values allows BER boolean variants.
 func TestRustGooseCodec(t *testing.T) {
 	root := rustRoot(t)
 	tq := mms.TimeQuality(0x8a)
@@ -28,8 +31,13 @@ func TestRustGooseCodec(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(parsed.Marshal(), fixture.Marshal()) {
+		if !sameValues(parsed.Values, fixture.Values) || !parsed.T.Equal(fixture.T) {
 			t.Fatalf("Go decoded Rust fixture incorrectly: %+v", parsed)
+		}
+		got, want := *parsed, *fixture
+		got.Values, want.Values, got.T, want.T = nil, nil, time.Time{}, time.Time{}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("Go decoded Rust fixture incorrectly:\n got %+v\nwant %+v", got, want)
 		}
 	}
 	codecBothWays(t, filepath.Join(root, "target/debug/examples/go_interop_goose"), fixture.Marshal()[8:], check)
@@ -52,11 +60,33 @@ func TestRustSVCodec(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(parsed.Marshal(), fixture.Marshal()) {
+		if parsed.AppID != fixture.AppID || len(parsed.ASDUs) != len(fixture.ASDUs) {
 			t.Fatalf("Go decoded Rust fixture incorrectly: %+v", parsed)
+		}
+		for i, a := range parsed.ASDUs {
+			got, want := *a, *fixture.ASDUs[i]
+			if !got.RefrTm.Equal(want.RefrTm) {
+				t.Fatalf("ASDU %d: refrTm %v, want %v", i, got.RefrTm, want.RefrTm)
+			}
+			got.RefrTm, want.RefrTm = time.Time{}, time.Time{}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("ASDU %d decoded incorrectly:\n got %+v\nwant %+v", i, got, want)
+			}
 		}
 	}
 	codecBothWays(t, filepath.Join(root, "target/debug/examples/go_interop_sv"), fixture.Marshal()[8:], check)
+}
+
+func sameValues(a, b []*mms.Value) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !a[i].Equal(b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func apdu(pdu []byte) []byte {

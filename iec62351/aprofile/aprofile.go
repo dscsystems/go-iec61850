@@ -188,6 +188,13 @@ func (v *Verifier) now() time.Time {
 // Verify checks val against 11.2.3.2 c) to f) and returns the peer's
 // certificate. The replay check comes last, after the signature, so only
 // authentic values are recorded.
+//
+// The time value has one-second resolution (11.2.3.2), so a second
+// association from the same certificate within the same second is refused
+// as a replay; a client retrying must wait for the next second. Verify
+// does not bind the certificate to the peer's AE title: an application
+// that authorizes by identity checks the returned certificate's subject
+// itself.
 func (v *Verifier) Verify(val *Value) (*pki.Certificate, error) {
 	now := v.now()
 	cert, err := pki.ParseCertificate(val.Certificate)

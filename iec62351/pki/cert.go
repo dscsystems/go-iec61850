@@ -196,8 +196,9 @@ var AEAttributeType = asn1.OID{2, 5, 4, 106}
 
 // EndEntityProfile checks an E2E end-entity certificate against IEC
 // 62351-4 Annex G: version 3, positive serial, no unique identifiers,
-// SHA-256 or stronger signature, RSA >= 2048 or EC P-256 key, and key usage
-// with both digitalSignature and keyAgreement.
+// SHA-256 or stronger signature, RSA >= 2048 or EC P-256 key, key usage
+// with both digitalSignature and keyAgreement, and not a CA (no basic
+// constraints cA, no keyCertSign).
 func EndEntityProfile(c *Certificate) error {
 	if c.Version != 3 {
 		return fmt.Errorf("%w: version %d", ErrProfile, c.Version)
@@ -217,6 +218,9 @@ func EndEntityProfile(c *Certificate) error {
 	}
 	if c.KeyUsage&x509.KeyUsageDigitalSignature == 0 || c.KeyUsage&x509.KeyUsageKeyAgreement == 0 {
 		return fmt.Errorf("%w: key usage must include digitalSignature and keyAgreement", ErrProfile)
+	}
+	if c.IsCA || c.KeyUsage&x509.KeyUsageCertSign != 0 {
+		return fmt.Errorf("%w: a CA certificate is not an end entity", ErrProfile)
 	}
 	if hasUniqueIDs(c.RawTBSCertificate) {
 		return fmt.Errorf("%w: issuer or subject unique identifier present", ErrProfile)

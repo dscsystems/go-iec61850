@@ -199,8 +199,8 @@ func FromPrivate(k Kind, f PointFormat, priv []byte) (*Key, error) {
 		return nil, fmt.Errorf("dh: unsupported group %v", k)
 	}
 	x := new(big.Int).SetBytes(priv)
-	if x.Sign() == 0 {
-		return nil, errors.New("dh: zero exponent")
+	if x.Cmp(big.NewInt(1)) <= 0 || x.Cmp(new(big.Int).Sub(modp2048P, big.NewInt(1))) >= 0 {
+		return nil, errors.New("dh: exponent outside [2, p-2]")
 	}
 	y := new(big.Int).Exp(big.NewInt(2), x, modp2048P)
 	return &Key{kind: k, pub: y.FillBytes(make([]byte, modpLen)), x: x}, nil

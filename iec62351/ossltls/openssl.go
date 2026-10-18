@@ -308,6 +308,11 @@ type Context struct {
 // NativeMode selects the IEC 62351-4 Table 10 suites (TLS 1.2), otherwise
 // the IEC 62351-3 ones (TLS 1.2 and 1.3, or 1.3 only with TLS13Only).
 func NewContext(o iec62351.Options, role Role) (*Context, error) {
+	if role == Client {
+		if err := o.CheckServerName(); err != nil {
+			return nil, err
+		}
+	}
 	return newContext(o, role, "")
 }
 
@@ -588,7 +593,10 @@ func (c *Conn) flush() error {
 	if len(out) == 0 {
 		return nil
 	}
-	_, err := c.raw.Write(out)
+	n, err := c.raw.Write(out)
+	if err == nil && n < len(out) {
+		err = io.ErrShortWrite
+	}
 	return err
 }
 
@@ -658,8 +666,19 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 		c.raw.SetDeadline(dl)
 		defer c.raw.SetDeadline(time.Time{})
 	}
-	stop := context.AfterFunc(ctx, func() { c.raw.SetDeadline(time.Unix(1, 0)) })
-	defer stop()
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		c.raw.SetDeadline(time.Unix(1, 0))
+		close(fired)
+	})
+	defer func() {
+		// A context ending as the handshake completes must not leave the
+		// expired deadline on a live connection: wait for it, then clear it.
+		if !stop() {
+			<-fired
+			c.raw.SetDeadline(time.Time{})
+		}
+	}()
 	c.hsErr = c.handshake()
 	if c.hsErr == nil {
 		c.hsErr = c.verify()
@@ -760,6 +779,11 @@ func (c *Conn) Read(b []byte) (int, error) {
 		switch se {
 		case C.SSL_ERROR_WANT_READ:
 			if err := c.fill(); err != nil {
+				if err == io.EOF {
+					// The transport ended without close_notify: truncation,
+					// not the orderly close of SSL_ERROR_ZERO_RETURN.
+					err = io.ErrUnexpectedEOF
+				}
 				return 0, err
 			}
 		case C.SSL_ERROR_ZERO_RETURN:

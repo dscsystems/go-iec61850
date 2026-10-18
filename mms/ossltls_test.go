@@ -40,7 +40,9 @@ func TestAProfileOverOpenSSLTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srvCtx.Close()
-	cliCtx, err := ossltls.NewContext(iec62351.Options{Certificates: []tls.Certificate{id(2)}, Roots: pool, NativeMode: true}, ossltls.Client)
+	// The A-profile, not TLS, identifies the server here (OID subject).
+	cliCtx, err := ossltls.NewContext(iec62351.Options{Certificates: []tls.Certificate{id(2)}, Roots: pool, NativeMode: true,
+		AnyServerName: true}, ossltls.Client)
 	if err != nil {
 		t.Fatal(err)
 	}

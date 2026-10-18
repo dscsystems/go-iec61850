@@ -35,7 +35,11 @@ func main() {
 		log.Fatalf("logical devices: %v", err)
 	}
 	for _, ld := range lds {
-		lns, _ := c.LogicalNodes(ctx, ld)
+		lns, err := c.LogicalNodes(ctx, ld)
+		if err != nil {
+			log.Printf("%s: logical nodes: %v", ld, err)
+			continue
+		}
 		fmt.Printf("%s: %v\n", ld, lns)
 	}
 

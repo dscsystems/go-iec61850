@@ -63,11 +63,14 @@ type CA struct {
 	Key  crypto.Signer
 }
 
-var serial = big.NewInt(time.Now().UnixNano())
-
+// nextSerial returns a random positive 127-bit serial number, safe for
+// concurrent use.
 func nextSerial() *big.Int {
-	serial = new(big.Int).Add(serial, big.NewInt(1))
-	return new(big.Int).Set(serial)
+	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 127))
+	if err != nil {
+		panic(err)
+	}
+	return n.Add(n, big.NewInt(1))
 }
 
 // NewRoot creates a self-signed root CA.

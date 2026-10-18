@@ -46,6 +46,14 @@ go run ./cmd/ied-client -addr 192.168.10.5:3782 \
   -tls-cert client.pem -tls-key client.key -tls-ca ca.pem -tls-crl ca.crl scan
 ```
 
+`ied-server` takes the same `-tls-cert`, `-tls-key`, `-tls-ca` and
+`-tls-crl` (plus `-tls13`, `-tls-native`, `-tls-openssl`) and then
+requires every client to present a certificate chaining to a `-tls-ca`:
+
+```sh
+go run ./cmd/ied-server -addr :3782 -tls-cert ied.pem -tls-key ied.key -tls-ca ca.pem
+```
+
 The IEC 62351-4 native-mode profile (`-tls-native`) mandates
 TLS_DHE_RSA_WITH_AES_128_GCM_SHA256, which Go's crypto/tls does not
 implement. Package `iec62351/ossltls` runs TLS on OpenSSL 3 instead. It
