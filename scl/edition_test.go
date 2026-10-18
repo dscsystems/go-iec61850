@@ -736,3 +736,25 @@ func TestRoutableWithoutDestination(t *testing.T) {
 	}
 	assertDiagnostic(t, m2, "Protocol is R-GOOSE but the GSE address has no IP")
 }
+
+// GOOSESecurity and SMVSecurity are SCL tCertificate: name and serial
+// number as attributes, Subject and IssuerName as child elements.
+func TestAccessPointCertificate(t *testing.T) {
+	s, _ := loadEd21(t)
+	var got []scl.Security
+	for _, ied := range s.IEDs {
+		for _, ap := range ied.AccessPoints {
+			got = append(got, ap.GOOSESecurity...)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("%d GOOSESecurity entries, want 1", len(got))
+	}
+	c := got[0]
+	want := scl.Security{Name: "GooseCert", SerialNumber: "4711", XferNumber: 2,
+		Subject:    scl.Cert{CommonName: "CN=ED21", IDHierarchy: "Substation/ED21"},
+		IssuerName: scl.Cert{CommonName: "CN=Utility CA", IDHierarchy: "Utility"}}
+	if c != want {
+		t.Errorf("GOOSESecurity = %+v, want %+v", c, want)
+	}
+}

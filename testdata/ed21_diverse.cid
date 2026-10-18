@@ -252,8 +252,9 @@
           <LN prefix="" lnClass="GGIO" inst="2" lnType="GGIO_1"/>
         </LDevice>
       </Server>
-      <GOOSESecurity>
-        <Subject>ED21</Subject>
+      <GOOSESecurity name="GooseCert" serialNumber="4711" xferNumber="2">
+        <Subject commonName="CN=ED21" idHierarchy="Substation/ED21"/>
+        <IssuerName commonName="CN=Utility CA" idHierarchy="Utility"/>
       </GOOSESecurity>
     </AccessPoint>
     <KDC iedName="ED21" apName="S1" ldInst="LD0" />

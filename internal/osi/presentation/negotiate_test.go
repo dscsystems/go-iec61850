@@ -70,6 +70,24 @@ func TestUnacceptableContextIsRejected(t *testing.T) {
 			t.Errorf("result %d = %d, want %d", i, results[i].Result, want)
 		}
 	}
+	// The wire values are ISO 8823-1's, not just the constants': a rejection
+	// is provider-rejection (2) with the reason it was refused.
+	for i, want := range []struct {
+		result    int64
+		reason    ProviderReason
+		hasReason bool
+	}{
+		{0, 0, false},
+		{2, ReasonAbstractSyntaxNotSupported, true},
+		{2, ReasonProposedTransferSyntaxNotSupported, true},
+		{0, 0, false},
+	} {
+		r := results[i]
+		if int64(r.Result) != want.result || r.HasReason != want.hasReason || r.Reason != want.reason {
+			t.Errorf("result %d = %d reason %d (present %v), want %d reason %d (present %v)",
+				i, r.Result, r.Reason, r.HasReason, want.result, want.reason, want.hasReason)
+		}
+	}
 	// A rejected context names no transfer syntax: none was agreed.
 	for i, r := range results {
 		if r.Result == ResultAcceptance && !r.HasTransferSyntax {
@@ -161,6 +179,8 @@ func TestCPRoundTrip(t *testing.T) {
 type resultEntry struct {
 	Result            Result
 	HasTransferSyntax bool
+	Reason            ProviderReason
+	HasReason         bool
 }
 
 // resultList decodes a CPA's presentation-context-definition-result-list.
@@ -196,6 +216,10 @@ func resultList(t *testing.T, cpa []byte) []resultEntry {
 					}
 				case asn1.ContextPrimitive(1):
 					e.HasTransferSyntax = true
+				case asn1.ContextPrimitive(2):
+					if n, err := asn1.DecodeInt(rc); err == nil {
+						e.Reason, e.HasReason = ProviderReason(n), true
+					}
 				}
 			}
 			out = append(out, e)

@@ -111,17 +111,52 @@ func Negotiate(proposed []Context) Negotiated {
 	return neg
 }
 
-// Result is the per-context outcome in a CPA's result list.
+// Result is the per-context outcome in a CPA's result list (ISO 8823-1
+// Result: acceptance(0), user-rejection(1), provider-rejection(2)).
 type Result int
 
 const (
 	// ResultAcceptance: the context is accepted.
 	ResultAcceptance Result = 0
-	// ResultProviderRejection: the responder cannot serve the context.
-	ResultProviderRejection Result = 1
-	// ResultAbstractSyntaxNotSupported: the abstract syntax is unknown.
-	ResultAbstractSyntaxNotSupported Result = 2
+	// ResultUserRejection: the presentation user refused the context.
+	ResultUserRejection Result = 1
+	// ResultProviderRejection: the presentation provider cannot serve the
+	// context; ProviderReason says why.
+	ResultProviderRejection Result = 2
 )
+
+// ProviderReason is the provider-reason of a rejected context in a CPA's
+// result list (ISO 8823-1 Result-list).
+type ProviderReason int
+
+const (
+	ReasonNotSpecified                       ProviderReason = 0
+	ReasonAbstractSyntaxNotSupported         ProviderReason = 1
+	ReasonProposedTransferSyntaxNotSupported ProviderReason = 2
+	ReasonLocalLimitOnDCSExceeded            ProviderReason = 3
+)
+
+// buildResults builds a CPA or CPR result list: one entry per proposal, in
+// proposal order. A context accepts reports whether the responder serves;
+// known reports whether its abstract syntax is one the responder
+// implements, which tells an unsupported transfer syntax from an
+// unsupported abstract syntax.
+func buildResults(proposed []Context, accepts, known func(Context) bool) *asn1.Element {
+	results := asn1.Cons(asn1.ContextConstructed(5))
+	for _, c := range proposed {
+		switch {
+		case accepts(c):
+			results.Add(contextResult(ResultAcceptance, 0))
+		case known(c) && !c.BER():
+			results.Add(contextResult(ResultProviderRejection, ReasonProposedTransferSyntaxNotSupported))
+		default:
+			results.Add(contextResult(ResultProviderRejection, ReasonAbstractSyntaxNotSupported))
+		}
+	}
+	return results
+}
+
+func (c Context) known() bool { return c.IsACSE() || c.IsMMS() }
 
 // BuildCPA builds a CPA (Connect Presentation Accept) PDU wrapping acseData
 // (the ACSE AARE), accepting the contexts this library can serve and
@@ -144,14 +179,7 @@ func BuildCPA(respondingPSel []byte, proposed []Context, acseData []byte) (Negot
 		// responding-presentation-selector [3] IMPLICIT OCTET STRING
 		normal.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
 	}
-	results := asn1.Cons(asn1.ContextConstructed(5))
-	for _, c := range proposed {
-		if c.Acceptable() {
-			results.Add(contextResult(ResultAcceptance))
-		} else {
-			results.Add(contextResult(ResultProviderRejection))
-		}
-	}
+	results := buildResults(proposed, Context.Acceptable, Context.known)
 	normal.Add(results)
 	acseID := neg.ACSE
 	if acseID == 0 {
@@ -178,14 +206,7 @@ func BuildCPR(respondingPSel []byte, proposed []Context, acseData []byte) []byte
 	if len(respondingPSel) > 0 {
 		seq.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
 	}
-	results := asn1.Cons(asn1.ContextConstructed(5))
-	for _, c := range proposed {
-		if c.Acceptable() {
-			results.Add(contextResult(ResultAcceptance))
-		} else {
-			results.Add(contextResult(ResultProviderRejection))
-		}
-	}
+	results := buildResults(proposed, Context.Acceptable, Context.known)
 	seq.Add(results)
 	acseID := neg.ACSE
 	if acseID == 0 {
@@ -420,11 +441,14 @@ func contextEntry(id int, abstractSyntax asn1.OID) *asn1.Element {
 // contextResult builds one entry of a CPA result list. An accepted context
 // names the transfer syntax it is accepted with; a rejected one carries
 // only the reason.
-func contextResult(result Result) *asn1.Element {
+func contextResult(result Result, reason ProviderReason) *asn1.Element {
 	e := asn1.Cons(asn1.TagSequence,
 		asn1.IntElem(asn1.ContextPrimitive(0), int64(result)))
-	if result == ResultAcceptance {
+	switch result {
+	case ResultAcceptance:
 		e.Add(asn1.OIDElem(asn1.ContextPrimitive(1), oidBER))
+	case ResultProviderRejection:
+		e.Add(asn1.IntElem(asn1.ContextPrimitive(2), int64(reason)))
 	}
 	return e
 }
@@ -540,14 +564,9 @@ func BuildCPAWithE2E(respondingPSel []byte, proposed []Context, acseData []byte,
 	if len(respondingPSel) > 0 {
 		normal.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
 	}
-	results := asn1.Cons(asn1.ContextConstructed(5))
-	for _, c := range proposed {
-		if neg.accepts(c) {
-			results.Add(contextResult(ResultAcceptance))
-		} else {
-			results.Add(contextResult(ResultProviderRejection))
-		}
-	}
+	results := buildResults(proposed, neg.accepts, func(c Context) bool {
+		return c.known() || (allow && c.IsE2E())
+	})
 	normal.Add(results)
 	acseID := neg.ACSE
 	if acseID == 0 {
@@ -564,14 +583,9 @@ func BuildCPRWithE2E(respondingPSel []byte, proposed []Context, acseData []byte,
 	if len(respondingPSel) > 0 {
 		seq.Add(asn1.Prim(asn1.ContextPrimitive(3), respondingPSel))
 	}
-	results := asn1.Cons(asn1.ContextConstructed(5))
-	for _, c := range proposed {
-		if neg.accepts(c) {
-			results.Add(contextResult(ResultAcceptance))
-		} else {
-			results.Add(contextResult(ResultProviderRejection))
-		}
-	}
+	results := buildResults(proposed, neg.accepts, func(c Context) bool {
+		return c.known() || (allow && c.IsE2E())
+	})
 	seq.Add(results)
 	acseID := neg.ACSE
 	if acseID == 0 {
