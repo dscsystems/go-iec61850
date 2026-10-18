@@ -214,3 +214,30 @@ func TestNestedDataAccessError(t *testing.T) {
 		t.Fatalf("re-encoded % x, want % x", got, raw)
 	}
 }
+
+// The quality octet is pinned to literal values from IEC 61850-7-2/8-1
+// (and libiec61850's Timestamp accessors: 0x80, 0x40, 0x20, accuracy & 0x1f),
+// not to the constants themselves, so a shifted layout fails here.
+func TestTimeQualityOctet(t *testing.T) {
+	cases := []struct {
+		name string
+		q    TimeQuality
+		want byte
+	}{
+		{"leap seconds known", TimeLeapSecondsKnown, 0x80},
+		{"clock failure", TimeClockFailure, 0x40},
+		{"clock not synchronized", TimeClockNotSynchronized, 0x20},
+		{"accuracy unspecified", TimeAccuracyUnspecified, 0x1f},
+		{"accuracy 20", TimeAccuracy(20), 0x80 | 20},
+		{"accuracy clamps at 24", TimeAccuracy(99), 0x80 | 24},
+		{"default", DefaultTimeQuality, 0x80 | 10},
+		{"failure, unsynchronized, 3 bits", TimeClockFailure | TimeClockNotSynchronized | TimeAccuracy(3), 0xe3},
+	}
+	at := time.Unix(1_700_000_000, 0)
+	for _, c := range cases {
+		enc := AppendData(nil, NewUTCTime(at, c.q))
+		if got := enc[len(enc)-1]; got != c.want {
+			t.Errorf("%s: octet %#02x, want %#02x", c.name, got, c.want)
+		}
+	}
+}
