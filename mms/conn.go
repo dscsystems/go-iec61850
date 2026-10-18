@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -238,6 +239,11 @@ func Dial(ctx context.Context, addr string, opts Options) (*Conn, error) {
 	c, err := newClientConn(ctx, raw, opts)
 	if err != nil {
 		raw.Close()
+		if _, ok := ctx.Deadline(); ok && errors.Is(err, os.ErrDeadlineExceeded) {
+			// The transport deadline is ctx's, and may expire a moment
+			// before ctx reports it: wait for ctx to catch up.
+			<-ctx.Done()
+		}
 		if cerr := ctx.Err(); cerr != nil && !errors.Is(err, cerr) {
 			err = fmt.Errorf("%w (%w)", err, cerr)
 		}
