@@ -471,7 +471,7 @@ func (sc *ServerConn) handlePDU(pdu []byte, h Handler) error {
 	dec := asn1.NewDecoder(pdu)
 	tag, content, err := dec.ReadTLV()
 	if err != nil {
-		return nil // ignore malformed PDUs
+		return sc.sendReject(nil, rejectPDUError, rejectInvalidPDU)
 	}
 	switch tag {
 	case tagConfirmedRequest:
@@ -491,24 +491,55 @@ func (sc *ServerConn) handlePDU(pdu []byte, h Handler) error {
 			return nil
 		}
 		return net.ErrClosed
-	default:
+	case tagUnconfirmed, tagCancelResponse, tagCancelError, tagConcludeResponse,
+		tagConcludeResponseLegacy, tagConcludeError:
+		// Valid MMS PDUs this server has no use for.
 		return nil
+	default:
+		return sc.sendReject(nil, rejectPDUError, rejectUnknownPDUType)
 	}
+}
+
+// RejectPDU categories and codes this server sends (ISO 9506-2 RejectPDU).
+const (
+	rejectConfirmedRequest = 1 // confirmed-requestPDU [1]
+	rejectPDUError         = 5 // pdu-error [5]
+
+	rejectUnrecognizedService = 1 // confirmed-requestPDU
+	rejectInvalidInvokeID     = 3 // confirmed-requestPDU
+
+	rejectUnknownPDUType = 0 // pdu-error
+	rejectInvalidPDU     = 1 // pdu-error
+)
+
+// sendReject answers a PDU the server cannot process with a RejectPDU, so
+// the peer learns of it at once rather than at its own timeout.
+// originalInvokeID is nil when the request's invokeID could not be read.
+func (sc *ServerConn) sendReject(originalInvokeID *uint32, category uint32, code int64) error {
+	rej := asn1.Cons(tagRejectPDU)
+	if originalInvokeID != nil {
+		rej.Add(asn1.UintElem(asn1.ContextPrimitive(0), uint64(*originalInvokeID)))
+	}
+	rej.Add(asn1.IntElem(asn1.ContextPrimitive(category), code))
+	return sc.send(rej.Encode())
 }
 
 func (sc *ServerConn) handleConfirmed(content []byte, h Handler) error {
 	dec := asn1.NewDecoder(content)
 	idBytes, err := dec.Expect(asn1.TagInteger)
 	if err != nil {
-		return nil
+		return sc.sendReject(nil, rejectConfirmedRequest, rejectInvalidInvokeID)
 	}
-	id64, _ := asn1.DecodeUint(idBytes)
+	id64, err := asn1.DecodeUint(idBytes)
+	if err != nil || id64 > 0xffffffff {
+		return sc.sendReject(nil, rejectConfirmedRequest, rejectInvalidInvokeID)
+	}
 	invokeID := uint32(id64)
 
 	// The service is the next element; its tag number is the service id.
 	serviceTag, serviceContent, err := dec.ReadTLV()
 	if err != nil {
-		return nil
+		return sc.sendReject(&invokeID, rejectConfirmedRequest, rejectUnrecognizedService)
 	}
 	req := &Request{
 		InvokeID: invokeID,

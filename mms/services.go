@@ -2,6 +2,7 @@ package mms
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/dscsystems/go-iec61850/asn1"
@@ -80,6 +81,18 @@ func (c *Conn) Identify(ctx context.Context) (vendor, model, revision string, er
 	return vendor, model, revision, nil
 }
 
+// maxContinued bounds the items a continued listing (name lists, file
+// directories, journals) collects across all its pages, so a peer that
+// keeps saying more follow cannot grow it without end.
+const maxContinued = 1 << 20
+
+// errNoProgress is returned when a peer asks for continuation after the
+// same point twice: following it would repeat the page forever.
+var errNoProgress = errors.New("mms: continuation does not advance")
+
+// errTooMany is returned when a continued listing passes maxContinued.
+var errTooMany = fmt.Errorf("mms: continued listing exceeds %d items", maxContinued)
+
 // GetNameList retrieves the names of the given object class, optionally
 // scoped to a domain, following continuation until the list is complete.
 func (c *Conn) GetNameList(ctx context.Context, class ObjectClass, domain string) ([]string, error) {
@@ -94,7 +107,14 @@ func (c *Conn) GetNameList(ctx context.Context, class ObjectClass, domain string
 		if !more || len(batch) == 0 {
 			return names, nil
 		}
-		after = batch[len(batch)-1]
+		if len(names) > maxContinued {
+			return nil, errTooMany
+		}
+		next := batch[len(batch)-1]
+		if next == after {
+			return nil, errNoProgress
+		}
+		after = next
 	}
 }
 

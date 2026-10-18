@@ -18,6 +18,11 @@ import (
 type explicitReservationPeer struct{ reserved bool }
 
 func (h *explicitReservationPeer) Handle(req *mms.Request) (*asn1.Element, error) {
+	if req.Service == 4 {
+		// Reads (GetRCB) answer one value; only RptID is needed.
+		return asn1.Cons(asn1.ContextConstructed(4),
+			asn1.Cons(asn1.ContextConstructed(1), mms.DataElement(mms.NewVisibleString("urcb")))), nil
+	}
 	if req.Service != 5 {
 		return nil, &mms.ServiceError{Rejected: true, Class: 1, Code: 1}
 	}

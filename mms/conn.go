@@ -108,6 +108,10 @@ func (c ApplicationContext) acse() acse.ApplicationContext {
 // responses by invoke ID. Unconfirmed PDUs (information reports) are
 // delivered to every handler registered with OnInformationReport.
 type Conn struct {
+	// served bounds the server-initiated requests answered at once (the
+	// negotiated maxServOutstandingCalled); see serveRequest.
+	served chan struct{}
+
 	fr        *framing
 	raw       net.Conn
 	log       *slog.Logger
@@ -417,7 +421,15 @@ func startConn(raw net.Conn, fr *framing, logger *slog.Logger, negotiated Initia
 	if rt <= 0 {
 		rt = 10 * time.Second
 	}
+	called := negotiated.MaxServOutstandingCalled
+	if called < 1 {
+		called = 1
+	}
+	if called > 16 {
+		called = 16
+	}
 	c := &Conn{
+		served:         make(chan struct{}, called),
 		fr:             fr,
 		raw:            raw,
 		log:            logger,
@@ -620,8 +632,18 @@ func (c *Conn) dispatch(pdu []byte) {
 	case tagConfirmedRequest:
 		// A request from the server: the file reads of an ObtainFile this
 		// end asked for. Served off the reader, which has to keep
-		// delivering the responses the ObtainFile is waiting on.
-		go c.serveRequest(content)
+		// delivering the responses the ObtainFile is waiting on. A server
+		// past the negotiated maxServOutstandingCalled is not answered:
+		// that would grow without bound behind a stalled transport.
+		select {
+		case c.served <- struct{}{}:
+			go func() {
+				defer func() { <-c.served }()
+				c.serveRequest(content)
+			}()
+		default:
+			c.log.Debug("mms: server exceeds maxServOutstandingCalled; request dropped")
+		}
 	default:
 		c.log.Debug("mms: unhandled PDU tag", "tag", tag.String())
 	}

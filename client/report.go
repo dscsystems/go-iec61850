@@ -51,7 +51,10 @@ func rcbRefToMMS(ref model.ObjectReference) (domain, item string) {
 	return domain, strings.Join(ref.Path(), "$")
 }
 
-// GetRCB reads a report control block's current configuration.
+// GetRCB reads a report control block's current configuration. RptID is
+// mandatory in every RCB, so failing to read it fails GetRCB: the block
+// does not exist or is not accessible. The other attributes are filled in
+// as far as the server returns them.
 func (c *Client) GetRCB(ctx context.Context, ref model.ObjectReference) (*RCB, error) {
 	domain, item := rcbRefToMMS(ref)
 	rcb := &RCB{Ref: ref, domain: domain, item: item, Buffered: strings.Contains(item, "$BR$")}
@@ -70,9 +73,11 @@ func (c *Client) GetRCB(ctx context.Context, ref model.ObjectReference) (*RCB, e
 		return vals[0], nil
 	}
 
-	if v, err := read("RptID"); err == nil {
-		rcb.RptID = v.Text()
+	v, err := read("RptID")
+	if err != nil {
+		return nil, fmt.Errorf("client: GetRCB %s: %w", ref, err)
 	}
+	rcb.RptID = v.Text()
 	if v, err := read("DatSet"); err == nil {
 		rcb.DataSet = v.Text()
 	}
@@ -87,6 +92,9 @@ func (c *Client) GetRCB(ctx context.Context, ref model.ObjectReference) (*RCB, e
 	}
 	if v, err := read("IntgPd"); err == nil {
 		rcb.IntgPd = time.Duration(v.Uint64()) * time.Millisecond
+	}
+	if v, err := read("BufTm"); err == nil {
+		rcb.BufTm = uint32(v.Uint64())
 	}
 	return rcb, nil
 }
@@ -129,7 +137,9 @@ type ReportSubscription struct {
 
 // EnableReporting configures and enables the report control block, then
 // delivers decoded reports to cb until the subscription is disabled. The
-// RCB's OptFlds, TrgOps and IntgPd are written to the server if non-zero.
+// RCB's OptFlds, TrgOps, BufTm and IntgPd are written to the server if
+// non-zero. An unbuffered RCB is reserved first; if enabling then fails,
+// the reservation is released again.
 //
 // Several report control blocks may be enabled concurrently on one
 // connection; each subscription keeps its own callback and receives only
@@ -140,13 +150,23 @@ type ReportSubscription struct {
 //
 // The callback runs on the connection's reader goroutine and must not
 // block; hand heavy work to another goroutine.
-func (c *Client) EnableReporting(ctx context.Context, rcb *RCB, cb func(*Report)) (*ReportSubscription, error) {
+func (c *Client) EnableReporting(ctx context.Context, rcb *RCB, cb func(*Report)) (sub *ReportSubscription, err error) {
 	// Learn the dataset members so report entries can be labelled.
 	members, _ := c.datasetMembersForRCB(ctx, rcb)
 
 	// Reserve the RCB (unbuffered) and push configuration.
 	if !rcb.Buffered {
 		if err := c.writeRCB(ctx, rcb, "Resv", mms.NewBool(true)); err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err != nil {
+				c.releaseRCB(ctx, rcb)
+			}
+		}()
+	}
+	if rcb.BufTm != 0 {
+		if err := c.writeRCB(ctx, rcb, "BufTm", mms.NewUint32(rcb.BufTm)); err != nil {
 			return nil, err
 		}
 	}
@@ -198,9 +218,10 @@ func (c *Client) TriggerGI(ctx context.Context, rcb *RCB) error {
 	return c.writeRCB(ctx, rcb, "GI", mms.NewBool(true))
 }
 
-// Disable turns the report control block off and unregisters the
-// subscription's callback, which stops receiving reports even if the write
-// to the server fails.
+// Disable turns the report control block off, releases the reservation
+// EnableReporting took on an unbuffered one, and unregisters the
+// subscription's callback, which stops receiving reports even if the
+// writes to the server fail.
 func (s *ReportSubscription) Disable(ctx context.Context) error {
 	var err error
 	s.once.Do(func() {
@@ -208,9 +229,22 @@ func (s *ReportSubscription) Disable(ctx context.Context) error {
 			s.remove()
 		}
 		err = s.c.writeRCB(ctx, s.rcb, "RptEna", mms.NewBool(false))
+		if !s.rcb.Buffered {
+			if rerr := s.c.writeRCB(ctx, s.rcb, "Resv", mms.NewBool(false)); err == nil {
+				err = rerr
+			}
+		}
 		s.closed = true
 	})
 	return err
+}
+
+// releaseRCB gives up the reservation of an unbuffered RCB after a failed
+// enable. It is best effort, and runs even when ctx is what failed.
+func (c *Client) releaseRCB(ctx context.Context, rcb *RCB) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	c.writeRCB(ctx, rcb, "Resv", mms.NewBool(false))
 }
 
 func (c *Client) writeRCB(ctx context.Context, rcb *RCB, attr string, v *mms.Value) error {

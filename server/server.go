@@ -331,8 +331,13 @@ func New(m *model.Model, opts ...Option) *Server {
 // must therefore return promptly, and must not call Update or Read on the
 // server: those take the same lock and deadlock. A handler that has more
 // to change does it from another goroutine, for instance go srv.Update(...).
+//
+// It may be called while serving: the handler is swapped under the model
+// lock, which every write holds while consulting it.
 func (s *Server) OnWrite(h func(da *model.DataAttribute, v *mms.Value) error) {
+	s.mu.Lock()
 	s.writeH = h
+	s.mu.Unlock()
 }
 
 // ListenAndServe binds to addr and serves associations until the listener

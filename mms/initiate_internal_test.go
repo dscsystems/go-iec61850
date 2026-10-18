@@ -35,6 +35,11 @@ func TestClientServicesSupported(t *testing.T) {
 		ServiceGetNamedVariableListAttributes, ServiceDeleteNamedVariableList,
 		ServiceReadJournal, ServiceFileOpen, ServiceFileRead, ServiceFileClose,
 		ServiceFileDirectory, ServiceInformationReport, ServiceConclude,
+		// Issued by Status, ObtainFile, InitializeJournal,
+		// ReportJournalStatus, FileRename, FileDelete and Cancel.
+		ServiceStatus, ServiceObtainFile, ServiceInitializeJournal,
+		ServiceReportJournalStatus, ServiceFileRename, ServiceFileDelete,
+		ServiceCancel,
 	} {
 		if !s.Has(bit) {
 			t.Errorf("service bit %d missing", bit)

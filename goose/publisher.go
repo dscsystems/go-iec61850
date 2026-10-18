@@ -212,14 +212,16 @@ func (p *Publisher) publishLocked(values []*mms.Value, stNum uint32, stateChange
 		p.stop = nil
 	}
 	p.msg, p.stNum, p.sqNum = msg, stNum, 0
-	if err := p.send(payload); err != nil {
-		return err
-	}
+	// The retransmissions start even when the first frame could not be
+	// sent: they carry the same state, which is how GOOSE recovers a lost
+	// frame, so the change still reaches subscribers. The error is
+	// reported all the same.
+	err := p.send(payload)
 	stop := make(chan struct{})
 	p.stop = stop
 	p.wg.Add(1)
 	go p.retransmit(msg, stop)
-	return nil
+	return err
 }
 
 // State returns the stNum and sqNum the publisher is currently

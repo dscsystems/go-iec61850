@@ -100,7 +100,14 @@ func (c *Conn) FileDirectory(ctx context.Context, path string) ([]FileEntry, err
 		if !more || len(batch) == 0 {
 			return entries, nil
 		}
-		after = batch[len(batch)-1].Name
+		if len(entries) > maxContinued {
+			return nil, errTooMany
+		}
+		next := batch[len(batch)-1].Name
+		if next == after {
+			return nil, errNoProgress
+		}
+		after = next
 	}
 }
 
