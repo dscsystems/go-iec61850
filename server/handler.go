@@ -580,6 +580,32 @@ func (h *handler) getNVLAttrs(content []byte) (*asn1.Element, error) {
 
 // defineNVL creates a dynamic named variable list (dataset) from the
 // request's member specifications.
+// Client-defined datasets live in the model and outlive the association
+// that defined them, so their number and size are bounded server-wide.
+const (
+	maxDynamicDataSets       = 256
+	maxDynamicDataSetEntries = 1024
+)
+
+// errCapabilityUnavailable is the resource error capability-unavailable
+// (ISO 9506-2 errorClass resource(3), code 4).
+var errCapabilityUnavailable = &mms.ServiceError{Class: 3, Code: 4}
+
+// countDynamicDataSets counts the datasets clients have defined.
+func countDynamicDataSets(m *model.Model) int {
+	n := 0
+	for _, ld := range m.Devices {
+		for _, ln := range ld.Nodes {
+			for _, ds := range ln.DataSets {
+				if ds.Deletable {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
 func (h *handler) defineNVL(content []byte) (*asn1.Element, error) {
 	dec := asn1.NewDecoder(content)
 	domain, list, err := parseObjectNameElem(dec)
@@ -619,10 +645,16 @@ func (h *handler) defineNVL(content []byte) (*asn1.Element, error) {
 		}
 		ref, fc := model.FromMMS(md, mi)
 		entries = append(entries, model.FCDA{Ref: ref, FC: fc})
+		if len(entries) > maxDynamicDataSetEntries {
+			return nil, errCapabilityUnavailable
+		}
 	}
 
 	h.s.mu.Lock()
 	defer h.s.mu.Unlock()
+	if countDynamicDataSets(h.s.model) >= maxDynamicDataSets {
+		return nil, errCapabilityUnavailable
+	}
 	dev := h.s.model.Device(domain)
 	if dev == nil {
 		return nil, mms.AccessObjectNonExistent

@@ -1,6 +1,7 @@
 package mms
 
 import (
+	"bytes"
 	"context"
 	"time"
 
@@ -67,6 +68,7 @@ func rangeStop(end time.Time) *asn1.Element {
 // continues after the last entry received.
 func (c *Conn) readJournalAll(ctx context.Context, domain, item string, req *asn1.Element, end *time.Time) ([]JournalEntry, error) {
 	var all []JournalEntry
+	var prev []byte
 	for {
 		entries, more, err := c.readJournal(ctx, req)
 		if err != nil {
@@ -76,7 +78,14 @@ func (c *Conn) readJournalAll(ctx context.Context, domain, item string, req *asn
 		if !more || len(entries) == 0 {
 			return all, nil
 		}
+		if len(all) > maxContinued {
+			return nil, errTooMany
+		}
 		last := entries[len(entries)-1]
+		if len(last.EntryID) > 0 && bytes.Equal(last.EntryID, prev) {
+			return nil, errNoProgress
+		}
+		prev = last.EntryID
 		req = afterRequest(domain, item, last.OccurrenceTime, last.EntryID, end)
 	}
 }

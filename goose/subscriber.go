@@ -84,6 +84,9 @@ type seqState struct {
 	tatl         time.Duration
 	arrival      time.Time
 	timer        *time.Timer // fires when tatl passes with no message
+	// gen identifies the current timer: a timer superseded by a later
+	// message may already be firing, and must not report expiry.
+	gen uint64
 }
 
 type subscription struct {
@@ -107,7 +110,8 @@ func (sub *subscription) stop() {
 	sub.mu.Unlock()
 }
 
-// supervise restarts the time-allowed-to-live timer of ref.
+// supervise restarts the time-allowed-to-live timer of ref. It is called
+// with sub.mu held.
 func (sub *subscription) supervise(ref string, st *seqState) {
 	if sub.expired == nil || st.tatl <= 0 {
 		return
@@ -115,8 +119,13 @@ func (sub *subscription) supervise(ref string, st *seqState) {
 	if st.timer != nil {
 		st.timer.Stop()
 	}
+	st.gen++
+	gen := st.gen
 	st.timer = time.AfterFunc(st.tatl, func() {
-		if !sub.stopped.Load() {
+		sub.mu.Lock()
+		current := st.gen == gen
+		sub.mu.Unlock()
+		if current && !sub.stopped.Load() {
 			sub.expired(ref)
 		}
 	})

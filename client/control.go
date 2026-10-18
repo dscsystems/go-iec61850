@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -73,7 +74,9 @@ func WithModel(m model.CtlModel) ControlOption {
 }
 
 // ControlFor returns a control handle for the object at ref, reading its
-// ctlModel from the server.
+// ctlModel from the server. An object that has no ctlModel is direct with
+// normal security (IEC 61850-7-2); any other failure to read it is
+// returned, since guessing the model would send the wrong sequence.
 func (c *Client) ControlFor(ctx context.Context, ref model.ObjectReference) (*ControlObject, error) {
 	domain := ref.LD()
 	path := ref.Path()
@@ -85,10 +88,14 @@ func (c *Client) ControlFor(ctx context.Context, ref model.ObjectReference) (*Co
 		do: path[0] + "$CO$" + joinDollar(path[1:]),
 	}
 	// ctlModel lives under FC CF.
-	if v, err := c.Read(ctx, ref.Child("ctlModel"), model.CF); err == nil {
+	v, err := c.Read(ctx, ref.Child("ctlModel"), model.CF)
+	switch {
+	case err == nil:
 		co.model = model.CtlModel(v.Int64())
-	} else {
+	case errors.Is(err, mms.AccessObjectNonExistent):
 		co.model = model.CtlDirectNormal
+	default:
+		return nil, fmt.Errorf("client: reading ctlModel of %s: %w", ref, err)
 	}
 	return co, nil
 }

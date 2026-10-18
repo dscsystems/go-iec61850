@@ -123,6 +123,15 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 		return true, byte(mms.AccessObjectAccessDenied)
 	}
 
+	// ctlVal must have the type the model gives Oper.ctlVal: a value that
+	// does not would reach the handler, and stVal, mistyped.
+	if phase != "Cancel" {
+		if da := h.s.model.Attribute(ref.Child(phase).Child("ctlVal"), model.CO); da != nil && !valueFits(da, ctx.Value) {
+			track(serviceErrorOf(byte(mms.AccessTypeInconsistent)), model.AddCauseUnknown)
+			return true, byte(mms.AccessTypeInconsistent)
+		}
+	}
+
 	cm, declared := h.ctlModel(ref)
 	switch {
 	case declared && cm == model.CtlStatusOnly:
@@ -231,12 +240,25 @@ func (h *handler) ctlModel(ref model.ObjectReference) (model.CtlModel, bool) {
 }
 
 // applyControl reflects an accepted operate into the process image: the
-// controllable object's stVal (FC ST) becomes the control value.
+// controllable object's stVal (FC ST) becomes the control value. A
+// BOOLEAN ctlVal on a Dbpos stVal (DPC) becomes on or off; a value stVal
+// cannot hold is not applied.
 func (h *handler) applyControl(ref model.ObjectReference, ctlVal *mms.Value) {
 	stRef := ref.Child("stVal")
 	if da := h.s.model.Attribute(stRef, model.ST); da != nil && len(da.Children) == 0 && ctlVal != nil {
+		nv := ctlVal.Clone()
+		if ctlVal.Type() == mms.TypeBoolean && da.Value != nil && da.Value.Type() == mms.TypeBitString && da.Value.BitLen() == 2 {
+			nv = model.DbposOff.Value()
+			if ctlVal.Bool() {
+				nv = model.DbposOn.Value()
+			}
+		}
+		if !valueFits(da, nv) {
+			h.s.log.Warn("server: control value does not fit stVal; not applied", "ref", stRef, "type", ctlVal.Type())
+			return
+		}
 		old := da.Value
-		da.Value = ctlVal.Clone()
+		da.Value = nv
 		// The new status reports like any process change.
 		if h.changes != nil {
 			h.changes.record(stRef, da, old, da.Value)

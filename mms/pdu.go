@@ -166,13 +166,15 @@ func (s ServiceSupport) Has(service int) bool {
 // services the client can actually take part in.
 func defaultServiceSupport() ServiceSupport {
 	return NewServiceSupport(
-		ServiceGetNameList, ServiceIdentify, ServiceRead, ServiceWrite,
+		ServiceStatus, ServiceGetNameList, ServiceIdentify, ServiceRead, ServiceWrite,
 		ServiceGetVariableAccessAttributes,
 		ServiceDefineNamedVariableList, ServiceGetNamedVariableListAttributes,
 		ServiceDeleteNamedVariableList,
-		ServiceReadJournal,
-		ServiceFileOpen, ServiceFileRead, ServiceFileClose, ServiceFileDirectory,
-		ServiceInformationReport, ServiceConclude,
+		ServiceObtainFile,
+		ServiceReadJournal, ServiceInitializeJournal, ServiceReportJournalStatus,
+		ServiceFileOpen, ServiceFileRead, ServiceFileClose, ServiceFileRename,
+		ServiceFileDelete, ServiceFileDirectory,
+		ServiceInformationReport, ServiceConclude, ServiceCancel,
 	)
 }
 

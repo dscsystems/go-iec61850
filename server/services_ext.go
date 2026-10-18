@@ -72,6 +72,11 @@ func (h *handler) serverStatus() *asn1.Element {
 // WritableFS is a file store the server can write as well as read: with
 // one, WithFileStore also serves SetFile (MMS obtainFile) and DeleteFile
 // (fileDelete). DirFS makes one from a directory.
+//
+// Any associated client may then store files. The server bounds each one
+// to 256 MiB and refuses an existing name, but not how many files there
+// are or how much they take together: a store that must be bounded
+// enforces its quota in Create, whose error refuses the SetFile.
 type WritableFS interface {
 	fs.FS
 	// Create creates a new file for writing, failing if it exists.
