@@ -2,6 +2,7 @@ package asn1
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -72,7 +73,7 @@ func DecodeOID(content []byte) (OID, error) {
 	var v uint32
 	n := 0
 	for _, b := range content {
-		if n >= 5 {
+		if n >= 5 || v > math.MaxUint32>>7 {
 			return nil, fmt.Errorf("OID arc too large: %w", ErrBadValue)
 		}
 		v = v<<7 | uint32(b&0x7f)

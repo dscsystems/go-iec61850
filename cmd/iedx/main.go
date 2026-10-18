@@ -4,7 +4,7 @@
 //
 // Usage:
 //
-//	iedx [host:port]
+//	iedx [-password pw] [-tls-cert c.pem -tls-key k.pem -tls-ca ca.pem ...] [host:port]
 //
 // With no address it opens a connection form. Mouse: click tabs and rows,
 // scroll with the wheel.
@@ -16,11 +16,17 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 )
 
 func main() {
 	password := flag.String("password", "", "ACSE authentication password")
-	useTLS := flag.Bool("tls", false, "connect with TLS (IEC 62351-3)")
+	// The TLS credentials come from the -tls-* flags; with them the
+	// connection form starts with TLS on. Refusal events are not printed:
+	// the terminal belongs to the UI.
+	var tlsF tlsflags.Flags
+	tlsF.Register(flag.CommandLine)
 	flag.Parse()
 
 	addr := ""
@@ -28,7 +34,7 @@ func main() {
 		addr = flag.Arg(0)
 	}
 
-	a := newApp(addr, *password, *useTLS)
+	a := newApp(addr, *password, &tlsF)
 	p := tea.NewProgram(a, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "iedx: %v\n", err)

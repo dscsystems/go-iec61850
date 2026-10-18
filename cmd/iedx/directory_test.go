@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 )
 
 // The reports, datasets, settings and logs panels enumerate their objects
@@ -12,7 +13,7 @@ import (
 // themselves. They must still find what the demo IED holds.
 func TestPanelsPopulateFromClassBrowse(t *testing.T) {
 	addr := startServer(t)
-	a := newApp(addr, "", false)
+	a := newApp(addr, "", &tlsflags.Flags{})
 	a.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	drain(t, a, a.connect())
 	if !a.connected {

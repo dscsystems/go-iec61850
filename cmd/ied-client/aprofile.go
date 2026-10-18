@@ -8,6 +8,7 @@ import (
 
 	"github.com/dscsystems/go-iec61850/iec62351/aprofile"
 	"github.com/dscsystems/go-iec61850/iec62351/pki"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 )
 
 // apFlags are the IEC 62351-4 A-security profile (compatibility mode)
@@ -15,7 +16,7 @@ import (
 // the AARQ, and the authorities the server's certificate must lead to.
 type apFlags struct {
 	Cert, Key       string
-	CA, CRL         fileList
+	CA, CRL         tlsflags.FileList
 	LegacyMechanism bool
 	WithoutTLS      bool
 }

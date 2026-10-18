@@ -23,11 +23,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version: "1.26" }
-      - name: Short fuzz on network-facing decoders
+      - name: Short fuzz on every package with fuzz targets
+        # Discovered rather than listed, so a new target is fuzzed without
+        # editing this file; -fuzz takes one package at a time.
         run: |
-          for pkg in ./asn1 ./mms ./goose ./sv ./internal/osi/...; do
-            for f in $(go test -list 'Fuzz.*' $pkg 2>/dev/null | grep '^Fuzz' || true); do
-              go test -run=NONE -fuzz="^$f$" -fuzztime=20s $pkg
+          for pkg in $(grep -rl --include='*_test.go' '^func Fuzz' . | xargs -n1 dirname | sed 's|^\./||; s|^|./|' | sort -u); do
+            for f in $(go test -list 'Fuzz.*' "$pkg" | grep '^Fuzz' || true); do
+              go test -run=NONE -fuzz="^$f$" -fuzztime=10s "$pkg"
             done
           done
 

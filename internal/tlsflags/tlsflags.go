@@ -1,4 +1,7 @@
-package main
+// Package tlsflags is the IEC 62351-3 TLS command-line options the
+// commands share: the certificate, trust anchors and CRLs, and the choice
+// of TLS engine.
+package tlsflags
 
 import (
 	"crypto/tls"
@@ -16,11 +19,14 @@ import (
 	"github.com/dscsystems/go-iec61850/iec62351/ossltls"
 )
 
-// tlsFlags are the IEC 62351-3 TLS options: this client's certificate,
-// the authorities the server's chain must lead to, and their CRLs.
-type tlsFlags struct {
+// Flags are the IEC 62351-3 TLS options: this client's certificate, the
+// authorities the server's chain must lead to, and their CRLs. Name, when
+// set, prefixes the refusal events written to standard error; a command
+// that owns the terminal leaves it empty.
+type Flags struct {
+	Name          string
 	Cert, Key     string
-	CA, CRL       fileList
+	CA, CRL       FileList
 	ServerName    string
 	NoServerName  bool
 	TLS13Only     bool
@@ -29,12 +35,14 @@ type tlsFlags struct {
 	OpenSSL       bool
 }
 
-type fileList []string
+// FileList is a repeatable file-name flag.
+type FileList []string
 
-func (l *fileList) String() string     { return strings.Join(*l, ",") }
-func (l *fileList) Set(s string) error { *l = append(*l, s); return nil }
+func (l *FileList) String() string     { return strings.Join(*l, ",") }
+func (l *FileList) Set(s string) error { *l = append(*l, s); return nil }
 
-func (f *tlsFlags) register(fs *flag.FlagSet) {
+// Register adds the -tls-* flags to fs.
+func (f *Flags) Register(fs *flag.FlagSet) {
 	fs.StringVar(&f.Cert, "tls-cert", "", "TLS client certificate, PEM (enables TLS, IEC 62351-3)")
 	fs.StringVar(&f.Key, "tls-key", "", "TLS client private key, PEM")
 	fs.Var(&f.CA, "tls-ca", "TLS trust anchor, PEM or DER (repeatable; required with -tls-cert)")
@@ -48,11 +56,12 @@ func (f *tlsFlags) register(fs *flag.FlagSet) {
 		"run TLS on OpenSSL, for the suites crypto/tls lacks (DHE_RSA_AES_128_GCM in native mode, and DH_RSA on OpenSSL 1.0.2); needs a build with -tags openssl, or openssl,openssl_v1 for OpenSSL 1.0.2")
 }
 
-func (f *tlsFlags) enabled() bool { return f.Cert != "" }
+// Enabled reports whether TLS was asked for (-tls-cert).
+func (f *Flags) Enabled() bool { return f.Cert != "" }
 
-// option builds the client option securing a connection to addr, on
+// Option builds the client option securing a connection to addr, on
 // crypto/tls or, with -tls-openssl, on OpenSSL.
-func (f *tlsFlags) option(addr string) (client.Option, error) {
+func (f *Flags) Option(addr string) (client.Option, error) {
 	o, err := f.options(addr)
 	if err != nil {
 		return nil, err
@@ -71,8 +80,8 @@ func (f *tlsFlags) option(addr string) (client.Option, error) {
 	return client.WithTLS(cfg), nil
 }
 
-// config builds the crypto/tls client configuration for a server at addr.
-func (f *tlsFlags) config(addr string) (*tls.Config, error) {
+// Config builds the crypto/tls client configuration for a server at addr.
+func (f *Flags) Config(addr string) (*tls.Config, error) {
 	o, err := f.options(addr)
 	if err != nil {
 		return nil, err
@@ -81,7 +90,7 @@ func (f *tlsFlags) config(addr string) (*tls.Config, error) {
 }
 
 // options builds the profile options for a server at addr.
-func (f *tlsFlags) options(addr string) (iec62351.Options, error) {
+func (f *Flags) options(addr string) (iec62351.Options, error) {
 	var none iec62351.Options
 	if f.Key == "" {
 		return none, errors.New("-tls-key is required with -tls-cert")
@@ -135,14 +144,21 @@ func (f *tlsFlags) options(addr string) (iec62351.Options, error) {
 		ServerName:    name,
 		TLS13Only:     f.TLS13Only,
 		NativeMode:    f.NativeMode,
-		OnEvent: func(e iec62351.Event) {
-			peer := "no certificate"
-			if e.Peer != nil {
-				peer = e.Peer.Subject.String()
-			}
-			fmt.Fprintf(os.Stderr, "ied-client: tls: server refused (%s): %v\n", peer, e.Err)
-		},
+		OnEvent:       f.onEvent(),
 	}, nil
+}
+
+func (f *Flags) onEvent() func(iec62351.Event) {
+	if f.Name == "" {
+		return nil
+	}
+	return func(e iec62351.Event) {
+		peer := "no certificate"
+		if e.Peer != nil {
+			peer = e.Peer.Subject.String()
+		}
+		fmt.Fprintf(os.Stderr, "%s: tls: server refused (%s): %v\n", f.Name, peer, e.Err)
+	}
 }
 
 // readDERs returns the PEM blocks of type typ in the file at path, or the

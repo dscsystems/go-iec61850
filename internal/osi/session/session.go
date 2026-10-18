@@ -89,6 +89,9 @@ func ConnectClientExt(t Transport, callingSSEL, calledSSEL, userData []byte, ext
 	if len(userData) > MaxExtendedUserData {
 		return nil, fmt.Errorf("session: CONNECT user data of %d octets exceeds %d", len(userData), MaxExtendedUserData)
 	}
+	// Plain User Data is limited to 512 octets (ISO 8327-1); more must go
+	// as Extended User Data.
+	extended = extended || len(userData) > MaxUserData
 	spdu := buildConnectExt(siConnect, callingSSEL, calledSSEL, userData, extended)
 	if err := t.Send(spdu); err != nil {
 		return nil, err

@@ -470,6 +470,11 @@ func parseJournalQuery(content []byte) (*journalQuery, error) {
 				if err != nil {
 					return nil, err
 				}
+				// numberOfEntries is Unsigned32: a negative one is
+				// malformed, not "no limit".
+				if n < 0 {
+					return nil, mms.AccessObjectValueInvalid
+				}
 				q.count = int(n)
 			}
 		case asn1.ContextConstructed(4):

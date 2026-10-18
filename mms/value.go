@@ -115,14 +115,19 @@ func NewFloat32(v float32) *Value { return &Value{typ: TypeFloat32, flt: float64
 // (FLOAT64 in IEC 61850).
 func NewFloat64(v float64) *Value { return &Value{typ: TypeFloat64, flt: v} }
 
-// NewBitString returns a bit string of length bits, all zero.
+// NewBitString returns a bit string of length bits, all zero. A negative
+// length is taken as 0.
 func NewBitString(length int) *Value {
+	length = max(length, 0)
 	return &Value{typ: TypeBitString, bytes: make([]byte, (length+7)/8), bitLen: length}
 }
 
-// NewBitStringBits returns a bit string over a copy of bits.
+// NewBitStringBits returns a bit string of length bits taken from a copy
+// of bits, most significant bit first. bits is cut or zero-extended to
+// the octets length needs, so the value is always consistent.
 func NewBitStringBits(bits []byte, length int) *Value {
-	b := make([]byte, len(bits))
+	length = max(length, 0)
+	b := make([]byte, (length+7)/8)
 	copy(b, bits)
 	return &Value{typ: TypeBitString, bytes: b, bitLen: length}
 }
@@ -143,10 +148,18 @@ func NewVisibleString(s string) *Value { return &Value{typ: TypeVisibleString, b
 func NewMMSString(s string) *Value { return &Value{typ: TypeMMSString, bytes: []byte(s)} }
 
 // NewUTCTime returns an IEC 61850 UtcTime value (8 octets: seconds,
-// 24-bit second fraction, time quality).
+// 24-bit second fraction, time quality). The seconds are an unsigned
+// 32-bit count from 1970: a time before 1970 encodes as 1970, one after
+// 2106-02-07 06:28:15 UTC as that instant.
 func NewUTCTime(t time.Time, q TimeQuality) *Value {
 	b := make([]byte, 8)
 	secs := t.Unix()
+	switch {
+	case secs < 0:
+		secs, t = 0, time.Unix(0, 0)
+	case secs > math.MaxUint32:
+		secs, t = math.MaxUint32, time.Unix(math.MaxUint32, 999_999_999)
+	}
 	frac := uint32((uint64(t.Nanosecond()) << 24) / 1_000_000_000)
 	b[0], b[1], b[2], b[3] = byte(secs>>24), byte(secs>>16), byte(secs>>8), byte(secs)
 	b[4], b[5], b[6] = byte(frac>>16), byte(frac>>8), byte(frac)

@@ -19,7 +19,7 @@ colorlinks: true
 | Scope | IEC 62351-4 support in `go-iec61850` (library) and its use by `datadiode-mms` (application), plus the dependent work in `tase2` |
 | Normative sources | **[B]** BS EN IEC 62351-4:2018+A1:2020 (consolidated IEC 62351-4 ed. 1.1); **[T]** PD IEC TS 62351-100-4:2023 (E2E conformance test cases) |
 | Code baselines | **[R]** `go-iec61850` at `2b7bb9620ae2`; **[D]** `datadiode-mms` at `7221d40be6cb`; **[S]** `tase2` at `e689c2b93211` |
-| Toolchain checked | Go 1.27.1 (`crypto/tls`, `crypto/ecdh`, `crypto/hkdf`, `crypto/x509` behaviour quoted below was verified against it) |
+| Toolchain checked | Go 1.27.1 (`crypto/tls`, `crypto/ecdh`, `crypto/hkdf`, `crypto/x509` behaviour quoted below was verified against it). The module's minimum is Go 1.26 (`go.mod`), which CI builds and tests with |
 | Status | Engineering plan, written before the implementation; it does not claim or certify conformance. Native mode and the A-profile are implemented: the conformance declaration is [pics.md](pics.md) §8.1. §8 (gap analysis) and §9 (API) record the design as planned; the shipped API differs, see the note at the head of §9 |
 
 Page references: [B] printed page = PDF page − 7; [T] printed page = PDF page − 2. Both PDFs are scanned images. They were OCR'd for this revision, and every table quoted here (cipher suites, conformance tables, OSI subclasses) was checked against the page image. Code components (Annexes A, B, D) were read from the scan. Do **not** generate production code from OCR. Obtain the machine-readable archive named in [B] 1.2 (section 17, item R-01).

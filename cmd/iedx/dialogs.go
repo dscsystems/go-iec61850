@@ -7,12 +7,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/dscsystems/go-iec61850/client"
-	"github.com/dscsystems/go-iec61850/mms"
-	"github.com/dscsystems/go-iec61850/model"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dscsystems/go-iec61850/client"
+	"github.com/dscsystems/go-iec61850/mms"
+	"github.com/dscsystems/go-iec61850/model"
 )
 
 // ---- write dialog ----

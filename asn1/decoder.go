@@ -2,6 +2,7 @@ package asn1
 
 import (
 	"fmt"
+	"math"
 )
 
 // Decoder is a bounds-checked cursor over BER-encoded bytes. The content
@@ -53,7 +54,9 @@ func (d *Decoder) readTag() (Tag, error) {
 		if d.off >= len(d.data) {
 			return Tag{}, d.errAt(ErrTruncated, "reading tag")
 		}
-		if i >= 5 {
+		// A fifth octet may only add bits that still fit in 32: shifting
+		// past them would wrap into a valid-looking, wrong tag.
+		if i >= 5 || t.Number > math.MaxUint32>>7 {
 			return Tag{}, d.errAt(ErrBadTag, "tag number too large")
 		}
 		c := d.data[d.off]

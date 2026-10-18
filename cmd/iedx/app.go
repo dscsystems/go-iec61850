@@ -2,13 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/dscsystems/go-iec61850/client"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dscsystems/go-iec61850/client"
+	"github.com/dscsystems/go-iec61850/internal/tlsflags"
 )
 
 // panel is one tab of the explorer. Panels mutate themselves via pointer
@@ -35,6 +37,7 @@ type app struct {
 	addr     string
 	password string
 	tlsOn    bool
+	tls      *tlsflags.Flags // the -tls-* credentials the TLS toggle uses
 
 	cl        *client.Client
 	ident     string
@@ -67,8 +70,8 @@ type (
 	}
 )
 
-func newApp(addr, password string, tlsOn bool) *app {
-	a := &app{addr: addr, password: password, tlsOn: tlsOn, loaded: map[int]bool{}}
+func newApp(addr, password string, tls *tlsflags.Flags) *app {
+	a := &app{addr: addr, password: password, tlsOn: tls.Enabled(), tls: tls, loaded: map[int]bool{}}
 	a.panels = []panel{
 		newBrowsePanel(),
 		newReportsPanel(),
@@ -92,7 +95,7 @@ func (a *app) Init() tea.Cmd {
 // connect dials the IED asynchronously.
 func (a *app) connect() tea.Cmd {
 	a.setStatus("connecting to "+a.addr+" ...", 0)
-	addr, pw, tlsOn := a.addr, a.password, a.tlsOn
+	addr, pw, tlsOn, tlsF := a.addr, a.password, a.tlsOn, a.tls
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -100,7 +103,16 @@ func (a *app) connect() tea.Cmd {
 		if pw != "" {
 			opts = append(opts, client.WithPassword(pw))
 		}
-		_ = tlsOn // TLS config wiring omitted from the demo UI
+		if tlsOn {
+			if !tlsF.Enabled() {
+				return connResultMsg{err: errors.New("TLS needs -tls-cert, -tls-key and -tls-ca on the command line")}
+			}
+			opt, err := tlsF.Option(addr)
+			if err != nil {
+				return connResultMsg{err: fmt.Errorf("tls: %w", err)}
+			}
+			opts = append(opts, opt)
+		}
 		c, err := client.Dial(ctx, addr, opts...)
 		if err != nil {
 			return connResultMsg{err: err}
@@ -313,6 +325,8 @@ func (a *app) overlay(base string) string {
 		lipgloss.WithWhitespaceChars(" "))
 }
 
+// truncate cuts s to w display cells, ending in an ellipsis. It cuts
+// between runes, so a multi-byte character is never split.
 func truncate(s string, w int) string {
 	if lipgloss.Width(s) <= w {
 		return s
@@ -320,5 +334,14 @@ func truncate(s string, w int) string {
 	if w <= 1 {
 		return ""
 	}
-	return s[:w-1] + "…"
+	out, width := []rune{}, 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if width+rw > w-1 {
+			break
+		}
+		out = append(out, r)
+		width += rw
+	}
+	return string(out) + "…"
 }

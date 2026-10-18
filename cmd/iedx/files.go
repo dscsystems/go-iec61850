@@ -2,14 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/dscsystems/go-iec61850/client"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dscsystems/go-iec61850/client"
 )
 
 type filesPanel struct {
@@ -72,8 +74,8 @@ func (p *filesPanel) download(a *app) tea.Cmd {
 		if err != nil {
 			return statusMsg{"download failed: " + err.Error(), 2}
 		}
-		out := filepath.Base(name)
-		if err := os.WriteFile(out, data, 0o644); err != nil {
+		out, err := saveNew(filepath.Base(name), data)
+		if err != nil {
 			return statusMsg{"save failed: " + err.Error(), 2}
 		}
 		return statusMsg{fmt.Sprintf("saved %s (%d bytes) to ./%s", name, len(data), out), 1}
@@ -106,4 +108,30 @@ func (p *filesPanel) view(a *app, r rect) string {
 	box := stylePane.Width(r.w - 2).Height(innerH).Render(list)
 	hint := styleHelp.Render("↑↓ select · d/enter download to the current directory")
 	return lipgloss.JoinVertical(lipgloss.Left, box, hint)
+}
+
+// saveNew writes data to name in the current directory without replacing
+// a file already there: if name exists, it saves as "name.1", "name.2" and
+// so on. It returns the name used.
+func saveNew(name string, data []byte) (string, error) {
+	for i := 0; i < 1000; i++ {
+		out := name
+		if i > 0 {
+			out = fmt.Sprintf("%s.%d", name, i)
+		}
+		f, err := os.OpenFile(out, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		if _, err := f.Write(data); err != nil {
+			f.Close()
+			os.Remove(out)
+			return "", err
+		}
+		return out, f.Close()
+	}
+	return "", fmt.Errorf("%s: too many copies already saved", name)
 }

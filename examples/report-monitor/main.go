@@ -38,10 +38,16 @@ func main() {
 	rcb.OptFlds = model.OptSeqNum | model.OptReasonCode | model.OptDataSetName | model.OptConfRev
 	rcb.TrgOps = model.TrgDataChange | model.TrgQualityChange | model.TrgGI
 
+	// The callback runs on the connection's reader goroutine and must not
+	// block, so it only hands each report over; printing happens below.
+	// A report that finds the channel full is dropped rather than stall
+	// the connection.
+	reports := make(chan *client.Report, 64)
 	sub, err := c.EnableReporting(ctx, rcb, func(r *client.Report) {
-		fmt.Printf("report %q seq=%d entries=%d\n", r.RptID, r.SeqNum, len(r.Entries))
-		for _, e := range r.Entries {
-			fmt.Printf("  %s [%s] = %s  (%s)\n", e.Ref, e.FC, e.Value, e.Reason)
+		select {
+		case reports <- r:
+		default:
+			log.Printf("report %q seq=%d dropped: printing is behind", r.RptID, r.SeqNum)
 		}
 	})
 	if err != nil {
@@ -54,5 +60,15 @@ func main() {
 		log.Printf("GI: %v", err)
 	}
 
-	<-ctx.Done()
+	for {
+		select {
+		case r := <-reports:
+			fmt.Printf("report %q seq=%d entries=%d\n", r.RptID, r.SeqNum, len(r.Entries))
+			for _, e := range r.Entries {
+				fmt.Printf("  %s [%s] = %s  (%s)\n", e.Ref, e.FC, e.Value, e.Reason)
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }

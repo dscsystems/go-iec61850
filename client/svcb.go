@@ -67,6 +67,9 @@ func (c *Client) GetSVCB(ctx context.Context, ref model.ObjectReference) (*SVCB,
 	if err != nil {
 		return nil, err
 	}
+	if len(vals) != 1 {
+		return nil, fmt.Errorf("client: %d results reading SvEna of %s", len(vals), ref)
+	}
 	if _, isErr := vals[0].AccessError(); isErr {
 		cb.Unicast = true
 		domain, item = ref.ToMMS(model.US)
