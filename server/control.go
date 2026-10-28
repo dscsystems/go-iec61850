@@ -104,6 +104,14 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 	}
 	// base is "LN$CO$DO..."; build the object reference (drop the CO tag).
 	ref := controlRef(domain, base)
+	// The item has to name a control structure of the model. Its form
+	// alone does not make the object controllable: an object with no
+	// Oper, SBOw or Cancel has no such variable, and taking it for a
+	// direct control (no ctlModel either) wrote the value into its
+	// stVal, past WithWritableFCs and OnWrite.
+	if h.s.model.Attribute(ref.Child(phase), model.CO) == nil {
+		return true, byte(mms.AccessObjectNonExistent)
+	}
 	ctlItem := base + "$" + phase
 	ctx := decodeOper(ref, v, conn)
 	ctx.Select = phase == "SBOw"
