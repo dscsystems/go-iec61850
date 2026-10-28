@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  IEC 61850 interoperability fixture — fixtures/iec61850/interop.icd
+
+  IED name  : InteropIED
+  Access pt : AP1
+  LD        : InteropLD
+    LN0  — LLN0 (Mod: INC, Beh: INS)
+    GGIO1 — SPS1 (SPS — boolean status), DPS1 (DPS — double-point status),
+             SPCSO1 (SPC — direct), SPCSO2 (SPC — SBO normal, ctlModel=2),
+             SPCSO3 (SPC — SBO enhanced/SBOw, ctlModel=4)
+    MMXU1 — TotW (MV — measured active power)
+    MMTR1 — TotVAh (BCR — binary counter reading)
+  Dataset   : LLN0.dsInterop (SPS1.stVal[ST], Mod.stVal[ST])
+  Report    : LLN0.urcb01 (unbuffered, triggers on data change / GI)
+             LLN0.brcb01 (buffered, triggers on data change / GI)
+
+  Initial values are defined in values.json and applied at server startup.
+  Encoding norms — see PLAN.md.
+-->
+<SCL xmlns="http://www.iec.ch/61850/2003/SCL" version="2007" revision="B">
+
+  <Header id="interop-iec61850" version="1" revision="0"
+          nameStructure="IEDName"/>
+
+  <Communication>
+    <SubNetwork name="StationBus" type="8-MMS">
+      <ConnectedAP iedName="InteropIED" apName="AP1">
+        <Address>
+          <P type="IP">0.0.0.0</P>
+          <P type="IP-SUBNET">255.255.255.0</P>
+        </Address>
+        <SMV ldInst="InteropLD" cbName="MSVCB02">
+          <Address>
+            <P type="MAC-Address">01-0C-CD-04-00-01</P>
+            <P type="APPID">4001</P>
+            <P type="VLAN-ID">000</P>
+            <P type="VLAN-PRIORITY">4</P>
+          </Address>
+        </SMV>
+      </ConnectedAP>
+    </SubNetwork>
+  </Communication>
+
+  <IED name="InteropIED" manufacturer="OTFabric" type="interop" revision="1.0">
+    <Services>
+      <DynAssociation/>
+      <GetDirectory/>
+      <GetDataObjectDefinition/>
+      <GetDataSetValue/>
+      <DataSetDirectory/>
+      <ReadWrite/>
+      <ConfReportControl max="5" bufMode="both"/>
+      <GetCBValues/>
+      <ReportSettings cbName="Fix" datSet="Fix" rptID="Fix"
+                      optFields="Fix" bufTime="Fix" trgOps="Fix" intgPd="Fix"/>
+      <ConfLNs fixPrefix="true" fixLnInst="true"/>
+      <SMVsc max="1"/>
+    </Services>
+
+    <AccessPoint name="AP1">
+      <Server>
+        <LDevice inst="InteropLD" desc="Interop logical device">
+
+          <LN0 lnClass="LLN0" inst="" lnType="LLN0_Type"
+               desc="Logical node zero">
+            <DOI name="Mod">
+              <DAI name="ctlModel"><Val>direct-with-normal-security</Val></DAI>
+            </DOI>
+            <DataSet name="dsInterop" desc="Interop dataset">
+              <!-- Two scalar members — avoids MMS struct serialisation in Phase 2A -->
+              <FCDA ldInst="InteropLD" prefix="" lnClass="GGIO" lnInst="1"
+                    doName="SPS1" daName="stVal" fc="ST"/>
+              <FCDA ldInst="InteropLD" prefix="" lnClass="LLN0" lnInst=""
+                    doName="Mod"  daName="stVal" fc="ST"/>
+            </DataSet>
+            <!-- Sampled values: the generic stream of fixtures/sv/sv.json -->
+            <DataSet name="dsSvGeneric" desc="Generic SV dataset">
+              <FCDA ldInst="InteropLD" prefix="" lnClass="MMXU" lnInst="1"
+                    doName="TotW" daName="mag.f" fc="MX"/>
+              <FCDA ldInst="InteropLD" prefix="" lnClass="MMXU" lnInst="1"
+                    doName="TotW" daName="q" fc="MX"/>
+              <FCDA ldInst="InteropLD" prefix="" lnClass="MMTR" lnInst="1"
+                    doName="TotVAh" daName="actVal" fc="ST"/>
+              <FCDA ldInst="InteropLD" prefix="" lnClass="MMTR" lnInst="1"
+                    doName="TotVAh" daName="q" fc="ST"/>
+              <FCDA ldInst="InteropLD" prefix="" lnClass="LLN0" lnInst=""
+                    doName="Mod" daName="stVal" fc="ST"/>
+            </DataSet>
+            <ReportControl name="urcb01"
+                           rptID="interop_urcb01"
+                           datSet="dsInterop"
+                           confRev="1"
+                           buffered="false">
+              <TrgOps dchg="true" qchg="false" dupd="false"
+                      period="false" gi="true"/>
+              <OptFields seqNum="true" timeStamp="true" reasonCode="true"/>
+            </ReportControl>
+            <ReportControl name="brcb01"
+                           rptID="interop_brcb01"
+                           datSet="dsInterop"
+                           confRev="1"
+                           buffered="true"
+                           bufTime="0">
+              <TrgOps dchg="true" qchg="false" dupd="false"
+                      period="false" gi="true"/>
+              <OptFields seqNum="true" timeStamp="true" reasonCode="true"
+                         entryID="true" bufOvfl="true"/>
+            </ReportControl>
+            <SampledValueControl name="MSVCB02" smvID="InteropSvGeneric"
+                                 datSet="dsSvGeneric" confRev="1"
+                                 smpRate="1000" nofASDU="4"
+                                 smpMod="SmpPerSec" multicast="true">
+              <SmvOpts refreshTime="true" sampleSynchronized="true"
+                       sampleRate="true" dataSet="true" security="false"/>
+            </SampledValueControl>
+          </LN0>
+
+          <LN prefix="" lnClass="GGIO" inst="1" lnType="GGIO1_Type"
+              desc="Generic IO">
+            <DOI name="SPCSO1">
+              <DAI name="ctlModel"><Val>direct-with-normal-security</Val></DAI>
+            </DOI>
+            <DOI name="SPCSO2">
+              <DAI name="ctlModel"><Val>sbo-with-normal-security</Val></DAI>
+            </DOI>
+            <DOI name="SPCSO3">
+              <DAI name="ctlModel"><Val>sbo-with-enhanced-security</Val></DAI>
+            </DOI>
+          </LN>
+          <LN prefix="" lnClass="MMXU" inst="1" lnType="MMXU1_Type"
+              desc="Measurement unit"/>
+          <LN prefix="" lnClass="MMTR" inst="1" lnType="MMTR1_Type"
+              desc="Energy meter"/>
+
+        </LDevice>
+      </Server>
+    </AccessPoint>
+  </IED>
+
+  <DataTypeTemplates>
+
+    <!-- ================================================================== -->
+    <!-- Logical node types                                                   -->
+    <!-- ================================================================== -->
+
+    <LNodeType id="LLN0_Type" lnClass="LLN0" desc="Logical node zero">
+      <DO name="Mod"  type="INC_Type"/>
+      <DO name="Beh"  type="INS_Type"/>
+    </LNodeType>
+
+    <LNodeType id="GGIO1_Type" lnClass="GGIO" desc="Generic IO">
+      <DO name="SPS1"   type="SPS_Type"/>
+      <DO name="DPS1"   type="DPS_Type"/>
+      <DO name="SPCSO1" type="SPC_Type"/>
+      <DO name="SPCSO2" type="SPC_Type"/>
+      <DO name="SPCSO3" type="SPC_Type"/>
+      <DO name="SetInt1" type="ING_Type"/>
+    </LNodeType>
+
+    <LNodeType id="MMXU1_Type" lnClass="MMXU" desc="Measurement unit">
+      <DO name="TotW" type="MV_Type"/>
+    </LNodeType>
+
+    <LNodeType id="MMTR1_Type" lnClass="MMTR" desc="Energy metering">
+      <DO name="TotVAh" type="BCR_Type"/>
+    </LNodeType>
+
+    <!-- ================================================================== -->
+    <!-- Data object types                                                    -->
+    <!-- ================================================================== -->
+
+    <!-- INC: Integer controllable status (Mod) -->
+    <DOType id="INC_Type" cdc="INC" desc="Integer controllable status">
+      <DA name="stVal"    fc="ST" bType="INT32"       dchg="true" qchg="false"/>
+      <DA name="q"        fc="ST" bType="Quality"     qchg="true"/>
+      <DA name="t"        fc="ST" bType="Timestamp"/>
+      <DA name="ctlModel" fc="CF" bType="Enum"        type="CtlModels"/>
+      <DA name="d"        fc="DC" bType="VisString255"/>
+    </DOType>
+
+    <!-- INS: Integer status (Beh) -->
+    <DOType id="INS_Type" cdc="INS" desc="Integer status">
+      <DA name="stVal" fc="ST" bType="INT32"   dchg="true" qchg="false"/>
+      <DA name="q"     fc="ST" bType="Quality" qchg="true"/>
+      <DA name="t"     fc="ST" bType="Timestamp"/>
+    </DOType>
+
+    <!-- SPS: Single-point status (GGIO1.SPS1) -->
+    <DOType id="SPS_Type" cdc="SPS" desc="Single point status">
+      <DA name="stVal" fc="ST" bType="BOOLEAN"  dchg="true" qchg="false"/>
+      <DA name="q"     fc="ST" bType="Quality"  qchg="true"/>
+      <DA name="t"     fc="ST" bType="Timestamp"/>
+      <DA name="d"     fc="DC" bType="VisString255"/>
+    </DOType>
+
+    <!-- SPC: Single-point controllable (GGIO1.SPCSO1) -->
+    <DOType id="SPC_Type" cdc="SPC" desc="Single point controllable">
+      <DA name="stVal"    fc="ST" bType="BOOLEAN"    dchg="true" qchg="false"/>
+      <DA name="q"        fc="ST" bType="Quality"    qchg="true"/>
+      <DA name="t"        fc="ST" bType="Timestamp"/>
+      <DA name="ctlModel" fc="CF" bType="Enum"       type="CtlModels"/>
+      <!-- IEC 61850-7-3 mandatory CO attributes for controllable DOs -->
+      <DA name="Oper"     fc="CO" bType="Struct"     type="OperSPC_Type"/>
+      <DA name="SBO"      fc="CO" bType="VisString255"/>
+      <DA name="SBOw"     fc="CO" bType="Struct"     type="OperSPC_Type"/>
+      <DA name="Cancel"   fc="CO" bType="Struct"     type="OperSPC_Type"/>
+    </DOType>
+
+    <!-- MV: Measured value (MMXU1.TotW) -->
+    <DOType id="MV_Type" cdc="MV" desc="Measured value">
+      <DA name="mag" fc="MX" bType="Struct" type="AnalogueValue" dchg="true"/>
+      <DA name="q"   fc="MX" bType="Quality"  qchg="true"/>
+      <DA name="t"   fc="MX" bType="Timestamp"/>
+    </DOType>
+
+    <!-- DPS: Double-point status (GGIO1.DPS1) -->
+    <DOType id="DPS_Type" cdc="DPS" desc="Double point status">
+      <DA name="stVal" fc="ST" bType="Dbpos"    dchg="true" qchg="false"/>
+      <DA name="q"     fc="ST" bType="Quality"  qchg="true"/>
+      <DA name="t"     fc="ST" bType="Timestamp"/>
+    </DOType>
+
+    <!-- BCR: Binary counter reading (MMTR1.TotVAh) -->
+    <DOType id="BCR_Type" cdc="BCR" desc="Binary counter reading">
+      <DA name="actVal" fc="ST" bType="INT32U"  dchg="true"/>
+      <DA name="q"      fc="ST" bType="Quality"/>
+      <DA name="t"      fc="ST" bType="Timestamp"/>
+    </DOType>
+
+    <!-- ING: Integer status setting (GGIO1.SetInt1) — writable setVal[SP] -->
+    <DOType id="ING_Type" cdc="ING" desc="Integer status setting">
+      <DA name="setVal" fc="SP" bType="INT32"/>
+      <DA name="q"      fc="ST" bType="Quality" qchg="true"/>
+      <DA name="t"      fc="ST" bType="Timestamp"/>
+    </DOType>
+
+    <!-- ================================================================== -->
+    <!-- Data attribute types                                                 -->
+    <!-- ================================================================== -->
+
+    <DAType id="AnalogueValue" desc="Analogue value">
+      <BDA name="f" bType="FLOAT32"/>
+    </DAType>
+
+    <!-- OperSPC: control structure for SPC (IEC 61850-7-3) -->
+    <DAType id="OperSPC_Type" desc="Operate structure for SPC">
+      <BDA name="ctlVal" bType="BOOLEAN"/>
+      <BDA name="origin" bType="Struct"    type="Originator_Type"/>
+      <BDA name="ctlNum" bType="INT8U"/>
+      <BDA name="T"      bType="Timestamp"/>
+      <BDA name="Test"   bType="BOOLEAN"/>
+      <BDA name="Check"  bType="Check"/>
+    </DAType>
+
+    <!-- Originator: originatorCategory + orIdent -->
+    <DAType id="Originator_Type" desc="Originator">
+      <BDA name="orCat"   bType="Enum"    type="OrCat"/>
+      <BDA name="orIdent" bType="Octet64"/>
+    </DAType>
+
+    <!-- ================================================================== -->
+    <!-- Enumeration types                                                    -->
+    <!-- ================================================================== -->
+
+    <EnumType id="CtlModels" desc="Control model">
+      <EnumVal ord="0">status-only</EnumVal>
+      <EnumVal ord="1">direct-with-normal-security</EnumVal>
+      <EnumVal ord="2">sbo-with-normal-security</EnumVal>
+      <EnumVal ord="3">direct-with-enhanced-security</EnumVal>
+      <EnumVal ord="4">sbo-with-enhanced-security</EnumVal>
+    </EnumType>
+
+    <EnumType id="OrCat" desc="Originator category">
+      <EnumVal ord="0">not-supported</EnumVal>
+      <EnumVal ord="1">bay-control</EnumVal>
+      <EnumVal ord="2">station-control</EnumVal>
+      <EnumVal ord="3">remote-control</EnumVal>
+      <EnumVal ord="4">automatic-bay</EnumVal>
+      <EnumVal ord="5">automatic-station</EnumVal>
+      <EnumVal ord="6">automatic-remote</EnumVal>
+      <EnumVal ord="7">maintenance</EnumVal>
+      <EnumVal ord="8">process</EnumVal>
+    </EnumType>
+
+  </DataTypeTemplates>
+
+</SCL>

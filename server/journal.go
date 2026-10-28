@@ -103,7 +103,7 @@ func newLogManager(s *Server) *logManager {
 				if st.do == nil {
 					continue
 				}
-				if domain, name, ok := logTarget(ld, lc); ok {
+				if domain, name, ok := logTarget(s.model, ld, lc); ok {
 					st.j = lm.journal(domain, name)
 				}
 				lm.lcbs[ld.Name+"\x00"+st.item] = st
@@ -130,15 +130,21 @@ func lcbObject(ln *model.LogicalNode, name string) *model.DataObject {
 // its log name in the logical node the SCL places it in, LLN0 of the
 // block's own device by default (IEC 61850-6). ok is false when the block
 // names no log.
-func logTarget(ld *model.LogicalDevice, lc *model.LogControl) (domain, name string, ok bool) {
+func logTarget(m *model.Model, ld *model.LogicalDevice, lc *model.LogControl) (domain, name string, ok bool) {
 	if lc.LogName == "" {
 		return "", "", false
 	}
 	domain = ld.Name
-	if lc.LogLDInst != "" {
-		// The logical device name is the IED name followed by the
-		// instance, so another instance of the same IED swaps the suffix.
+	if lc.LogLDInst != "" && lc.LogLDInst != ld.Inst {
+		// Another instance of the same IED. Its name is the IED name
+		// followed by the instance, unless the SCL gave it an ldName.
 		domain = strings.TrimSuffix(ld.Name, ld.Inst) + lc.LogLDInst
+		for _, other := range m.Devices {
+			if other.Inst == lc.LogLDInst {
+				domain = other.Name
+				break
+			}
+		}
 	}
 	lnName := lc.LogLN
 	if lnName == "" {

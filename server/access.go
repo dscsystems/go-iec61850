@@ -415,7 +415,24 @@ func daTypeSpec(da *model.DataAttribute) *mms.TypeSpec {
 		}
 		return ts
 	}
-	return valueTypeSpec(da.Value)
+	ts := valueTypeSpec(da.Value)
+	if bits, ok := integerWidth[da.BType]; ok && (ts.Kind == mms.TypeInteger || ts.Kind == mms.TypeUnsigned) {
+		ts.Size = bits
+	}
+	return ts
+}
+
+// integerWidth is the MMS integer width IEC 61850-8-1 maps each integer
+// basic type to; an Enum is an 8-bit integer. The value alone does not
+// say, and a client that checks the description against the type it
+// expects (iec61850bean does) refuses a 32-bit Enum.
+var integerWidth = map[string]int{
+	"Enum":  8,
+	"INT8":  8,
+	"INT16": 16,
+	"INT32": 32,
+	"INT64": 64,
+	"INT8U": 8, "INT16U": 16, "INT24U": 24, "INT32U": 32,
 }
 
 func valueTypeSpec(v *mms.Value) *mms.TypeSpec {

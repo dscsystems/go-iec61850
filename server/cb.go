@@ -40,7 +40,7 @@ func materialiseControlBlocks(m *model.Model) {
 				ln.Objects = append(ln.Objects, buildSVCBObject(ld, ln, sc))
 			}
 			for _, lc := range ln.LogControls {
-				ln.Objects = append(ln.Objects, buildLCBObject(ld, ln, lc))
+				ln.Objects = append(ln.Objects, buildLCBObject(m, ld, ln, lc))
 			}
 		}
 	}
@@ -156,7 +156,7 @@ func buildSVCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, sc *model.S
 // the times and the all-zero EntryID, which is what an empty buffered
 // report control block reports too. The log manager keeps the range
 // current as entries arrive.
-func buildLCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, lc *model.LogControl) *model.DataObject {
+func buildLCBObject(m *model.Model, ld *model.LogicalDevice, ln *model.LogicalNode, lc *model.LogControl) *model.DataObject {
 	const fc = model.LG
 	trgOps := lc.TrgOps
 	if trgOps == 0 {
@@ -167,7 +167,7 @@ func buildLCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, lc *model.Lo
 		do.Attributes = append(do.Attributes, cbAttr(fc, name, v))
 	}
 	add("LogEna", mms.NewBool(lc.LogEna))
-	add("LogRef", mms.NewVisibleString(logRef(ld, lc)))
+	add("LogRef", mms.NewVisibleString(logRef(m, ld, lc)))
 	add("DatSet", mms.NewVisibleString(cbDataSetRef(ld, ln, lc.DataSet)))
 	add("OldEntrTm", mms.NewBinaryTime(zeroBinaryTime()))
 	add("NewEntrTm", mms.NewBinaryTime(zeroBinaryTime()))
@@ -180,8 +180,8 @@ func buildLCBObject(ld *model.LogicalDevice, ln *model.LogicalNode, lc *model.Lo
 
 // logRef is the reference of the log an LCB writes to, "LD/LN$Log", or
 // empty when the block names no log. See logTarget.
-func logRef(ld *model.LogicalDevice, lc *model.LogControl) string {
-	domain, name, ok := logTarget(ld, lc)
+func logRef(m *model.Model, ld *model.LogicalDevice, lc *model.LogControl) string {
+	domain, name, ok := logTarget(m, ld, lc)
 	if !ok {
 		return ""
 	}
