@@ -1,0 +1,271 @@
+{
+  "schemaVersion": 1,
+  "adapterVersion": "0.4.0",
+  "fixtureRevision": "iec61850-v3",
+  "mmsFixtureRevision": "mms-v2",
+  "commands": {
+    "libiec61850-mms-server": true,
+    "libiec61850-mms-client": true,
+    "libiec61850-ied-server": true,
+    "libiec61850-ied-client": true,
+    "libiec61850-ied-controller": true,
+    "libiec61850-ied-reporter": true,
+    "iec61850bean-ied-server": true,
+    "iec61850bean-ied-client": true,
+    "iec61850bean-ied-controller": true,
+    "iec61850bean-ied-reporter": true,
+    "libiec61850-goose-publisher": true,
+    "libiec61850-goose-subscriber": true,
+    "dscsystems-mms-server": true,
+    "dscsystems-mms-client": true,
+    "dscsystems-ied-server": true,
+    "dscsystems-ied-client": true,
+    "dscsystems-ied-controller": true,
+    "dscsystems-ied-reporter": true,
+    "dscsystems-goose-publisher": true,
+    "dscsystems-goose-subscriber": true,
+    "iec61850-rust-mms-server": true,
+    "iec61850-rust-mms-client": true,
+    "iec61850-rust-ied-server": true,
+    "iec61850-rust-ied-client": true,
+    "iec61850-rust-ied-controller": true,
+    "iec61850-rust-ied-reporter": true,
+    "iec61850-rust-goose-publisher": true,
+    "iec61850-rust-goose-subscriber": true,
+    "libiec61850-sv-publisher": true,
+    "libiec61850-sv-subscriber": true,
+    "dscsystems-sv-publisher": true,
+    "dscsystems-sv-subscriber": true,
+    "iec61850-rust-sv-publisher": true,
+    "iec61850-rust-sv-subscriber": true
+  },
+  "knownLimitations": [
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850-server → go-client",
+      "capability": "InformationReport, listOfVariable form",
+      "reason": "MmsServerConnection_sendInformationReportListOfVariables encodes a wrong length (2 trailing bytes); the adapter sends only VMD named-list reports",
+      "reproducedBy": "TestClient_InformationReport"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "go-client → libiec61850-server",
+      "capability": "FileOpen initialPosition",
+      "reason": "LIB61850-557 rejects initialPosition past EOF, but an in-range position is still not seeked; the test asserts the unseeked content",
+      "reproducedBy": "TestClient_FileOpen_InitialPosition"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "go-client → libiec61850-server",
+      "capability": "DeleteNamedVariableList scopeOfDelete domain/vmd (DeleteAll*NVLs)",
+      "reason": "only scopeOfDelete specific is implemented; bulk deletes are answered with an Access-class ServiceError",
+      "reproducedBy": "TestClient_DeleteAllNVLs_UnsupportedByPeer"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "go-client → libiec61850-server",
+      "capability": "ObtainFile",
+      "reason": "the server fetches the source file from the client with FileOpen/FileRead (role reversal), which go-mms does not serve; the request fails with a File-class ServiceError",
+      "reproducedBy": "TestClient_ObtainFile"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850-client → go-server",
+      "capability": "FileOpen response without lastModified",
+      "reason": "the client's FileOpen response handler leaves lastModified uninitialised when the optional field is absent; the test asserts size and content only",
+      "reproducedBy": "TestServer_FileOpen_NoLastModified"
+    },
+    {
+      "stack": "iec61850bean",
+      "version": "1.x",
+      "direction": "go-client → iec61850bean-server",
+      "capability": "SBOw SelectWithValue",
+      "reason": "iec61850bean server does not expose SBOw[CO] as a writable MMS attribute",
+      "reproducedBy": "TestBeanClient_Control_SBOwOperate"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "go-client → dscsystems-server",
+      "capability": "Alternate access indexRange (read and write)",
+      "reason": "mms.ParseAlternateAccess refuses a selection of more than one element (ErrAlternateAccessUnsupported); the adapter answers DataAccessError object-access-unsupported. Single elements and components work",
+      "reproducedBy": "TestClient_ReadArrayRange, TestClient_ReadVariables_WriteVariables_AlternateAccess"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "dscsystems-client → go-server",
+      "capability": "Alternate access read/write (array element, index range, component)",
+      "reason": "mms.Conn Read and Write take whole variables only; the client emits ok:false error unsupported for these steps",
+      "reproducedBy": "TestServer_ReadArrayElements, TestServer_ReadComponent, TestServer_WriteArrayElements, TestServer_WriteComponent"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "dscsystems-client → go-server",
+      "capability": "Write to a named variable list",
+      "reason": "mms.Conn Write takes a list of variables, not a variableListName; the step is unsupported and the reads that check its effect (including the InformationReport values) see the unwritten values",
+      "reproducedBy": "TestServer_NVL_DomainScope, TestServer_NVL_VMDScope, TestServer_InformationReport"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "dscsystems-client → go-server",
+      "capability": "Association-specific named variable lists",
+      "reason": "the client has no aa-specific ObjectName or name-list scope; define, attributes, read, write, delete and get-name-list in aa scope are unsupported",
+      "reproducedBy": "TestServer_NVL_AssociationScope"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "dscsystems-client → go-server",
+      "capability": "FileOpen lastModified",
+      "reason": "FileOpenAt drops the lastModified attribute of the response; the client reports 0",
+      "reproducedBy": "TestServer_FileOpenReadClose, TestServer_FileOpen_InitialPosition, TestServer_FileRead_MultiChunk"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "iec61850bean-client → dscsystems-ied-server",
+      "capability": "GetVariableAccessAttributes type of Enum (read LLN0.Mod.ctlModel[CF])",
+      "reason": "the server builds the type description from the value, so an Enum (INT8) is described as Integer(32) and iec61850bean cannot map the node; libiec61850 clients are not affected",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "go-client → dscsystems-ied-server",
+      "capability": "Write of FC ST (and the dchg report it would trigger)",
+      "reason": "server.WithWritableFCs ignores ST/MX/OR/EX/SG by design (status is read-only in IEC 61850-7-2), so the write is always object-access-denied; the libiec61850 server denies it as well today",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "libiec61850-client → iec61850-rust-ied-server",
+      "capability": "SetURCBValues RptEna=true without prior Resv (implicit URCB reservation)",
+      "reason": "the upstream reporting service follows Edition 2.1 strictly: RptEna on an unreserved URCB is refused with object-access-denied, so enable-only clients (libiec61850 style) get access-denied",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "go-client → iec61850-rust-ied-server",
+      "capability": "Write of FC ST (and the dchg report it would trigger)",
+      "reason": "the upstream server always denies ST writes (object-access-denied); the libiec61850 and dscsystems servers deny it as well",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "iec61850-rust-client → go-server",
+      "capability": "Abort (A-ABORT)",
+      "reason": "the upstream MMS client has no abort primitive; the adapter's abort step only closes the transport (output line unchanged)",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "go-client → iec61850-rust-server",
+      "capability": "ObtainFile",
+      "reason": "role reversal: go-mms does not serve files, so the server answers a File-class error (file-other) after 5 s, as libiec61850 does",
+      "reproducedBy": "TestClient_ObtainFile"
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "go-client → iec61850-rust-server",
+      "capability": "DeleteNamedVariableList with domain/VMD scope",
+      "reason": "answered object-access-unsupported, as libiec61850 does",
+      "reproducedBy": "TestClient_DeleteAllNVLs_UnsupportedByPeer"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850-sv-publisher / dscsystems-sv-publisher → libiec61850-sv-subscriber",
+      "capability": "Sampled Values ASDUs carrying smpMod (the generic stream, MSVCB02)",
+      "reason": "SVReceiver accepts smpMod only as one octet and drops an ASDU whose smpMod has two, which libiec61850's own SVPublisher and dscsystems send (iec61850-rust sends one octet); the subscriber reports and counts nothing of such a stream",
+      "reproducedBy": "scripts/sv-crosscheck.sh … MSVCB02"
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "go-client → dscsystems-ied-server",
+      "capability": "MSVCB OptFlds width",
+      "reason": "the MS OptFlds attribute of MSVCB02 reads as a 10-bit bit-string; the libiec61850 IED server returns 5 bits (refresh-time, reserved, sample-rate, data-set, security)",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850bean",
+      "version": "1.x",
+      "direction": "—",
+      "capability": "Sampled Values",
+      "reason": "iec61850bean has no SV publisher, subscriber or SVCB model: its image has no SV commands and its IED server does not expose MSVCB02",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "go-client → iec61850-rust-ied-server",
+      "capability": "SVCB over MMS (LLN0$MS$MSVCB02)",
+      "reason": "the upstream server does not model SampledValueControl blocks as MMS variables (the SCL parser builds them, no server code reads them): reading MSVCB02 attributes fails with object-non-existent",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "* → iec61850-rust-sv-subscriber, iec61850-rust-sv-publisher → *",
+      "capability": "More than 10 ASDUs per SV frame",
+      "reason": "iec61850-sv encodes and decodes at most 10 ASDUs per frame (MAX_ASDU_PER_FRAME): --no-asdu is limited to 1..10 and a frame with more ASDUs is rejected",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "* → iec61850-rust-sv-subscriber",
+      "capability": "SV receive buffer",
+      "reason": "iec61850-hal's AF_PACKET socket does not expose its descriptor, so the receive buffer stays at the kernel default (about 40 ms of a 9-2LE stream); a longer subscriber stall drops samples",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.5-1-g6bf3f37",
+      "direction": "* → dscsystems-sv-subscriber",
+      "capability": "smpRate 0 / empty datSet",
+      "reason": "sv.Parse returns smpRate 0 and datSet \"\" for absent fields, so a present smpRate of 0 or an empty datSet is reported as null",
+      "reproducedBy": ""
+    }
+  ],
+  "upstreams": {
+    "libiec61850": {
+      "version": "1.6.2.1-89-g6e265c54"
+    },
+    "iec61850bean": {
+      "version": "1.x"
+    },
+    "dscsystems": {
+      "version": "v0.6.5-1-g6bf3f37",
+      "commit": "6bf3f370c6fb95d3835e34d9d1539f313e00b157",
+      "license": "GPL-3.0"
+    },
+    "iec61850-rust": {
+      "version": "v0.2.0-0-gd4e8952",
+      "commit": "d4e895217f367ed4caebf21611d2c16ee46035c0",
+      "license": "MIT OR Apache-2.0"
+    }
+  },
+  "gooseFixtureRevision": "goose-v1",
+  "svFixtureRevision": "sv-v1",
+  "svcbOverMms": {
+    "description": "Whether the stack's IED server exposes the SampledValueControl blocks of the IED fixture (LLN0$MS$MSVCB02) as MMS variables. Checked by reading SvEna, MsvID, DatSet, ConfRev, SmpRate, OptFlds, SmpMod, DstAddress and noASDU with FC MS.",
+    "libiec61850": true,
+    "dscsystems": true,
+    "iec61850bean": false,
+    "iec61850-rust": false
+  }
+}

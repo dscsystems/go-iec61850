@@ -273,6 +273,21 @@ func TestLCBLogRefElsewhere(t *testing.T) {
 	}
 }
 
+// A log in another device that the SCL renamed with ldName is referenced
+// by that name, not by the IED name and its instance.
+func TestLCBLogRefRenamedDevice(t *testing.T) {
+	lc := &model.LogControl{Name: "lcb", LogName: "Events", LogLDInst: "LD1"}
+	ld := &model.LogicalDevice{Name: "IEDLD0", Inst: "LD0"}
+	ln := &model.LogicalNode{Name: "LLN0", Class: "LLN0", LogControls: []*model.LogControl{lc}}
+	ld.Nodes = []*model.LogicalNode{ln}
+	other := &model.LogicalDevice{Name: "Recorder", Inst: "LD1",
+		Nodes: []*model.LogicalNode{{Name: "LLN0", Class: "LLN0"}}}
+	server.New(&model.Model{Name: "IED", Devices: []*model.LogicalDevice{ld, other}})
+	if got := ln.Object("lcb").Attribute("LogRef").Value.Text(); got != "Recorder/LLN0$Events" {
+		t.Errorf("LogRef = %q, want Recorder/LLN0$Events", got)
+	}
+}
+
 // BRCB.Owner has to exist: it was in the read-only list, so a client could
 // be refused a write and then be told the attribute did not exist.
 func TestBRCBOwnerExists(t *testing.T) {

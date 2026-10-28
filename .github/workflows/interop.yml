@@ -19,3 +19,14 @@ jobs:
         run: bash interop/run.sh
         env:
           LIBIEC61850_REF: v1.6
+
+  # IEC 61850 both ways against the otfabric/mms-interop adapter images
+  # (libiec61850, iec61850bean, iec61850-rust), pinned by digest.
+  mms-interop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "1.26" }
+      - name: Run against the mms-interop adapters
+        run: bash interop/run-mms-interop.sh

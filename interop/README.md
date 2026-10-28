@@ -148,6 +148,21 @@ See [the verification report](../docs/rust-interoperability.md) for coverage,
 Go fixes and the two reference-side failures that currently leave this suite
 red. These tests are skipped in normal Go runs without that environment variable.
 
+## mms-interop adapters
+
+IEC 61850 tests in both directions against the adapter images of
+[otfabric/mms-interop](https://github.com/otfabric/mms-interop):
+libiec61850, iec61850bean and iec61850-rust, in containers, on one shared
+fixture. Needs Docker on Linux:
+
+```sh
+bash interop/run-mms-interop.sh
+```
+
+See [interop/mmsinterop](mmsinterop/README.md) for coverage and the known
+gaps of each stack. The tests are skipped in normal Go runs unless
+`MMS_INTEROP=1`.
+
 ## open_server reference
 
 Live MMS, controls, GOOSE and SV checks against

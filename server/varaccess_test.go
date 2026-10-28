@@ -65,3 +65,35 @@ func TestVariableAccessLevels(t *testing.T) {
 	}
 	t.Logf("non-existent -> %v", err)
 }
+
+// An integer attribute is described with the width IEC 61850-8-1 gives
+// its basic type, not with the width of its value: an Enum is 8 bits and
+// an INT8U unsigned 8. iec61850bean refused a ctlModel described as 32.
+func TestVariableAccessIntegerWidths(t *testing.T) {
+	addr, _ := startServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, addr, client.WithTimeout(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for _, tc := range []struct {
+		item string
+		kind mms.Type
+		size int
+	}{
+		{"GGIO1$CF$SPCSO1$ctlModel", mms.TypeInteger, 8},
+		{"GGIO1$ST$SPCSO1$ctlNum", mms.TypeUnsigned, 8},
+		{"LLN0$ST$Beh$stVal", mms.TypeInteger, 8},
+	} {
+		spec, err := c.MMS().GetVariableAccessAttributes(ctx, "simpleIOGenericIO", tc.item)
+		if err != nil {
+			t.Errorf("%s: %v", tc.item, err)
+			continue
+		}
+		if spec.Kind != tc.kind || spec.Size != tc.size {
+			t.Errorf("%s: %v(%d), want %v(%d)", tc.item, spec.Kind, spec.Size, tc.kind, tc.size)
+		}
+	}
+}

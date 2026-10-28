@@ -75,11 +75,12 @@ func BuildModel(s *SCL, opts ...Option) (*model.Model, error) {
 
 	b := newBuilder(s, d)
 	b.led = ied.Name
+	b.ldNames = ldNames(ied.Name, ap.Server.LDevices, o.ldNames)
 	m := &model.Model{Name: ied.Name}
 	for i := range ap.Server.LDevices {
 		lde := &ap.Server.LDevices[i]
 		b.ledInst = lde.Inst
-		ld := &model.LogicalDevice{Name: ied.Name + lde.Inst, Inst: lde.Inst}
+		ld := &model.LogicalDevice{Name: b.ledRef(), Inst: lde.Inst}
 		var lns []*LN
 		if lde.LN0 != nil {
 			lns = append(lns, lde.LN0)
@@ -96,7 +97,7 @@ func BuildModel(s *SCL, opts ...Option) (*model.Model, error) {
 			ln, err := b.buildLN(ied.Name, ap.Name, lde.Inst, lne)
 			b.curLN = prevLN
 			if err != nil {
-				return nil, fmt.Errorf("scl: %s/%s: %w", ied.Name+lde.Inst, lnName(lne), err)
+				return nil, fmt.Errorf("scl: %s/%s: %w", ld.Name, lnName(lne), err)
 			}
 			ld.Nodes = append(ld.Nodes, ln)
 		}
@@ -334,6 +335,8 @@ type builder struct {
 	// a full reference.
 	led     string
 	ledInst string
+	// ldNames maps each logical-device instance of the IED to its name.
+	ldNames map[string]string
 }
 
 // settingValue is one initial value of an FC SG or SE attribute, in a
@@ -346,8 +349,31 @@ type settingValue struct {
 }
 
 // ledRef is the name of the logical device being built, which is the MMS
-// domain name: IED name plus the device instance.
-func (b *builder) ledRef() string { return b.led + b.ledInst }
+// domain name. See ldNames.
+func (b *builder) ledRef() string { return b.ldName(b.ledInst) }
+
+// ldName is the name of the IED's logical device inst.
+func (b *builder) ldName(inst string) string {
+	if name, ok := b.ldNames[inst]; ok {
+		return name
+	}
+	return b.led + inst
+}
+
+// ldNames maps each logical device instance to its name: the IED name
+// followed by the instance (IEC 61850-6), or with useLDName the device's
+// LDevice@ldName (Ed 2) when it has one.
+func ldNames(iedName string, lds []LDevice, useLDName bool) map[string]string {
+	names := make(map[string]string, len(lds))
+	for _, ld := range lds {
+		if n := strings.TrimSpace(ld.LdName); useLDName && n != "" {
+			names[ld.Inst] = n
+		} else {
+			names[ld.Inst] = iedName + ld.Inst
+		}
+	}
+	return names
+}
 
 // ref joins a logical device name to an attribute path with the "/" that
 // separates the two halves of an object reference.
@@ -450,7 +476,7 @@ func (b *builder) buildLN(iedName, apName, ldInst string, lne *LN) (*model.Logic
 
 	// Datasets.
 	for i := range lne.DataSets {
-		ds, err := buildDataSet(iedName, ldInst, &lne.DataSets[i])
+		ds, err := buildDataSet(b.ldName, ldInst, &lne.DataSets[i])
 		if err != nil {
 			return nil, err
 		}
@@ -1163,8 +1189,8 @@ func (b *builder) applySDIonDA(da *model.DataAttribute, sdi *SDI, path string) e
 // buildDataSet resolves FCDA entries to object references. Array index
 // notation in doName/daName (e.g. "phsA(2)") is passed through verbatim,
 // and FCDA@ix is the Ed 2 alternative that names the same instance
-// numerically.
-func buildDataSet(iedName, ldInst string, dse *DataSet) (*model.DataSet, error) {
+// numerically. ldName names the logical device of an FCDA@ldInst.
+func buildDataSet(ldName func(inst string) string, ldInst string, dse *DataSet) (*model.DataSet, error) {
 	ds := &model.DataSet{Name: dse.Name}
 	for _, f := range dse.FCDAs {
 		fc := model.ParseFCLenient(f.FC)
@@ -1198,7 +1224,7 @@ func buildDataSet(iedName, ldInst string, dse *DataSet) (*model.DataSet, error) 
 				}
 			}
 		}
-		ref := iedName + li + "/" + ln
+		ref := ldName(li) + "/" + ln
 		if doName != "" {
 			ref += "." + doName
 		}

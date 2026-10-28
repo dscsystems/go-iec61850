@@ -23,9 +23,10 @@ func (e *Error) Error() string { return "scl: " + e.msg }
 type Option func(*buildOptions)
 
 type buildOptions struct {
-	ied  string
-	ap   string
-	opts Options
+	ied     string
+	ap      string
+	ldNames bool
+	opts    Options
 }
 
 // ForIED selects the IED to instantiate; the default is the first IED in
@@ -35,6 +36,13 @@ func ForIED(name string) Option { return func(o *buildOptions) { o.ied = name } 
 // WithAccessPoint selects the access point of the chosen IED; the default
 // is the first access point that contains a Server.
 func WithAccessPoint(name string) Option { return func(o *buildOptions) { o.ap = name } }
+
+// UseLDName names a logical device by its LDevice@ldName (Ed 2) when it
+// has one, instead of the IED name followed by the instance, and resolves
+// dataset members and logs in that device by the same name. The default
+// ignores ldName, so the MMS domain names of a model do not change with
+// the attribute.
+func UseLDName(b bool) Option { return func(o *buildOptions) { o.ldNames = b } }
 
 // Strict makes a build fail when it raised any diagnostic, instead of
 // returning a usable model. See Options.

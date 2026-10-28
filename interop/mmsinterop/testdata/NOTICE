@@ -1,0 +1,11 @@
+interop.icd, values.json and capabilities.json are copied unchanged from
+otfabric/mms-interop v0.4.0 (https://github.com/otfabric/mms-interop,
+tag v0.4.0, commit 5789893ddd41939d40cf88a517a1b3dfe90dc914):
+
+  fixtures/iec61850/interop.icd
+  fixtures/iec61850/values.json
+  fixtures/capabilities.json
+
+mms-interop states that the repository is MIT-licensed outside
+adapters/dscsystems/ (README.md, "Licensing boundary"). The files keep
+that licence; the rest of this repository is GPL-3.0.
