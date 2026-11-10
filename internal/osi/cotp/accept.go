@@ -71,11 +71,14 @@ func (c *Conn) sendCC(sizeCode uint8) error {
 	b.Write(ref[:])
 	b.WriteByte(0) // class 0
 	writeParam(&b, paramTPDUSize, []byte{sizeCode})
-	if c.srcTSAP != nil {
-		writeParam(&b, paramSrcTSAP, c.srcTSAP)
-	}
+	// The CC repeats the CR's selectors in their own roles (ISO 8073): the
+	// calling TSAP is the peer's, which this end holds as dstTSAP, and the
+	// called TSAP is this end's.
 	if c.dstTSAP != nil {
-		writeParam(&b, paramDstTSAP, c.dstTSAP)
+		writeParam(&b, paramSrcTSAP, c.dstTSAP)
+	}
+	if c.srcTSAP != nil {
+		writeParam(&b, paramDstTSAP, c.srcTSAP)
 	}
 	tpdu := b.Bytes()
 	tpdu[0] = byte(len(tpdu) - 1)

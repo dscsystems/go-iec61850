@@ -5,8 +5,8 @@ import (
 	"io"
 	"io/fs"
 	"math"
-	"path"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,10 +161,15 @@ func (af *assocFiles) close(id int32) bool {
 }
 
 func (fstore *fileStore) list(dir string) ([]fileInfo, error) {
-	if dir == "" {
-		dir = "."
+	// A leading slash names the store's root, as it does for an open file.
+	n, ok := fsName(dir)
+	if !ok {
+		if dir = strings.Trim(strings.ReplaceAll(dir, "\\", "/"), "/"); dir != "" {
+			return nil, fs.ErrInvalid
+		}
+		n = "."
 	}
-	ents, err := fs.ReadDir(fstore.fsys, path.Clean(dir))
+	ents, err := fs.ReadDir(fstore.fsys, n)
 	if err != nil {
 		return nil, err
 	}

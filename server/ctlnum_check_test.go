@@ -341,3 +341,25 @@ func TestClientSequenceStillPassesServerChecks(t *testing.T) {
 		t.Fatalf("second Operate: %v", err)
 	}
 }
+
+// A control structure written to the SBO variable must not operate the
+// object: SBO is the read-to-select variable, not a command.
+func TestSBOVariableIsNotWritableAsCommand(t *testing.T) {
+	for _, cm := range []model.CtlModel{model.CtlSBONormal, model.CtlSBOEnhanced} {
+		addr := startSelectServer(t, cm)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		c, err := client.Dial(ctx, addr)
+		if err != nil {
+			cancel()
+			t.Fatal(err)
+		}
+		if err := writeCtl(t, ctx, c, "SBO", true, 1); err == nil {
+			t.Errorf("%v: write to $SBO succeeded", cm)
+		}
+		if v, _ := c.Read(ctx, "SELIED/GGIO1.SPCSO1.stVal", model.ST); v != nil && v.Bool() {
+			t.Errorf("%v: stVal changed by a write to $SBO", cm)
+		}
+		c.Close()
+		cancel()
+	}
+}

@@ -1124,13 +1124,6 @@ func arrayAttr(do *model.DataObject, name string) *model.DataAttribute {
 	return nil
 }
 
-// parseIndex reads an array index and returns it zero-based, as SCL array
-// indices are one-based.
-func parseIndex(s string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	return n - 1, err == nil && n > 0
-}
-
 // arrayIndex reads an SCL array index (the ix attribute of a DOI, SDI, DAI
 // or FCDA) as a one-based element number.
 //
@@ -1193,11 +1186,9 @@ func (b *builder) applySDIonDA(da *model.DataAttribute, sdi *SDI, path string) e
 func buildDataSet(ldName func(inst string) string, ldInst string, dse *DataSet) (*model.DataSet, error) {
 	ds := &model.DataSet{Name: dse.Name}
 	for _, f := range dse.FCDAs {
+		// A constraint this library does not know is carried verbatim: the
+		// dataset still resolves and still reports.
 		fc := model.ParseFCLenient(f.FC)
-		if fc == model.FCUnknown {
-			// Carried verbatim: a dataset under a constraint this library
-			// does not know still resolves and still reports.
-		}
 		li := f.LDInst
 		if li == "" {
 			li = ldInst

@@ -156,7 +156,7 @@ func deriveElementNames() map[string]bool {
 				out[tag] = true
 			}
 			ft := f.Type
-			for ft.Kind() == reflect.Ptr || ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
+			for ft.Kind() == reflect.Pointer || ft.Kind() == reflect.Slice || ft.Kind() == reflect.Array {
 				ft = ft.Elem()
 			}
 			if ft.Kind() == reflect.Struct {

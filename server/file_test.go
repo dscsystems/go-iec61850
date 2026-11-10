@@ -83,3 +83,48 @@ func TestFileServices(t *testing.T) {
 		}
 	})
 }
+
+// A directory is named like a file is: a leading slash is the filestore
+// root's, as it is for FileOpen.
+func TestFileDirectoryLeadingSlash(t *testing.T) {
+	m, err := scl.LoadModel("../testdata/simpleIO_direct_control.cid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys := fstest.MapFS{
+		"top.cfg":     {Data: []byte("t")},
+		"sub/one.cfg": {Data: []byte("1")},
+	}
+	srv := server.New(m, server.WithFileStore(fsys))
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := client.Dial(ctx, ln.Addr().String(), client.WithTimeout(3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	for _, dir := range []string{"", "/", "sub", "/sub", "/sub/", "\\sub"} {
+		entries, err := c.FileDirectory(ctx, dir)
+		if err != nil {
+			t.Errorf("FileDirectory(%q): %v", dir, err)
+			continue
+		}
+		want := "one.cfg"
+		if dir == "" || dir == "/" {
+			want = "top.cfg"
+		}
+		found := false
+		for _, e := range entries {
+			found = found || e.Name == want
+		}
+		if !found {
+			t.Errorf("FileDirectory(%q) = %+v, want %s", dir, entries, want)
+		}
+	}
+}

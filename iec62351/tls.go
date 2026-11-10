@@ -58,8 +58,10 @@ type Options struct {
 	// update, without one, or not yet valid is itself refused, and so is
 	// the connection, unless AllowStaleCRL. A certificate whose issuer has
 	// CRLs here none of which that issuer signed is refused: the list
-	// meant to cover it cannot be trusted. CRLs are not reloaded; replace
-	// the configuration to take newer ones.
+	// meant to cover it cannot be trusted. A certificate whose issuer has
+	// no CRL here at all is not checked for revocation: list one for every
+	// issuer in the chains that must be covered. CRLs are not reloaded;
+	// replace the configuration to take newer ones.
 	CRLs          []*x509.RevocationList
 	AllowStaleCRL bool
 	// AllowedPeers, when not empty, restricts the peers to these

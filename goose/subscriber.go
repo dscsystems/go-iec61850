@@ -28,6 +28,10 @@ func (f Filter) match(m *Message) bool {
 	return true
 }
 
+// MaxStreams is how many control blocks a subscription tracks the sequence
+// of at once. Filter on GoCbRef to be sure of the ones that matter.
+const MaxStreams = 4096
+
 // Anomalies flags protocol irregularities detected by a subscriber from
 // the per-goCbRef sequence state. They are diagnostics, not part of the
 // wire format.
@@ -175,7 +179,11 @@ func (sub *subscription) run(iface ethernet.Interface) {
 			st.arrival = now
 			st.tatl = time.Duration(m.TimeAllowedToLive) * time.Millisecond
 			sub.supervise(m.GoCbRef, st)
-		} else {
+		} else if len(sub.states) < MaxStreams {
+			// A stream beyond the limit is delivered but not tracked: its
+			// sequence is not checked and its liveness not supervised, so an
+			// unfiltered subscription on a hostile network cannot grow
+			// without bound.
 			st := &seqState{
 				stNum:   m.StNum,
 				sqNum:   m.SqNum,

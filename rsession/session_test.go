@@ -288,3 +288,42 @@ func TestSessionMulticast(t *testing.T) {
 	}
 	t.Skip("multicast is not looped back on this host (no route, or a firewall drops it)")
 }
+
+// A replayed SPDU is refused whatever source port it comes from: the port
+// is not authenticated.
+func TestSessionReplayFromOtherPort(t *testing.T) {
+	k := rsession.Key{ID: 1, Material: key16, Sig: rsession.SigHMACSHA256_128}
+	recv, err := rsession.Open(rsession.Config{Listen: "127.0.0.1:0", Keys: keys(t, k)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recv.Close()
+	b, err := rsession.Marshal(&rsession.SPDU{SI: rsession.SIGOOSE, Number: 10,
+		Payloads: []rsession.Payload{{Type: rsession.PayloadGOOSE, APDU: []byte{0x61, 0}}}}, &k, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			if _, _, err := recv.Receive(); err != nil {
+				return
+			}
+		}
+	}()
+	for range 5 {
+		c, err := net.Dial("udp", recv.LocalAddr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write(b)
+		c.Close()
+		time.Sleep(20 * time.Millisecond)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for recv.Stats().Replayed < 4 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if st := recv.Stats(); st.Accepted != 1 || st.Replayed != 4 {
+		t.Errorf("stats = %+v, want one accepted and four replays", st)
+	}
+}

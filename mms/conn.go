@@ -835,8 +835,6 @@ func (c *Conn) Close() error {
 	return err
 }
 
-var errShort = errors.New("mms: short PDU")
-
 func decodeServiceError(tag asn1.Tag, body []byte) error {
 	if tag == tagRejectPDU {
 		return &ServiceError{Rejected: true, Detail: "rejectPDU"}

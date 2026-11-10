@@ -66,6 +66,8 @@ type Server struct {
 	aeIdentity *mms.ACSEIdentity
 	// handshakeTimeout bounds association setup (WithHandshakeTimeout).
 	handshakeTimeout time.Duration
+	// writeTimeout bounds each PDU written to a client (WithWriteTimeout).
+	writeTimeout time.Duration
 	// deletableLogs lets clients delete log entries (WithDeletableLogs).
 	deletableLogs bool
 	// status is the Status service's answer: logical<<8 | physical.
@@ -296,11 +298,12 @@ func declaredSettingGroups(ld *model.LogicalDevice) *model.SettingControl {
 // New returns a server serving m.
 func New(m *model.Model, opts ...Option) *Server {
 	s := &Server{
-		model:    m,
-		log:      slog.New(slog.DiscardHandler),
-		identity: Identity{Vendor: "go-iec61850", Model: m.Name, Revision: "0.1"},
-		conns:    make(map[*mms.ServerConn]struct{}),
-		writable: fcSet(model.SP, model.SV, model.SE),
+		writeTimeout: 30 * time.Second,
+		model:        m,
+		log:          slog.New(slog.DiscardHandler),
+		identity:     Identity{Vendor: "go-iec61850", Model: m.Name, Revision: "0.1"},
+		conns:        make(map[*mms.ServerConn]struct{}),
+		writable:     fcSet(model.SP, model.SV, model.SE),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -426,7 +429,7 @@ func (s *Server) serveConn(raw net.Conn) {
 	}
 	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate,
 		E2E: s.e2e, E2ERequired: s.e2eRequired, AProfile: s.aprofile, AProfileRequired: s.apRequired,
-		Responding: s.aeIdentity, HandshakeTimeout: ht})
+		Responding: s.aeIdentity, HandshakeTimeout: ht, WriteTimeout: s.writeTimeout})
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()
@@ -595,6 +598,14 @@ func WithAProfile(cfg *aprofile.Config, required bool) Option {
 // AE title of the E2E identity.
 func WithAEIdentity(id mms.ACSEIdentity) Option {
 	return func(s *Server) { s.aeIdentity = &id }
+}
+
+// WithWriteTimeout bounds each PDU written to a client (default 30 s; zero
+// or negative for none). A client that stops reading is disconnected when a
+// write to it times out, instead of holding its goroutine for as long as it
+// keeps the connection open.
+func WithWriteTimeout(d time.Duration) Option {
+	return func(s *Server) { s.writeTimeout = d }
 }
 
 // WithHandshakeTimeout bounds the association handshake (default 10 s).

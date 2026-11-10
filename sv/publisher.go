@@ -19,6 +19,9 @@ type LEConfig struct {
 	DstMAC  [6]byte
 	SrcMAC  [6]byte
 	VLAN    *ethernet.VLANTag
+	// Simulation sets the simulation bit of the APDU header: the stream is
+	// simulated, and subscribers not in simulation mode ignore it.
+	Simulation bool
 	// SamplesPerCycle is the number of samples per power cycle (80 for
 	// protection, 256 for metering in the 9-2LE profile).
 	SamplesPerCycle int
@@ -173,7 +176,7 @@ func (p *LEPublisher) Run(ctx context.Context, fill func(smpCnt uint16, out *LES
 }
 
 func (p *LEPublisher) emit(samples []LESample) error {
-	pdu := &PDU{AppID: p.cfg.AppID, ASDUs: make([]*ASDU, len(samples))}
+	pdu := &PDU{AppID: p.cfg.AppID, Simulation: p.cfg.Simulation, ASDUs: make([]*ASDU, len(samples))}
 	for i := range samples {
 		pdu.ASDUs[i] = p.asdu(&samples[i])
 	}

@@ -130,10 +130,17 @@ type datagram struct {
 	from *net.UDPAddr
 }
 
+// streamKey identifies one sender's numbering. The source port is not part
+// of it: it is not authenticated, and a captured SPDU replayed from another
+// port would otherwise start a window of its own. The address is the best
+// identity a sender has in the session header, and does not stop a replay
+// from a spoofed source address; the AppID of the first payload (inside the
+// authenticated part) separates the streams of one host.
 type streamKey struct {
 	from  string
 	si    SessionID
 	keyID uint32
+	appID uint16
 }
 
 // maxStreams bounds the replay state kept: beyond it, the state of
@@ -367,7 +374,10 @@ func (s *Session) check(d datagram) (*SPDU, error) {
 }
 
 func (s *Session) fresh(from *net.UDPAddr, spdu *SPDU) bool {
-	k := streamKey{from: from.String(), si: spdu.SI, keyID: spdu.KeyID}
+	k := streamKey{from: from.IP.String(), si: spdu.SI, keyID: spdu.KeyID}
+	if len(spdu.Payloads) > 0 {
+		k.appID = spdu.Payloads[0].AppID
+	}
 	now := time.Now()
 	s.replayMu.Lock()
 	defer s.replayMu.Unlock()

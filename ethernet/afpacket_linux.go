@@ -5,6 +5,7 @@ package ethernet
 import (
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,7 +18,17 @@ type afPacket struct {
 	name   string
 	filter []uint16
 	closed atomic.Bool
+	// fdMu is held shared across every use of fd and exclusively by Close,
+	// so the descriptor is never closed, and possibly reused by another
+	// open, while a read or write is in flight. Reads time out (see Open),
+	// so Close waits for them no longer than that.
+	fdMu sync.RWMutex
 }
+
+// frameBufSize holds the largest frame read, VLAN tag included.
+const frameBufSize = 9216
+
+var frameBufs = sync.Pool{New: func() any { return new([frameBufSize]byte) }}
 
 // Open binds a raw AF_PACKET socket to the named interface. With no
 // etherTypes every protocol is delivered; with one or more, reception is
@@ -43,6 +54,15 @@ func Open(ifname string, etherTypes ...uint16) (Interface, error) {
 		unix.Close(fd)
 		return nil, fmt.Errorf("ethernet: bind %s: %w", ifname, err)
 	}
+	// GOOSE and SV are sent to multicast MAC addresses, which a NIC drops
+	// unless it is told to accept them. Asking for all multicast, rather
+	// than joining the groups of one stream, serves any subscription on
+	// the interface, and the EtherType filter does the selecting.
+	mreq := unix.PacketMreq{Ifindex: int32(ifi.Index), Type: unix.PACKET_MR_ALLMULTI}
+	if err := unix.SetsockoptPacketMreq(fd, unix.SOL_PACKET, unix.PACKET_ADD_MEMBERSHIP, &mreq); err != nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("ethernet: multicast membership on %s: %w", ifname, err)
+	}
 	// A receive timeout lets ReadFrame poll the closed flag, so Close
 	// unblocks a concurrent reader.
 	tv := unix.NsecToTimeval(int64(200 * time.Millisecond))
@@ -61,6 +81,11 @@ func (p *afPacket) WriteFrame(f *Frame) error {
 	if p.closed.Load() {
 		return net.ErrClosed
 	}
+	p.fdMu.RLock()
+	defer p.fdMu.RUnlock()
+	if p.closed.Load() {
+		return net.ErrClosed
+	}
 	if _, err := unix.Write(p.fd, f.Marshal()); err != nil {
 		return fmt.Errorf("ethernet: write %s: %w", p.name, err)
 	}
@@ -72,26 +97,30 @@ func (p *afPacket) ReadFrame() (*Frame, error) {
 		if p.closed.Load() {
 			return nil, net.ErrClosed
 		}
-		buf := make([]byte, 9216)
-		n, _, err := unix.Recvfrom(p.fd, buf, 0)
+		buf := frameBufs.Get().(*[frameBufSize]byte)
+		p.fdMu.RLock()
+		n, _, err := unix.Recvfrom(p.fd, buf[:], 0)
+		p.fdMu.RUnlock()
 		switch err {
 		case nil:
 		case unix.EAGAIN, unix.EINTR:
 			continue
 		default:
+			frameBufs.Put(buf)
 			if p.closed.Load() {
 				return nil, net.ErrClosed
 			}
 			return nil, fmt.Errorf("ethernet: read %s: %w", p.name, err)
 		}
 		f, err := ParseFrame(buf[:n])
-		if err != nil {
-			continue // runt frame
+		if err == nil && (p.filter == nil || p.wants(f.EtherType)) {
+			// The payload is copied out of the pooled buffer, to the size of
+			// the frame rather than of the buffer.
+			f.Payload = append([]byte(nil), f.Payload...)
+			frameBufs.Put(buf)
+			return f, nil
 		}
-		if p.filter != nil && !p.wants(f.EtherType) {
-			continue
-		}
-		return f, nil
+		frameBufs.Put(buf) // a runt, or a protocol nobody asked for
 	}
 }
 
@@ -108,5 +137,7 @@ func (p *afPacket) Close() error {
 	if p.closed.Swap(true) {
 		return nil
 	}
+	p.fdMu.Lock()
+	defer p.fdMu.Unlock()
 	return unix.Close(p.fd)
 }

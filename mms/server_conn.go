@@ -28,11 +28,13 @@ var ErrReportQueueFull = errors.New("mms: unconfirmed queue full")
 // responses the handler returns. It is used by the server package; most
 // applications use that higher-level API instead.
 type ServerConn struct {
-	fr       *framing
-	raw      net.Conn
-	writeMu  sync.Mutex
-	Password string // ACSE authentication value presented by the client
-	Peer     net.Addr
+	fr      *framing
+	raw     net.Conn
+	writeMu sync.Mutex
+	// writeTimeout bounds each PDU written (AcceptOptions.WriteTimeout).
+	writeTimeout time.Duration
+	Password     string // ACSE authentication value presented by the client
+	Peer         net.Addr
 
 	unconf       chan []byte // async queue for unconfirmed PDUs (reports)
 	closeOnce    sync.Once
@@ -181,6 +183,12 @@ type AcceptOptions struct {
 
 	// HandshakeTimeout bounds the association handshake (zero: none).
 	HandshakeTimeout time.Duration
+
+	// WriteTimeout bounds each PDU written to the client (zero: none). A
+	// client that stops reading would otherwise hold its goroutine, and the
+	// request behind it, for as long as it keeps the connection open. A
+	// write that times out ends the association.
+	WriteTimeout time.Duration
 }
 
 func (o AcceptOptions) trace(event string, data []byte) {
@@ -204,6 +212,9 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	sc, err := acceptConn(raw, opts)
 	if err == nil && opts.HandshakeTimeout > 0 {
 		raw.SetDeadline(time.Time{})
+	}
+	if err == nil {
+		sc.writeTimeout = opts.WriteTimeout
 	}
 	return sc, err
 }
@@ -428,9 +439,13 @@ func clampInitiate(want, proposed InitiateRequest) InitiateRequest {
 func (sc *ServerConn) pumpUnconfirmed() {
 	for pdu := range sc.unconf {
 		sc.writeMu.Lock()
-		err := sc.fr.sendMMS(pdu)
+		err := sc.sendLocked(pdu)
 		sc.writeMu.Unlock()
 		if err != nil {
+			// A client that cannot take a report is gone as far as the
+			// stream is concerned: closing the transport ends the
+			// association rather than leaving it to queue and drop.
+			sc.raw.Close()
 			return
 		}
 	}
@@ -715,7 +730,22 @@ func (sc *ServerConn) enqueue(pdu []byte) error {
 func (sc *ServerConn) send(pdu []byte) error {
 	sc.writeMu.Lock()
 	defer sc.writeMu.Unlock()
-	return sc.fr.sendMMS(pdu)
+	return sc.sendLocked(pdu)
+}
+
+// sendLocked writes pdu within the write timeout; writeMu is held. A write
+// that timed out may have sent part of the PDU, so the transport is closed.
+func (sc *ServerConn) sendLocked(pdu []byte) error {
+	if sc.writeTimeout <= 0 {
+		return sc.fr.sendMMS(pdu)
+	}
+	sc.raw.SetWriteDeadline(time.Now().Add(sc.writeTimeout))
+	err := sc.fr.sendMMS(pdu)
+	if err != nil {
+		sc.raw.Close()
+		return err
+	}
+	return sc.raw.SetWriteDeadline(time.Time{})
 }
 
 // Close closes the transport and stops the unconfirmed writer.

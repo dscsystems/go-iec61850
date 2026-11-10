@@ -15,6 +15,15 @@ import (
 // headerLen is the fixed APDU header: APPID, Length, Reserved1, Reserved2.
 const headerLen = 8
 
+// simulationOctet is the first octet of Reserved 1: its top bit is the
+// simulation flag.
+func simulationOctet(sim bool) byte {
+	if sim {
+		return 0x80
+	}
+	return 0
+}
+
 // pduTag frames the goosePdu after the APDU header.
 var pduTag = asn1.ApplicationConstructed(1) // 0x61
 
@@ -31,6 +40,10 @@ type Message struct {
 	NumDatSetEntries      uint32
 	Values                []*mms.Value
 	AppID                 uint16
+	// Simulation is the simulation bit of the APDU header (Reserved 1,
+	// IEC 61850-8-1): the message comes from a simulated source, which a
+	// subscriber not in simulation mode has to ignore.
+	Simulation bool
 	// TimeQuality is the quality of T. Nil means the library default:
 	// leap seconds known, clock synchronised, accuracy 10. It is a pointer
 	// because every value of the octet is a real quality, 0 included, and
@@ -84,7 +97,7 @@ func (m *Message) Marshal() []byte {
 	buf = append(buf,
 		byte(m.AppID>>8), byte(m.AppID),
 		byte(length>>8), byte(length),
-		0, 0, 0, 0)
+		simulationOctet(m.Simulation), 0, 0, 0)
 	return pdu.Append(buf)
 }
 
@@ -94,7 +107,7 @@ func Parse(apdu []byte) (*Message, error) {
 	if len(apdu) < headerLen {
 		return nil, fmt.Errorf("goose: apdu of %d octets: %w", len(apdu), asn1.ErrTruncated)
 	}
-	m := &Message{AppID: uint16(apdu[0])<<8 | uint16(apdu[1])}
+	m := &Message{AppID: uint16(apdu[0])<<8 | uint16(apdu[1]), Simulation: apdu[4]&0x80 != 0}
 	length := int(apdu[2])<<8 | int(apdu[3])
 	if length < headerLen || length > len(apdu) {
 		return nil, fmt.Errorf("goose: length field %d in apdu of %d octets: %w",

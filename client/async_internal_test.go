@@ -15,7 +15,8 @@ func TestOutstandingDefaultsToOne(t *testing.T) {
 		t.Errorf("slots = %d, want 1", got)
 	}
 	// The channel is built once and reused.
-	if c.outstanding() != c.outstanding() {
+	first, second := c.outstanding(), c.outstanding()
+	if first != second {
 		t.Error("outstanding returned two different channels")
 	}
 }

@@ -27,7 +27,6 @@ var (
 	// accepted by a server whose policy enables AcceptT100AppContext.
 	OIDE2EMMSContextT100 = asn1.OID{1, 0, 62351, 4, 1, 2, 1, 1}
 
-	oidRSAEncryption   = asn1.OID{1, 2, 840, 113549, 1, 1, 1}
 	oidSHA256WithRSA   = asn1.OID{1, 2, 840, 113549, 1, 1, 11}
 	oidECDSAWithSHA256 = asn1.OID{1, 2, 840, 10045, 4, 3, 2}
 	oidHMACWithSHA256  = asn1.OID{1, 2, 840, 113549, 2, 9}

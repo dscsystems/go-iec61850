@@ -29,7 +29,6 @@ var (
 	tagUTF8       = asn1.TagUTF8String
 	tagGenTime    = asn1.TagGeneralTime
 	tagEnumerated = asn1.Tag{Class: asn1.ClassUniversal, Number: 10}
-	tagExternal   = asn1.Tag{Class: asn1.ClassUniversal, Constructed: true, Number: 8}
 	tagNonAEA     = asn1.ContextConstructed(0)
 	tagEncr       = asn1.ContextConstructed(0)
 	tagICVSet     = asn1.ContextConstructed(1)

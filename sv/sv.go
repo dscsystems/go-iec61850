@@ -84,10 +84,21 @@ type ASDU struct {
 	Sample        []byte // the raw dataset payload (phsMeas for 9-2LE)
 }
 
+// simulationOctet is the first octet of Reserved 1: its top bit is the
+// simulation flag.
+func simulationOctet(sim bool) byte {
+	if sim {
+		return 0x80
+	}
+	return 0
+}
+
 // PDU is a sampled-value APDU carrying one or more ASDUs.
 type PDU struct {
 	AppID uint16
-	ASDUs []*ASDU
+	// Simulation is the simulation bit of the APDU header (Reserved 1).
+	Simulation bool
+	ASDUs      []*ASDU
 }
 
 // Marshal encodes the full APDU: APPID, Length, two reserved words, then
@@ -106,7 +117,7 @@ func (p *PDU) Marshal() []byte {
 	buf = append(buf,
 		byte(p.AppID>>8), byte(p.AppID),
 		byte(length>>8), byte(length),
-		0, 0, 0, 0)
+		simulationOctet(p.Simulation), 0, 0, 0)
 	return sav.Append(buf)
 }
 
@@ -156,7 +167,7 @@ func Parse(apdu []byte) (*PDU, error) {
 	if len(apdu) < headerLen {
 		return nil, fmt.Errorf("sv: apdu of %d octets: %w", len(apdu), asn1.ErrTruncated)
 	}
-	p := &PDU{AppID: uint16(apdu[0])<<8 | uint16(apdu[1])}
+	p := &PDU{AppID: uint16(apdu[0])<<8 | uint16(apdu[1]), Simulation: apdu[4]&0x80 != 0}
 	length := int(apdu[2])<<8 | int(apdu[3])
 	if length < headerLen || length > len(apdu) {
 		return nil, fmt.Errorf("sv: length field %d in apdu of %d octets: %w",

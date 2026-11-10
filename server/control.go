@@ -93,6 +93,12 @@ func (h *handler) controlWrite(domain, item string, v *mms.Value, conn *mms.Serv
 		return false, 0
 	}
 	h.s.log.Debug("server: control write", "item", item, "phase", phase)
+	if phase == "SBO" {
+		// SBO is the read-to-select variable of SBO with normal security
+		// (see readOne). It is not a command: writing a control structure
+		// to it would skip the select-before-operate rule.
+		return true, byte(mms.AccessObjectAccessDenied)
+	}
 	ld := h.s.model.Device(domain)
 	if ld == nil {
 		return true, byte(mms.AccessObjectNonExistent)
@@ -272,11 +278,6 @@ func (h *handler) applyControl(ref model.ObjectReference, ctlVal *mms.Value) {
 			h.changes.record(stRef, da, old, da.Value)
 		}
 	}
-}
-
-func (h *handler) isEnhanced(ref model.ObjectReference) bool {
-	cm, declared := h.ctlModel(ref)
-	return declared && cm.Enhanced()
 }
 
 // termination is the CommandTermination owed for one enhanced-security

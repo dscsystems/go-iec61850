@@ -31,7 +31,7 @@ func TestObjectReference(t *testing.T) {
 	}
 
 	// LN-only reference and FC-less item.
-	domain, item = ObjectReference("ld/LLN0").ToMMS(FCNone)
+	_, item = ObjectReference("ld/LLN0").ToMMS(FCNone)
 	if item != "LLN0" {
 		t.Fatalf("LN-only item %q", item)
 	}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"sync"
 	"time"
 
@@ -54,6 +55,9 @@ type PublisherConfig struct {
 	// them later.
 	Test   bool
 	NdsCom bool
+	// Simulation sets the simulation bit of the APDU header: the messages
+	// are simulated, and subscribers not in simulation mode ignore them.
+	Simulation bool
 	// TimeQuality is the quality of the time stamp in the message. Nil
 	// carries the library's default: leap seconds known and an accuracy
 	// of 10.
@@ -192,6 +196,7 @@ func (p *Publisher) publishLocked(values []*mms.Value, stNum uint32, stateChange
 		NumDatSetEntries:  uint32(len(values)),
 		Values:            values,
 		AppID:             p.cfg.AppID,
+		Simulation:        p.cfg.Simulation,
 		Test:              p.test,
 		NdsCom:            p.ndsCom,
 		TimeQuality:       p.cfg.TimeQuality,
@@ -282,7 +287,11 @@ func (p *Publisher) retransmit(msg Message, stop chan struct{}) {
 		p.sqNum = msg.SqNum
 		err := p.send(msg.Marshal())
 		p.mu.Unlock()
-		if err != nil {
+		// A failed send is not the end of the stream: the retransmissions
+		// are how a lost frame is recovered, and a subscriber whose
+		// timeAllowedToLive passes declares the publisher dead. Only a
+		// closed interface ends it.
+		if errors.Is(err, net.ErrClosed) {
 			return
 		}
 	}
