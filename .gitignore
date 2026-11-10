@@ -5,7 +5,6 @@
 /dist/
 /.interop-work/
 /.claude/
-/.github/
 PLAN.md
 # Binaries built at the repository root (go build ./cmd/...)
 /e2e-pki
@@ -13,3 +12,5 @@ PLAN.md
 /ied-client
 /ied-server
 /iedx
+/cmd/iedx/iedx
+/cmd/iedx/iedx.exe

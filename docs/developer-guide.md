@@ -278,7 +278,7 @@ beyond short factual references.
 | `iec62351/aprofile/` | IEC 62351-4 A-profile (compatibility mode) |
 | `iec62351/pki/` | certificate handling shared by the security profiles |
 | `internal/cryptox/` | cryptographic helpers (`dh`: Diffie-Hellman groups) |
-| `cmd/` | `ied-client`, `ied-server`, `goose-sniff`, `iedx`, `e2e-pki` |
+| `cmd/` | `ied-client`, `ied-server`, `goose-sniff`, `iedx`, `e2e-pki` (`iedx` has its own go.mod, so the library does not depend on the TUI toolkit: run its checks from `cmd/iedx`) |
 | `examples/` | runnable snippets |
 | `interop/` | bidirectional interop harness |
 | `testdata/` | SCL files and fixtures |

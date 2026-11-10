@@ -19,10 +19,11 @@ Run the example server and explore it with the TUI client:
 
 ```sh
 go run ./cmd/ied-server -scl testdata/simpleIO_direct_control.cid -addr :10102
-go run ./cmd/iedx 127.0.0.1:10102        # or run with no address for a connect form
+(cd cmd/iedx && go run . 127.0.0.1:10102)  # or no address for a connect form
 ```
 
-`iedx` is a full mouse-driven terminal client: a Browse tab (model tree,
+`iedx` is a module of its own (`cmd/iedx`), so the terminal UI toolkit is not
+a dependency of the library. It is a full mouse-driven terminal client: a Browse tab (model tree,
 live read, type-aware write, auto-refresh, filter), plus Reports, Datasets,
 Controls, Setting Groups, Files and Logs tabs. Click tabs and rows, scroll
 with the wheel, `?` for keys.

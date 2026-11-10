@@ -46,7 +46,13 @@ jobs:
           [ "$GOOS" = "windows" ] && ext=".exe"
           for cmd in cmd/*/; do
             name=$(basename "$cmd")
-            go build -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
+            # A command with a go.mod of its own (iedx) is built as its own
+            # module.
+            if [ -f "$cmd/go.mod" ]; then
+              (cd "$cmd" && go build -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/dist/${name}${ext}" .)
+            else
+              go build -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
+            fi
           done
 
       - name: Package
@@ -148,7 +154,11 @@ jobs:
           [ "${{ matrix.goos }}" = "windows" ] && ext=".exe"
           for cmd in cmd/*/; do
             name=$(basename "$cmd")
-            go build -tags openssl -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
+            if [ -f "$cmd/go.mod" ]; then
+              (cd "$cmd" && go build -tags openssl -trimpath -ldflags "-s -w" -o "$GITHUB_WORKSPACE/dist/${name}${ext}" .)
+            else
+              go build -tags openssl -trimpath -ldflags "-s -w" -o "dist/${name}${ext}" "./$cmd"
+            fi
           done
           if [ "${{ matrix.goos }}" = "windows" ]; then
             # Bundle every MinGW DLL the executables need (OpenSSL and its
