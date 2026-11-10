@@ -88,7 +88,7 @@ jobs:
           # 22.04: glibc 2.35, so the binaries run on any newer distribution.
           - { os: ubuntu-22.04, goos: linux, goarch: amd64 }
           - { os: ubuntu-22.04-arm, goos: linux, goarch: arm64 }
-          - { os: macos-14, goos: darwin, goarch: arm64 }
+          - { os: macos-15, goos: darwin, goarch: arm64 }
           - { os: windows-latest, goos: windows, goarch: amd64 }
     runs-on: ${{ matrix.os }}
     defaults:
