@@ -342,7 +342,7 @@ a writable one.
 | Feature | Client / subscriber | Server / publisher | Notes |
 |---|---|---|---|
 | MMS over TLS, IEC 62351-3 profile | Y | Y | package `iec62351`; TLS 1.2 (ECDHE AES-GCM) and 1.3; key exchange groups P-256, P-384, P-521 (`iec62351.Curves`); mutual certificates; CRLs; key strength; pinning |
-| ML-KEM hybrid key exchange (TLS 1.3) | P | P | not offered by the profile, which overrides Go's default groups; an application can opt in on the returned `tls.Config` (X25519MLKEM768, and on Go 1.26 or later SecP256r1MLKEM768 and SecP384r1MLKEM1024); see [tls-hybrid-compatibility.md](tls-hybrid-compatibility.md) |
+| ML-KEM hybrid key exchange (TLS 1.3) | P | P | not offered by the profile, which overrides Go's default groups; an application can opt in on the returned `tls.Config` (X25519MLKEM768, and on Go 1.26 or later with `tlssecpmlkem=1` SecP256r1MLKEM768 and SecP384r1MLKEM1024); see [tls-hybrid-compatibility.md](tls-hybrid-compatibility.md) |
 | TLS session key renewal | N | N | |
 | IEC 62351-3 Table 1 DHE_RSA suites (0x009E; 0x009F after Part 3 TISSUE 79) | N | N | not implemented by Go `crypto/tls` |
 | Trusted CA indication, `trusted_ca_keys` (Part 3 7.5.3, TISSUE 58) | N | N | Go `crypto/tls` neither sends the extension nor answers it in the ServerHello |

@@ -1,6 +1,6 @@
 # TLS and ML-KEM hybrid compatibility
 
-Verified with Go 1.27.4 on Linux amd64. The standard `iec62351` transport
+Verified with Go 1.25.0, 1.26.11 and 1.27.4 on Linux amd64. The standard `iec62351` transport
 supports TLS 1.2 and TLS 1.3 with mutual certificate authentication.
 `Options.TLS13Only` raises the minimum to TLS 1.3. `Options.NativeMode`
 restricts the connection to TLS 1.2 and rejects `TLS13Only`.
@@ -56,13 +56,18 @@ configurations built afterwards.
 
 X25519MLKEM768 is available since Go 1.24; the module's minimum Go 1.25
 supports it and exposes `ConnectionState.CurveID`. SecP256r1MLKEM768 and
-SecP384r1MLKEM1024 require Go 1.26 or later. See the
+SecP384r1MLKEM1024 require Go 1.26 or later, and the `tlssecpmlkem=1`
+setting when the application's `go.mod` declares a `go` version below
+1.26: the toolchain then defaults it to 0, and Go 1.26 drops the two
+groups even from an explicit `CurvePreferences`. Set it with a
+`godebug tlssecpmlkem=1` line in `go.mod`, or `//go:debug tlssecpmlkem=1`
+in the main package, as this repository's Go 1.26 test file does. See the
 [Go TLS documentation](https://pkg.go.dev/crypto/tls#Config).
 
-`GODEBUG` can remove these groups whatever `CurvePreferences` says:
-`tlsmlkem=0` disables all ML-KEM hybrids and `tlssecpmlkem=0` the
-NIST-curve ones, whether set in the environment or by a `godebug` line in
-the main module's `go.mod`. FIPS 140-3 mode can restrict the groups too.
+Set explicitly, `GODEBUG` removes these groups whatever
+`CurvePreferences` says: `tlsmlkem=0` disables all ML-KEM hybrids and
+`tlssecpmlkem=0` the NIST-curve ones, whether set in the environment or
+by a `godebug` line in the main module's `go.mod`. FIPS 140-3 mode can restrict the groups too.
 A hybrid-only configuration then fails to connect, and one with a
 classical fallback quietly negotiates the classical group. Check
 `ConnectionState.CurveID` if the hybrid is a requirement. The tests skip
