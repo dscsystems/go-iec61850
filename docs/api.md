@@ -584,6 +584,12 @@ defer stop()
 `Subscribe` (not `SubscribeLE`) delivers generic `*sv.ASDU` with the raw
 `Sample` payload for non-9-2LE datasets.
 
+One `Subscriber` reads its interface with a single goroutine and hands each
+frame to every subscription it matches, so register all subscriptions for an
+interface on the same `Subscriber`. Filters accept only live frames by
+default; set `Filter.Simulated` to receive the simulated (commissioning)
+stream instead, and subscribe twice to receive both separately.
+
 A unicast block (USVCB) publishes the same way, to its individual
 `DstAddress`, or, for R-SV, through an `rsession.Session` opened with the
 block's IP as `Remote`. The server's MSVCB and USVCB take `SvEna` and, on a

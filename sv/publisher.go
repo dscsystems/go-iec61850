@@ -108,6 +108,11 @@ func NewLEPublisher(iface ethernet.Interface, cfg LEConfig) (*LEPublisher, error
 		return nil, fmt.Errorf("sv: sample mode %v cannot express a rate of %d samples per second",
 			cfg.SmpMod, cfg.SamplesPerCycle*cfg.NominalHz)
 	}
+	if cfg.Opts.SampleRate && !cfg.Opts.SmpMod && cfg.SmpMod != SmpPerPeriod {
+		// Without smpMod [8] a receiver reads smpRate as samples per
+		// period, so a rate in any other unit would be misread.
+		return nil, fmt.Errorf("sv: smpRate in %v needs Opts.SmpMod to declare its unit", cfg.SmpMod)
+	}
 	p := &LEPublisher{iface: iface, cfg: cfg, rate: cfg.SamplesPerCycle * cfg.NominalHz}
 	// smpCnt counts 0..rate-1 in 16 bits, which also keeps the sample
 	// interval above 15 µs.

@@ -260,6 +260,12 @@ func TestSmpRateFollowsSmpMod(t *testing.T) {
 			t.Errorf("%v: smpRate = %d, want %d", tc.mod, a.SmpRate, tc.want)
 		}
 	}
+	// Samples per second with smpMod left out would be read as per period.
+	if _, err := NewLEPublisher(&frameCapture{}, LEConfig{
+		SvID: "MU1", SmpMod: SmpPerSec, Opts: SVOpts{SampleRate: true},
+	}); err == nil {
+		t.Error("SmpPerSec smpRate without smpMod should be refused")
+	}
 	if _, err := NewLEPublisher(&frameCapture{}, LEConfig{SvID: "MU1", SmpMod: SecPerSmp}); err == nil {
 		t.Error("SecPerSmp at 4000 samples per second should be refused")
 	}

@@ -77,6 +77,24 @@ func TestFileServices(t *testing.T) {
 		}
 	})
 
+	// Close still releases the server's handle after the transfer's
+	// context is cancelled; otherwise the association runs out of its
+	// eight file slots.
+	t.Run("Close after cancel", func(t *testing.T) {
+		for i := 0; i < 12; i++ {
+			tctx, tcancel := context.WithCancel(ctx)
+			rc, err := c.OpenFile(tctx, "record.dat")
+			if err != nil {
+				tcancel()
+				t.Fatalf("open %d: %v", i, err)
+			}
+			tcancel()
+			if err := rc.Close(); err != nil {
+				t.Fatalf("close %d: %v", i, err)
+			}
+		}
+	})
+
 	t.Run("ReadFile missing", func(t *testing.T) {
 		if _, err := c.ReadFile(ctx, "nope.dat"); err == nil {
 			t.Fatal("expected error reading missing file")

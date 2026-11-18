@@ -166,9 +166,8 @@ func parseDirEntry(content []byte) (FileEntry, error) {
 	if err != nil {
 		return e, err
 	}
-	nd := asn1.NewDecoder(nameSeq)
-	if name, err := nd.Expect(asn1.TagGraphicString); err == nil {
-		e.Name = string(name)
+	if e.Name, err = ParseFileName(nameSeq); err != nil {
+		return e, err
 	}
 	// fileAttributes [1] { sizeOfFile [0] Unsigned32, lastModified [1] GraphicString }
 	if attrs, ok, _ := dec.Optional(asn1.ContextConstructed(1)); ok {
