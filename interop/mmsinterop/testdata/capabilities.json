@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "adapterVersion": "0.4.0",
+  "adapterVersion": "1.8.0",
   "fixtureRevision": "iec61850-v3",
   "mmsFixtureRevision": "mms-v2",
   "commands": {
@@ -37,7 +37,17 @@
     "dscsystems-sv-publisher": true,
     "dscsystems-sv-subscriber": true,
     "iec61850-rust-sv-publisher": true,
-    "iec61850-rust-sv-subscriber": true
+    "iec61850-rust-sv-subscriber": true,
+    "cbsigma-mms-server": false,
+    "cbsigma-mms-client": false,
+    "cbsigma-ied-server": true,
+    "cbsigma-ied-client": true,
+    "cbsigma-ied-controller": true,
+    "cbsigma-ied-reporter": true,
+    "cbsigma-goose-publisher": true,
+    "cbsigma-goose-subscriber": true,
+    "cbsigma-sv-publisher": false,
+    "cbsigma-sv-subscriber": false
   },
   "knownLimitations": [
     {
@@ -90,7 +100,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "go-client → dscsystems-server",
       "capability": "Alternate access indexRange (read and write)",
       "reason": "mms.ParseAlternateAccess refuses a selection of more than one element (ErrAlternateAccessUnsupported); the adapter answers DataAccessError object-access-unsupported. Single elements and components work",
@@ -98,7 +108,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "dscsystems-client → go-server",
       "capability": "Alternate access read/write (array element, index range, component)",
       "reason": "mms.Conn Read and Write take whole variables only; the client emits ok:false error unsupported for these steps",
@@ -106,7 +116,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "dscsystems-client → go-server",
       "capability": "Write to a named variable list",
       "reason": "mms.Conn Write takes a list of variables, not a variableListName; the step is unsupported and the reads that check its effect (including the InformationReport values) see the unwritten values",
@@ -114,7 +124,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "dscsystems-client → go-server",
       "capability": "Association-specific named variable lists",
       "reason": "the client has no aa-specific ObjectName or name-list scope; define, attributes, read, write, delete and get-name-list in aa scope are unsupported",
@@ -122,7 +132,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "dscsystems-client → go-server",
       "capability": "FileOpen lastModified",
       "reason": "FileOpenAt drops the lastModified attribute of the response; the client reports 0",
@@ -130,15 +140,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
-      "direction": "iec61850bean-client → dscsystems-ied-server",
-      "capability": "GetVariableAccessAttributes type of Enum (read LLN0.Mod.ctlModel[CF])",
-      "reason": "the server builds the type description from the value, so an Enum (INT8) is described as Integer(32) and iec61850bean cannot map the node; libiec61850 clients are not affected",
-      "reproducedBy": ""
-    },
-    {
-      "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "go-client → dscsystems-ied-server",
       "capability": "Write of FC ST (and the dchg report it would trigger)",
       "reason": "server.WithWritableFCs ignores ST/MX/OR/EX/SG by design (status is read-only in IEC 61850-7-2), so the write is always object-access-denied; the libiec61850 server denies it as well today",
@@ -147,9 +149,9 @@
     {
       "stack": "iec61850-rust",
       "version": "v0.2.0-0-gd4e8952",
-      "direction": "libiec61850-client → iec61850-rust-ied-server",
+      "direction": "* → iec61850-rust-ied-server (all reporters but dscsystems', which reserves first)",
       "capability": "SetURCBValues RptEna=true without prior Resv (implicit URCB reservation)",
-      "reason": "the upstream reporting service follows Edition 2.1 strictly: RptEna on an unreserved URCB is refused with object-access-denied, so enable-only clients (libiec61850 style) get access-denied",
+      "reason": "the upstream reporting service follows Edition 2.1 strictly: RptEna on an unreserved URCB is refused with object-access-denied, so enable-only clients (libiec61850 style) get access-denied. Waiver iec61850-rust-urcb-implicit-reservation of the GI report checks (scripts/lib.sh known_report_gi)",
       "reproducedBy": ""
     },
     {
@@ -194,7 +196,7 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "go-client → dscsystems-ied-server",
       "capability": "MSVCB OptFlds width",
       "reason": "the MS OptFlds attribute of MSVCB02 reads as a 10-bit bit-string; the libiec61850 IED server returns 5 bits (refresh-time, reserved, sample-rate, data-set, security)",
@@ -234,11 +236,115 @@
     },
     {
       "stack": "dscsystems",
-      "version": "v0.6.5-1-g6bf3f37",
+      "version": "v0.6.6",
       "direction": "* → dscsystems-sv-subscriber",
       "capability": "smpRate 0 / empty datSet",
       "reason": "sv.Parse returns smpRate 0 and datSet \"\" for absent fields, so a present smpRate of 0 or an empty datSet is reported as null",
       "reproducedBy": ""
+    },
+    {
+      "stack": "dscsystems",
+      "version": "v0.6.6",
+      "direction": "dscsystems-client → go-server",
+      "capability": "--local-tsel / --remote-tsel of dscsystems-ied-client",
+      "reason": "client.Dial has no option for the COTP selectors; the client always sends T-selector 0001/0001, so the flags answer unsupported (exit 4)",
+      "reproducedBy": "TestPeerClientTSelectors"
+    },
+    {
+      "stack": "cbsigma",
+      "version": "v0.1.0 (iec61850-sim)",
+      "direction": "* → cbsigma-ied-server",
+      "capability": "Write of FC ST or MX (and the dchg report the reporter triggers with it)",
+      "reason": "iec61850-sim refuses writes of status and measured values (object-access-denied), as IEC 61850-7-2 makes them read-only; the reporter's data change cannot be made by a client, so no report follows. Reports from the simulator's own value changes are tested in adapters/cbsigma (TestEndToEnd)",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "cbsigma",
+      "version": "v0.1.0 (iec61850-sim)",
+      "direction": "iec61850bean-client → cbsigma-ied-server",
+      "capability": "GetVariableAccessAttributes type of Enum (read LLN0.Mod.ctlModel[CF])",
+      "reason": "the simulator describes every integer attribute as Integer(32) (mms.TypeOf), Enum (ENUMERATED, IEC 61850-8-1: an 8-bit Integer) included, so iec61850bean cannot map Mod.ctlModel, Mod.stVal or Beh.stVal; libiec61850, dscsystems and go-iec61850 clients are not affected",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850bean",
+      "version": "1.9.0",
+      "direction": "cbsigma-client → iec61850bean-ied-server",
+      "capability": "GetDataSetValues (read of LLN0$dsInterop)",
+      "reason": "the server reads a named variable list only when the Read request has specificationWithResult TRUE (ServerAssociation.handleGetDataValuesRequest); ISO 9506-2 makes it DEFAULT FALSE, which cB-Sigma's client leaves out, and the read is answered FAILED_DUE_TO_COMMUNICATIONS_CONSTRAINT",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "cbsigma-client → iec61850-rust-ied-server, iec61850-rust-client → cbsigma-ied-server",
+      "capability": "MMS Initiate with an 18-bit parameterCBB",
+      "reason": "iec61850-mms takes proposedParameterCBB and negotiatedParameterCBB only as 3 octets (11 bits, initiate.rs); cB-Sigma sends the 18 bits of ISO 9506-2:2003 ParameterSupportOptions (4 octets), so the server rejects the association (AARE rejected-permanent) and the client fails it (\"invalid parametercbb bit string length (expected 3, got 4)\")",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "* → iec61850-rust-ied-server",
+      "capability": "DatSet of a report control block",
+      "reason": "the DatSet of urcb0101 and brcb0101 reads \"LLN0$dsInterop\", without the logical device; IEC 61850-8-1 makes DatSet the full ObjectReference (\"InteropIEDInteropLD/LLN0$dsInterop\", as the other servers send). A client that resolves the data set from DatSet has to assume the RCB's own logical device. Found by dscsystems/go-iec61850's interop suite (v0.6.6, interop/mmsinterop) and confirmed with go-iec61850's client",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850-rust",
+      "version": "v0.2.0-0-gd4e8952",
+      "direction": "* → iec61850-rust-ied-server",
+      "capability": "GetBRCBValues (Read of the whole buffered report control block)",
+      "reason": "a Read of LLN0$BR$brcb0101 as one structure is answered object-access-unsupported by design (iec61850-server service/mod.rs: \"a buffered report control block is read one attribute at a time\"); IEC 61850-8-1 maps GetBRCBValues to that Read, and the server serves it for the URCB. Single attributes (RptID, DatSet, RptEna) read fine",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "iec61850bean",
+      "version": "1.9.0",
+      "direction": "cbsigma-client → iec61850bean-ied-server",
+      "capability": "Report data references (OptFlds data-reference)",
+      "reason": "with the data-reference bit of OptFlds set (cB-Sigma's EnableReport sets it), the server's reports announce it but carry no data references: the inclusion bitstring is followed by the values, so a client that parses the IEC 61850-8-1 report format refuses the report",
+      "reproducedBy": ""
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850-goose-publisher / libiec61850-sv-publisher → libiec61850-goose-subscriber / libiec61850-sv-subscriber (--transport udp)",
+      "capability": "R-GOOSE and R-SV between two libiec61850 RSessions",
+      "reason": "RSession writes each APDU length two octets too long (r_session.c encodePacket, payloadSize + 2) and its decoder refuses an APDU that runs past the payload: libiec61850 refuses every SPDU of its own publisher as malformed",
+      "reproducedBy": "scripts/interop.sh (udp_known), scripts/goose-crosscheck.sh and scripts/sv-crosscheck.sh with TRANSPORT=udp"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850-goose-publisher / libiec61850-sv-publisher (--transport udp)",
+      "capability": "Session protocol version 1 sent (--session-version 1)",
+      "reason": "struct sRSession has a protocolVersion field, set to 2 by RSession_create, and no function sets it; the publishers answer unsupported (exit 4). Version 1 is received",
+      "reproducedBy": "go-iec61850 interop TestRGOOSE_GoSubscriber, TestRSV_GoSubscriber (v1-*)"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850 publishers and subscribers (--transport udp)",
+      "capability": "HMAC-SHA256-80",
+      "reason": "the encoder writes no signature for HMAC-SHA256-80 (unsupported signature type) and the decoder refuses every SPDU of that algorithm",
+      "reproducedBy": "go-iec61850 interop TestRGOOSE_*, TestRSV_* (*-hmac-sha256-80)"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "libiec61850-goose-publisher / libiec61850-sv-publisher (--transport udp)",
+      "capability": "HMAC-SHA256-256 sent",
+      "reason": "the encoder writes a signature length octet of 16 before the 32-octet MAC; a receiver that checks it refuses the SPDU. Received HMAC-SHA256-256 verifies",
+      "reproducedBy": "go-iec61850 interop TestRGOOSE_GoSubscriber, TestRSV_GoSubscriber (v2-hmac-sha256-256)"
+    },
+    {
+      "stack": "libiec61850",
+      "version": "1.6.2.1-89-g6e265c54",
+      "direction": "→ libiec61850-goose-subscriber / libiec61850-sv-subscriber (--transport udp)",
+      "capability": "Replay protection, unsecured SPDUs",
+      "reason": "RSession keeps no replay window: a replayed SPDU is accepted again (no reject event of reason replay). A version 2 SPDU without a key is always refused, so --allow-unsecured has no effect there",
+      "reproducedBy": "go-iec61850 interop TestRGOOSE_GoPublisher"
     }
   ],
   "upstreams": {
@@ -246,17 +352,24 @@
       "version": "1.6.2.1-89-g6e265c54"
     },
     "iec61850bean": {
-      "version": "1.x"
+      "version": "1.9.0"
     },
     "dscsystems": {
-      "version": "v0.6.5-1-g6bf3f37",
-      "commit": "6bf3f370c6fb95d3835e34d9d1539f313e00b157",
-      "license": "GPL-3.0"
+      "version": "v0.6.6",
+      "commit": "4833767caf3abbf1f205c4c49cd9432744beaf83",
+      "license": "GPL-3.0-only"
     },
     "iec61850-rust": {
       "version": "v0.2.0-0-gd4e8952",
       "commit": "d4e895217f367ed4caebf21611d2c16ee46035c0",
       "license": "MIT OR Apache-2.0"
+    },
+    "cbsigma": {
+      "version": "v0.1.0",
+      "commit": "f121ba3464665ea06a0e7f7bc81316beb7312dd2",
+      "simVersion": "v0.1.0",
+      "simCommit": "92530d85723c40afd8514ec45e3b89184a5eae1e",
+      "license": "Apache-2.0"
     }
   },
   "gooseFixtureRevision": "goose-v1",
@@ -266,6 +379,15 @@
     "libiec61850": true,
     "dscsystems": true,
     "iec61850bean": false,
-    "iec61850-rust": false
+    "iec61850-rust": false,
+    "cbsigma": false
+  },
+  "udpTransport": {
+    "description": "Whether the stack's GOOSE and SV commands take --transport udp (contract 1.4, docs/routable.md): R-GOOSE and R-SV, the IEC TR 61850-90-5 session protocol over UDP with HMAC-SHA256-80/128/256.",
+    "libiec61850": true,
+    "dscsystems": true,
+    "iec61850bean": false,
+    "iec61850-rust": false,
+    "cbsigma": false
   }
 }
