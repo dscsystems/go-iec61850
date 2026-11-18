@@ -555,6 +555,11 @@ simulation bit of the APDU header) is dropped before sequence tracking and
 supervision, so it cannot keep a silent live stream alive. Set
 `Filter.Simulated` to subscribe to the simulated stream instead.
 
+As with SV, one `Subscriber` reads its interface with a single goroutine
+and hands each message to every subscription it matches; each subscription
+tracks sequence and supervises liveness on its own. Register all
+subscriptions for an interface on the same `Subscriber`.
+
 Use `ethernet.Pipe()` for an in-memory interface in tests.
 
 ---

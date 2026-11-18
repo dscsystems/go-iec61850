@@ -70,8 +70,13 @@ func TestSubscriberStreamLimit(t *testing.T) {
 	a, b := ethernet.Pipe()
 	defer a.Close()
 	var got atomic.Int32
-	sub := &subscription{cb: func(*Message) { got.Add(1) }, states: map[string]*seqState{}}
-	go sub.run(b)
+	subscriber := NewSubscriber(b)
+	stop, err := subscriber.Subscribe(Filter{}, func(*Message) { got.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	sub := subscriber.subs[0]
 	m := sampleMessage()
 	total := MaxStreams + 50
 	for i := range total {
