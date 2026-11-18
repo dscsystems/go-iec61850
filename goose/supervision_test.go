@@ -199,3 +199,48 @@ func TestRefreshKeepsSequence(t *testing.T) {
 		t.Fatalf("only %d messages received", n)
 	}
 }
+
+// Subscriptions on one Subscriber each see every message they match, so
+// two of them on the same stream both track an unbroken sequence instead
+// of seeing the gaps left by frames the other consumed.
+func TestSubscriberFansOut(t *testing.T) {
+	pubIf, subIf := ethernet.Pipe()
+	defer pubIf.Close()
+	defer subIf.Close()
+
+	sub := NewSubscriber(subIf)
+	var counts [2]atomic.Int32
+	var gaps atomic.Int32
+	for i := range counts {
+		stop, err := sub.Subscribe(Filter{AppID: 0x1000}, func(m *Message) {
+			if m.Anomalies.SqNumGap || m.Anomalies.StNumRegressed {
+				gaps.Add(1)
+			}
+			counts[i].Add(1)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer stop()
+	}
+
+	m := sampleMessage()
+	m.AppID = 0x1000
+	const n = 40
+	for i := range n {
+		m.StNum, m.SqNum = 1, uint32(i)
+		if err := pubIf.WriteFrame(&ethernet.Frame{EtherType: ethernet.EtherTypeGOOSE, Payload: m.Marshal()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for (counts[0].Load() < n || counts[1].Load() < n) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if counts[0].Load() != n || counts[1].Load() != n {
+		t.Fatalf("delivered %d and %d of %d", counts[0].Load(), counts[1].Load(), n)
+	}
+	if g := gaps.Load(); g != 0 {
+		t.Errorf("%d sequence anomalies on an unbroken stream", g)
+	}
+}
