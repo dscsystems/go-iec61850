@@ -314,6 +314,7 @@ a writable one.
 | savPdu and ASDU encoding and decoding | Y | Y | multi-ASDU |
 | smpMod, smpRate, refrTm, datSet, gmIdentity (Amd 1) | Y | Y | sent only as `SmvOpts` asks |
 | refrTm time quality | Y | Y | |
+| Simulation bit (Reserved 1) | Y | Y | `LEConfig.Simulation`; a subscriber accepts live frames only unless `Filter.Simulated` |
 | 9-2LE PhsMeas1 dataset and quality word | Y | Y | |
 | Other dataset layouts | P | N | raw sample bytes |
 | SmvOpts timestamp | N | N | |

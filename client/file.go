@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/dscsystems/go-iec61850/mms"
 )
@@ -66,6 +67,14 @@ func (r *fileReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
+// fileCloseTimeout bounds the FileClose sent by fileReader.Close.
+const fileCloseTimeout = 10 * time.Second
+
+// Close releases the server's file-read state machine. It does not use the
+// transfer's context: a transfer cancelled midway still has to close the
+// file, or the server holds the handle until the association ends.
 func (r *fileReader) Close() error {
-	return r.mc.FileClose(r.ctx, r.frsm)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), fileCloseTimeout)
+	defer cancel()
+	return r.mc.FileClose(ctx, r.frsm)
 }
