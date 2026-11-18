@@ -20,8 +20,9 @@ on it inherits these capabilities and adds its own model, limits and
 policies, and has to state its own PICS, MICS, PIXIT and TICS; the
 "Server" column is what such a device can offer, and the options that
 govern it are named. Nothing here has been assessed by a certified test
-laboratory. Each "Y" is backed by the tests of this repository, and the
-interoperability runs of `interop/` against libiec61850 1.6.
+laboratory. Each "Y" is backed by the tests of this repository or by the
+interoperability runs of `interop/` against libiec61850 1.6, iec61850bean,
+iec61850-rust and iec61850_open_server; section 10 says which.
 `docs/edition-2.1.md` is the detailed conformance record, and says why
 each gap is one.
 
@@ -305,7 +306,7 @@ a writable one.
 | TLV (tagged) allData | N | N | |
 | Publishing driven by the server's GoCB (GoEna) | — | N | the application runs the publisher; `NewPublisherFromModel` configures it from the model |
 | Layer-2 security (IEC 62351-6) | N | N | |
-| Transport | Linux AF_PACKET; any `ethernet.Interface`; R-GOOSE over UDP (8) |
+| Transport | Y | Y | Linux AF_PACKET; any `ethernet.Interface`; R-GOOSE over UDP (8) |
 
 ## 6. Sampled values (IEC 61850-9-2)
 
@@ -315,6 +316,7 @@ a writable one.
 | smpMod, smpRate, refrTm, datSet, gmIdentity (Amd 1) | Y | Y | sent only as `SmvOpts` asks |
 | refrTm time quality | Y | Y | |
 | Simulation bit (Reserved 1) | Y | Y | `LEConfig.Simulation`; a subscriber accepts live frames only unless `Filter.Simulated` |
+| Several subscriptions on one interface | Y | — | one `Subscriber` reads the interface and delivers each frame to every matching subscription; the same holds for GOOSE |
 | 9-2LE PhsMeas1 dataset and quality word | Y | Y | |
 | Other dataset layouts | P | N | raw sample bytes |
 | SmvOpts timestamp | N | N | |
@@ -339,7 +341,8 @@ a writable one.
 
 | Feature | Client / subscriber | Server / publisher | Notes |
 |---|---|---|---|
-| MMS over TLS, IEC 62351-3 profile | Y | Y | package `iec62351`; TLS 1.2 (ECDHE AES-GCM) and 1.3; mutual certificates; CRLs; key strength; pinning |
+| MMS over TLS, IEC 62351-3 profile | Y | Y | package `iec62351`; TLS 1.2 (ECDHE AES-GCM) and 1.3; key exchange groups P-256, P-384, P-521 (`iec62351.Curves`); mutual certificates; CRLs; key strength; pinning |
+| ML-KEM hybrid key exchange (TLS 1.3) | P | P | not offered by the profile, which overrides Go's default groups; an application can opt in on the returned `tls.Config` (X25519MLKEM768, and on Go 1.26 or later with `tlssecpmlkem=1` SecP256r1MLKEM768 and SecP384r1MLKEM1024); see [tls-hybrid-compatibility.md](tls-hybrid-compatibility.md) |
 | TLS session key renewal | N | N | |
 | IEC 62351-3 Table 1 DHE_RSA suites (0x009E; 0x009F after Part 3 TISSUE 79) | N | N | not implemented by Go `crypto/tls` |
 | Trusted CA indication, `trusted_ca_keys` (Part 3 7.5.3, TISSUE 58) | N | N | Go `crypto/tls` neither sends the extension nor answers it in the ServerHello |
@@ -411,7 +414,7 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 | Log deletion by clients | refused by default; `server.WithDeletableLogs` |
 | Status service answer | state-changes-allowed, operational; `Server.SetStatus` |
 | Dynamic data sets | persistent (domain-specific) names, kept in memory; deletable by clients; configured ones are not |
-| Platforms | pure Go, no cgo; raw Ethernet on Linux (AF_PACKET) |
+| Platforms | pure Go, no cgo, by default; the optional OpenSSL TLS engine `iec62351/ossltls` uses cgo (build tag `openssl`, see 8 and 8.1); raw Ethernet on Linux (AF_PACKET) |
 | Service tracking | an LTRK in the addressed object's device, else the server's first, records: Select, SelectWithValue, Operate, Cancel and CommandTermination in the tracking object of the control's CDC (SpcTrk … BacTrk); SetBRCBValues, SetURCBValues, SetLCBValues, SetGoCBValues, SetMSVCBValues and SetUSVCBValues, one per attribute written, refused or not; SelectActiveSG, SelectEditSG and ConfirmEditSGValues. The block's state is copied after the service (a report block's written attribute with the value asked for), references in ACSI notation, and data access errors mapped to service errors as libiec61850 maps them. objRef raises data-update, so a data set holding a tracking object reports every service |
 | Setting group control block | served for a device with SG/SE settings, or one whose SCL declares a SettingControl |
 | Sampled-value control blocks | SvEna and, on a USVCB, Resv are writable; a reserved USVCB refuses other associations with temporarily-unavailable and is released and disabled when its association ends; the application publishes on `Server.OnSVControl` |
@@ -419,7 +422,14 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
 
 ## 10. Verification
 
-- `go test -race ./...` covers every "Y" above.
+- `go test -race ./...` covers the "Y" rows, except those named below.
+- The OpenSSL engine (`iec62351/ossltls`, the DHE_RSA and static DH_RSA
+  suites of 8 and 8.1) needs `go test -tags openssl` (and
+  `-tags openssl,openssl_v1` against OpenSSL 1.0.2); CI runs both.
+- The Linux raw-Ethernet transport (AF_PACKET) needs raw-socket
+  privilege, so the default run tests GOOSE and SV over the in-memory
+  `ethernet.Pipe` instead. Only the open_server run below sends and
+  receives real frames, on the loopback interface of a network namespace.
 - `interop/run.sh` runs the client against libiec61850's servers and
   libiec61850's clients against the server (MMS, control, logs, TLS), and
   R-GOOSE and R-SV both ways in every security mode both implement, and
@@ -432,4 +442,15 @@ IEC 62351-4:2018+AMD1:2020 conformance tables (clause 17), as implemented. Desig
   running the same services on the same ICD.
   GDOI registrations are decrypted and dissected by Wireshark. The
   coverage table is `interop/README.md`.
+- `interop/run-mms-interop.sh` runs the model directory, data and data
+  set reads, writes, reporting, control and the MSVCB in both directions
+  against the otfabric/mms-interop adapter images of libiec61850,
+  iec61850bean and iec61850-rust, on one shared fixture;
+  `interop/mmsinterop/README.md` lists the known gaps of each stack.
+- `interop/run-rust.sh` runs MMS both ways and the GOOSE and SV codecs
+  against iec61850-rust. Two checks fail on the reference side
+  ([rust-interoperability.md](rust-interoperability.md)).
+- `interop/run-open-server.sh` runs MMS, control, GOOSE and SV against
+  iec61850_open_server. Two SV checks fail on the reference side
+  ([open-server-interoperability.md](open-server-interoperability.md)).
 - `testdata/ed21_diverse.cid` exercises the Edition 2.1 SCL constructs.
