@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 
 // Unlike the Go server's implicit reservation, a peer can require Resv=true
 // before accepting any configuration or RptEna write (as the Rust server does).
-type explicitReservationPeer struct{ reserved bool }
+type explicitReservationPeer struct{ reserved atomic.Bool }
 
 func (h *explicitReservationPeer) Handle(req *mms.Request) (*asn1.Element, error) {
 	if req.Service == 4 {
@@ -60,8 +61,8 @@ func (h *explicitReservationPeer) Handle(req *mms.Request) (*asn1.Element, error
 		return nil, err
 	}
 	if strings.HasSuffix(string(item), "$Resv") {
-		h.reserved = value.Bool()
-	} else if !h.reserved {
+		h.reserved.Store(value.Bool())
+	} else if !h.reserved.Load() {
 		return asn1.Cons(asn1.ContextConstructed(5), asn1.UintElem(asn1.ContextPrimitive(0), uint64(mms.AccessObjectAccessDenied))), nil
 	}
 	return asn1.Cons(asn1.ContextConstructed(5), asn1.Prim(asn1.ContextPrimitive(1), nil)), nil
@@ -73,6 +74,7 @@ func TestEnableReportingReservesBeforeConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	peer := &explicitReservationPeer{}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -86,7 +88,7 @@ func TestEnableReportingReservesBeforeConfiguration(t *testing.T) {
 			return
 		}
 		defer sc.Close()
-		_ = sc.Serve(&explicitReservationPeer{})
+		_ = sc.Serve(peer)
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -104,8 +106,21 @@ func TestEnableReportingReservesBeforeConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("peer requires explicit reservation: %v", err)
 	}
+	// A Disable whose context has already expired cannot reach the
+	// server; a later one has to send the writes it could not.
+	expired, cancelExpired := context.WithCancel(ctx)
+	cancelExpired()
+	if err := sub.Disable(expired); err == nil {
+		t.Fatal("Disable with a cancelled context reported success")
+	}
+	if !peer.reserved.Load() {
+		t.Fatal("reservation released by a cancelled Disable")
+	}
 	if err := sub.Disable(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if peer.reserved.Load() {
+		t.Error("retried Disable left the reservation in place")
 	}
 	c.Close()
 	select {

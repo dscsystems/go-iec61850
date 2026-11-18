@@ -154,8 +154,8 @@ func (p *Publisher) Publish(values []*mms.Value) error {
 }
 
 // Refresh repeats the current state without announcing a change: stNum
-// stays where it is, sqNum resets, and the retransmission schedule
-// restarts. Use it to re-advertise a value that has not changed, for
+// stays where it is, sqNum carries on from the last frame sent, and the
+// retransmission schedule restarts. Use it to re-advertise a value that has not changed, for
 // instance after a subscriber has evidently lost the stream.
 //
 // The values must not be mutated until the next Publish, Refresh or Close.
@@ -166,11 +166,10 @@ func (p *Publisher) Refresh(values []*mms.Value) error {
 	if p.closed {
 		return ErrClosed
 	}
-	stNum := p.stNum
-	if stNum == 0 {
-		stNum = 1
+	if p.stNum == 0 {
+		return p.publishLocked(values, 1, true)
 	}
-	return p.publishLocked(values, stNum, false)
+	return p.publishLocked(values, p.stNum, false)
 }
 
 // publishLocked sends the message for stNum and starts a new
@@ -179,10 +178,15 @@ func (p *Publisher) Refresh(values []*mms.Value) error {
 // they were, and its retransmission carries on.
 func (p *Publisher) publishLocked(values []*mms.Value, stNum uint32, stateChange bool) error {
 	t := time.Now()
-	if !stateChange && !p.msg.T.IsZero() {
+	var sqNum uint32
+	if !stateChange {
 		// A refresh keeps the timestamp of the change it repeats, so a
-		// receiver can tell how old the state is.
+		// receiver can tell how old the state is, and continues its
+		// sequence: sqNum 0 belongs to the first frame of a state.
 		t = p.msg.T
+		if sqNum = p.sqNum + 1; sqNum == 0 {
+			sqNum = 1
+		}
 	}
 	msg := Message{
 		GoCbRef:           p.cfg.GoCbRef,
@@ -191,7 +195,7 @@ func (p *Publisher) publishLocked(values []*mms.Value, stNum uint32, stateChange
 		TimeAllowedToLive: p.tatl(0),
 		T:                 t,
 		StNum:             stNum,
-		SqNum:             0,
+		SqNum:             sqNum,
 		ConfRev:           p.cfg.ConfRev,
 		NumDatSetEntries:  uint32(len(values)),
 		Values:            values,
@@ -216,7 +220,7 @@ func (p *Publisher) publishLocked(values []*mms.Value, stNum uint32, stateChange
 		close(p.stop)
 		p.stop = nil
 	}
-	p.msg, p.stNum, p.sqNum = msg, stNum, 0
+	p.msg, p.stNum, p.sqNum = msg, stNum, sqNum
 	// The retransmissions start even when the first frame could not be
 	// sent: they carry the same state, which is how GOOSE recovers a lost
 	// frame, so the change still reaches subscribers. The error is
