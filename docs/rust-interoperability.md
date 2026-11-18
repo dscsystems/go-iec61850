@@ -5,8 +5,9 @@ Verified on 2026-09-30 against
 commit `d4e895217f367ed4caebf21611d2c16ee46035c0` (workspace version 0.2.0).
 Go baseline: `ad9678d11864dc210c744feb85b1c208ed29276e`, plus the fixes
 and tests accompanying this report. Toolchains: Go 1.27.1 and Rust 1.98.1,
-Linux amd64. (The module's minimum is Go 1.26, `go.mod`, which CI uses;
-this run was on a newer release.)
+Linux amd64. (The module's minimum was then Go 1.26; it is now Go 1.25, the
+`go` line of `go.mod`, which CI's oldest-go job uses. This run was on a
+newer release.)
 
 ## Result
 

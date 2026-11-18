@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"time"
 )
 
@@ -169,11 +170,14 @@ func base(o Options) (*tls.Config, error) {
 		suites, max = NativeModeCipherSuites, tls.VersionTLS12
 	}
 	return &tls.Config{
-		Certificates:     o.Certificates,
-		MinVersion:       min,
-		MaxVersion:       max,
-		CipherSuites:     suites,
-		CurvePreferences: Curves,
+		Certificates: o.Certificates,
+		MinVersion:   min,
+		MaxVersion:   max,
+		// Copies, so a config never shares the package variables' backing
+		// arrays: changing Curves or CipherSuites later affects only the
+		// configs built after the change.
+		CipherSuites:     slices.Clone(suites),
+		CurvePreferences: slices.Clone(Curves),
 		// The chain is verified by VerifyConnection, which checks what
 		// the standard library's verification does not (revocation, key
 		// strength, pinning) and names the server the way IED
