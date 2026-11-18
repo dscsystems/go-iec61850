@@ -13,7 +13,7 @@ cd "$root"
 
 # The pinned images are the defaults in harness_test.go; pull them before
 # the tests so the pull does not run against their timeouts.
-images=$(grep -oE 'ghcr\.io/otfabric/mms-interop-[a-z0-9-]+@sha256:[0-9a-f]+' interop/mmsinterop/harness_test.go)
+images=$(grep -oE 'ghcr\.io/otfabric/iec61850-interop-[a-z0-9-]+@sha256:[0-9a-f]+' interop/mmsinterop/harness_test.go)
 [ -n "${LIBIEC61850_IMAGE:-}" ] && images=$(echo "$images" | grep -v libiec61850; echo "$LIBIEC61850_IMAGE")
 [ -n "${IEC61850BEAN_IMAGE:-}" ] && images=$(echo "$images" | grep -v iec61850bean; echo "$IEC61850BEAN_IMAGE")
 [ -n "${IEC61850RUST_IMAGE:-}" ] && images=$(echo "$images" | grep -v iec61850-rust; echo "$IEC61850RUST_IMAGE")

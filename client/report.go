@@ -131,8 +131,11 @@ type ReportSubscription struct {
 	c      *Client
 	rcb    *RCB
 	remove func() // unregisters this subscription's report handler
-	once   sync.Once
-	closed bool
+
+	mu       sync.Mutex // serialises Disable
+	removed  bool       // the handler is unregistered
+	disabled bool       // RptEna false was written
+	released bool       // Resv false was written, or there is nothing to release
 }
 
 // EnableReporting configures and enables the report control block, then
@@ -221,21 +224,32 @@ func (c *Client) TriggerGI(ctx context.Context, rcb *RCB) error {
 // Disable turns the report control block off, releases the reservation
 // EnableReporting took on an unbuffered one, and unregisters the
 // subscription's callback, which stops receiving reports even if the
-// writes to the server fail.
+// writes to the server fail. A write that fails is retried by the next
+// Disable; once both have succeeded, Disable does nothing.
 func (s *ReportSubscription) Disable(ctx context.Context) error {
-	var err error
-	s.once.Do(func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.removed {
 		if s.remove != nil {
 			s.remove()
 		}
-		err = s.c.writeRCB(ctx, s.rcb, "RptEna", mms.NewBool(false))
-		if !s.rcb.Buffered {
-			if rerr := s.c.writeRCB(ctx, s.rcb, "Resv", mms.NewBool(false)); err == nil {
-				err = rerr
-			}
+		s.removed = true
+	}
+	var err error
+	if !s.disabled {
+		if err = s.c.writeRCB(ctx, s.rcb, "RptEna", mms.NewBool(false)); err == nil {
+			s.disabled = true
 		}
-		s.closed = true
-	})
+	}
+	if !s.released {
+		if s.rcb.Buffered {
+			s.released = true
+		} else if rerr := s.c.writeRCB(ctx, s.rcb, "Resv", mms.NewBool(false)); rerr == nil {
+			s.released = true
+		} else if err == nil {
+			err = rerr
+		}
+	}
 	return err
 }
 

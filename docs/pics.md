@@ -297,7 +297,7 @@ a writable one.
 | timeAllowedToLive supervision | Y | Y | `SubscribeSupervised` |
 | stNum/sqNum rules, rollover to 1 | Y | Y | |
 | test, ndsCom | Y | Y | |
-| Simulation bit (Reserved 1) | N | N | not in `goose.Message`; over R-GOOSE the session payload carries it (`rsession.Payload.Simulation`) |
+| Simulation bit (Reserved 1) | Y | Y | `PublisherConfig.Simulation`, `Message.Simulation`; a subscriber accepts live messages only unless `Filter.Simulated` |
 | Time quality of `t` | Y | Y | |
 | VLAN tag | Y | Y | |
 | Frame too large for one Ethernet frame | — | Y | refused with `ErrFrameTooLarge` |

@@ -77,3 +77,125 @@ func TestSubscriberFlagsEntriesMismatch(t *testing.T) {
 		t.Fatal("no message")
 	}
 }
+
+// Simulated traffic for a live goCbRef stays out of the live
+// subscription: it is not delivered, and it does not keep the silent live
+// stream from expiring.
+func TestSimulatedTrafficDoesNotMaskLiveExpiry(t *testing.T) {
+	pubIf, subIf := ethernet.Pipe()
+	defer pubIf.Close()
+	defer subIf.Close()
+
+	const ref = "IED1LD0/LLN0$GO$gcb01"
+	var expired, liveSimulated atomic.Int32
+	sub := NewSubscriber(subIf)
+	stop, err := sub.SubscribeSupervised(Filter{GoCbRef: ref}, func(m *Message) {
+		if m.Simulation {
+			liveSimulated.Add(1)
+		}
+	}, func(string) { expired.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	cfg := PublisherConfig{
+		AppID: 0x1000, GoCbRef: ref, DatSet: "ds", GoID: "g",
+		Retrans: []time.Duration{100 * time.Millisecond},
+	}
+	live, err := NewPublisher(pubIf, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Publish([]*mms.Value{mms.NewBool(true)}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	live.Close()
+
+	cfg.Simulation = true
+	sim, err := NewPublisher(pubIf, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sim.Close()
+	if err := sim.Publish([]*mms.Value{mms.NewBool(false)}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for expired.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if expired.Load() != 1 {
+		t.Fatalf("live stream expired %d times while simulated traffic ran, want 1", expired.Load())
+	}
+	if liveSimulated.Load() != 0 {
+		t.Error("simulated message delivered to a live subscription")
+	}
+
+	// A simulated subscription sees the simulated stream.
+	got := make(chan *Message, 1)
+	stopSim, _ := sub.Subscribe(Filter{GoCbRef: ref, Simulated: true}, func(m *Message) {
+		select {
+		case got <- m:
+		default:
+		}
+	})
+	defer stopSim()
+	select {
+	case m := <-got:
+		if !m.Simulation {
+			t.Error("live message delivered to a simulated subscription")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("simulated subscription received nothing")
+	}
+}
+
+// A Refresh continues the sequence of the state it repeats, so the
+// project's own subscriber sees no sqNum gap across it.
+func TestRefreshKeepsSequence(t *testing.T) {
+	pubIf, subIf := ethernet.Pipe()
+	defer pubIf.Close()
+	defer subIf.Close()
+
+	got := make(chan *Message, 64)
+	stop, _ := NewSubscriber(subIf).Subscribe(Filter{}, func(m *Message) { got <- m })
+	defer stop()
+
+	pub, err := NewPublisher(pubIf, PublisherConfig{
+		AppID: 0x1000, GoCbRef: "IED1LD0/LLN0$GO$gcb01", DatSet: "ds", GoID: "g",
+		Retrans: []time.Duration{20 * time.Millisecond},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pub.Close()
+	values := []*mms.Value{mms.NewBool(true)}
+	if err := pub.Publish(values); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(70 * time.Millisecond)
+	if err := pub.Refresh(values); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(70 * time.Millisecond)
+	pub.Close()
+
+	var prev uint32
+	n := 0
+	for len(got) > 0 {
+		m := <-got
+		if m.Anomalies.SqNumGap {
+			t.Errorf("sqNum gap at stNum %d sqNum %d after sqNum %d", m.StNum, m.SqNum, prev)
+		}
+		if m.StNum != 1 {
+			t.Errorf("stNum = %d, want 1 throughout", m.StNum)
+		}
+		prev = m.SqNum
+		n++
+	}
+	if n < 4 {
+		t.Fatalf("only %d messages received", n)
+	}
+}

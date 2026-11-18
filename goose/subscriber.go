@@ -11,14 +11,25 @@ import (
 )
 
 // Filter selects GOOSE messages for a subscription. Zero fields match
-// everything: AppID 0 accepts any APPID, an empty GoCbRef accepts any
-// control block.
+// every live message: AppID 0 accepts any APPID, an empty GoCbRef accepts
+// any control block.
 type Filter struct {
 	AppID   uint16
 	GoCbRef string
+	// Simulated selects messages by the simulation bit of the APDU header.
+	// False, the default, accepts only live messages and drops simulated
+	// ones before they reach sequence tracking or supervision, so a
+	// simulated publisher reusing a live goCbRef can neither disturb the
+	// live stream's sequence nor keep its time-allowed-to-live from
+	// expiring. True accepts only simulated messages; a consumer that wants
+	// both subscribes twice, and each subscription supervises its own.
+	Simulated bool
 }
 
 func (f Filter) match(m *Message) bool {
+	if m.Simulation != f.Simulated {
+		return false
+	}
 	if f.AppID != 0 && m.AppID != f.AppID {
 		return false
 	}

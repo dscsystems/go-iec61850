@@ -1,7 +1,7 @@
 # mms-interop suite
 
 IEC 61850 interoperability tests against the adapter images of
-[otfabric/mms-interop](https://github.com/otfabric/mms-interop) v0.4.0:
+[otfabric/mms-interop](https://github.com/otfabric/mms-interop) v1.8.0:
 [libiec61850](https://github.com/mz-automation/libiec61850),
 [iec61850bean](https://www.beanit.com/iec-61850/) and
 [iec61850-rust](https://github.com/csp0924/iec61850-rust), each in its own
@@ -26,7 +26,7 @@ that they and the test reach each other on the loopback.
 |---|---|
 | `MMS_INTEROP=1` | run the suite |
 | `MMS_INTEROP_STACKS` | comma-separated subset: `libiec61850`, `iec61850bean`, `iec61850-rust` |
-| `LIBIEC61850_IMAGE`, `IEC61850BEAN_IMAGE`, `IEC61850RUST_IMAGE` | replace a pinned image (digests in `harness_test.go`), e.g. `mms-interop-libiec61850:local` from mms-interop's `make build` |
+| `LIBIEC61850_IMAGE`, `IEC61850BEAN_IMAGE`, `IEC61850RUST_IMAGE` | replace a pinned image (digests in `harness_test.go`), e.g. `iec61850-interop-libiec61850:local` from mms-interop's `make build` |
 
 ## Coverage
 
@@ -47,7 +47,7 @@ that they and the test reach each other on the loopback.
 
 ## Fixture
 
-`testdata/` is a copy of mms-interop v0.4.0 `fixtures/iec61850/`
+`testdata/` is a copy of mms-interop v1.8.0 `fixtures/iec61850/`
 (`interop.icd`, `values.json`, revision `iec61850-v3`) and
 `fixtures/capabilities.json`; see `testdata/NOTICE`. Update it together
 with the image digests.

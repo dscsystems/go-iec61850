@@ -550,6 +550,11 @@ stop, _ := sub.SubscribeSupervised(goose.Filter{AppID: 0x1000}, onMessage,
     func(goCbRef string) { markInvalid(goCbRef) })
 ```
 
+Filters accept only live messages by default: a simulated message (the
+simulation bit of the APDU header) is dropped before sequence tracking and
+supervision, so it cannot keep a silent live stream alive. Set
+`Filter.Simulated` to subscribe to the simulated stream instead.
+
 Use `ethernet.Pipe()` for an in-memory interface in tests.
 
 ---

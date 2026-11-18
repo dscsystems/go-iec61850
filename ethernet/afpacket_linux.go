@@ -99,6 +99,13 @@ func (p *afPacket) ReadFrame() (*Frame, error) {
 		}
 		buf := frameBufs.Get().(*[frameBufSize]byte)
 		p.fdMu.RLock()
+		// Close may have run between the check above and the lock; the
+		// descriptor number could then belong to another socket already.
+		if p.closed.Load() {
+			p.fdMu.RUnlock()
+			frameBufs.Put(buf)
+			return nil, net.ErrClosed
+		}
 		n, _, err := unix.Recvfrom(p.fd, buf[:], 0)
 		p.fdMu.RUnlock()
 		switch err {
