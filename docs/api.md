@@ -339,6 +339,25 @@ and the TLS state (`r.TLS.PeerCertificates`), so it can combine the
 IEC 62351-3 certificate with a password or an allow-list. Refusing is an
 ACSE rejection the client can read.
 
+Connection limits and timeouts:
+
+```go
+srv := server.New(m,
+    server.WithMaxConnections(16),               // clients beyond it are dropped before setup
+    server.WithHandshakeTimeout(10*time.Second), // TLS handshake + association setup (default 10 s)
+    server.WithWriteTimeout(30*time.Second),     // a client that stops reading is dropped (default 30 s)
+    server.WithFrameTimeout(30*time.Second),     // a client that stalls mid-frame is dropped (default 30 s)
+    server.WithIdleTimeout(10*time.Minute),      // no traffic either way for this long (default: never)
+)
+```
+
+Over TLS the server completes the handshake itself, within the handshake
+timeout, before it reads the association request. A transient `Accept`
+failure (EMFILE, ENFILE) is logged and retried with backoff instead of
+ending `Serve`. The `mms` package offers the same supervision to its own
+callers through `mms.AcceptOptions.FrameTimeout` and `IdleTimeout`; the
+association then ends with `mms.ErrFrameTimeout` or `mms.ErrIdleTimeout`.
+
 ### Pushing values (process side)
 
 `Update` applies a batch atomically with respect to client reads and drives

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dscsystems/go-iec61850/ethernet"
+	"github.com/dscsystems/go-iec61850/internal/netretry"
 )
 
 // DefaultPort is the UDP port of the session protocol.
@@ -267,6 +268,7 @@ func (s *Session) LocalAddr() net.Addr {
 func (s *Session) read(c *net.UDPConn) {
 	defer s.wg.Done()
 	buf := make([]byte, 65536)
+	var backoff netretry.Backoff
 	for {
 		n, from, err := c.ReadFromUDP(buf)
 		if err != nil {
@@ -278,8 +280,16 @@ func (s *Session) read(c *net.UDPConn) {
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
+			// Keep reading, but paced: an error that persists would
+			// otherwise spin this goroutine at full speed.
+			select {
+			case <-time.After(backoff.Next()):
+			case <-s.done:
+				return
+			}
 			continue
 		}
+		backoff.Reset()
 		d := datagram{b: append([]byte(nil), buf[:n]...), from: from}
 		select {
 		case s.in <- d:

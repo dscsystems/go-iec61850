@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -189,6 +190,18 @@ type AcceptOptions struct {
 	// request behind it, for as long as it keeps the connection open. A
 	// write that times out ends the association.
 	WriteTimeout time.Duration
+
+	// FrameTimeout bounds how long a client may take to send the rest of a
+	// TPKT once it has started one (zero: no limit). A client that stalls
+	// mid-frame is disconnected with ErrFrameTimeout, so it cannot hold
+	// its connection by trickling octets.
+	FrameTimeout time.Duration
+
+	// IdleTimeout disconnects an association with no traffic in either
+	// direction for that long, with ErrIdleTimeout (zero: never). Reports
+	// count as traffic, so a client that only listens to reports stays
+	// connected while they flow.
+	IdleTimeout time.Duration
 }
 
 func (o AcceptOptions) trace(event string, data []byte) {
@@ -209,18 +222,23 @@ func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
 	if opts.HandshakeTimeout > 0 {
 		raw.SetDeadline(time.Now().Add(opts.HandshakeTimeout))
 	}
-	sc, err := acceptConn(raw, opts)
+	// COTP reads and writes through the guard, which supervises framing
+	// and idleness once the association is up; until then the handshake
+	// deadline above governs.
+	guard := newFrameGuard(raw, opts.FrameTimeout, opts.IdleTimeout)
+	sc, err := acceptConn(raw, guard, opts)
 	if err == nil && opts.HandshakeTimeout > 0 {
 		raw.SetDeadline(time.Time{})
 	}
 	if err == nil {
 		sc.writeTimeout = opts.WriteTimeout
+		guard.enable()
 	}
 	return sc, err
 }
 
-func acceptConn(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
-	ct, err := cotp.Accept(raw)
+func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*ServerConn, error) {
+	ct, err := cotp.Accept(tr)
 	if err != nil {
 		return nil, fmt.Errorf("mms: COTP accept: %w", err)
 	}

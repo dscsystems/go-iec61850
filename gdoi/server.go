@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/dscsystems/go-iec61850/internal/netretry"
 )
 
 // Group is the policy and keys a key server hands out for one group: its
@@ -182,14 +184,22 @@ func (s *Server) Serve(c net.PacketConn) error {
 	s.conn = c
 	s.mu.Unlock()
 	buf := make([]byte, maxMessage)
+	var backoff netretry.Backoff
 	for {
 		n, addr, err := c.ReadFrom(buf)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				return nil
 			}
+			// A transient failure (ENOBUFS, a deadline the caller set…)
+			// must not end the key server, or every member's keys expire.
+			if netretry.Temporary(err) {
+				time.Sleep(backoff.Next())
+				continue
+			}
 			return err
 		}
+		backoff.Reset()
 		if resp := s.handle(clone(buf[:n]), addr); resp != nil {
 			c.WriteTo(resp, addr)
 		}
