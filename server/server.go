@@ -5,7 +5,9 @@
 package server
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/dscsystems/go-iec61850/iec62351/aprofile"
 	"github.com/dscsystems/go-iec61850/iec62351/e2e"
+	"github.com/dscsystems/go-iec61850/internal/netretry"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
 )
@@ -68,6 +71,11 @@ type Server struct {
 	handshakeTimeout time.Duration
 	// writeTimeout bounds each PDU written to a client (WithWriteTimeout).
 	writeTimeout time.Duration
+	// frameTimeout bounds the completion of a frame a client started
+	// (WithFrameTimeout); idleTimeout disconnects a silent association
+	// (WithIdleTimeout).
+	frameTimeout time.Duration
+	idleTimeout  time.Duration
 	// deletableLogs lets clients delete log entries (WithDeletableLogs).
 	deletableLogs bool
 	// status is the Status service's answer: logical<<8 | physical.
@@ -299,6 +307,7 @@ func declaredSettingGroups(ld *model.LogicalDevice) *model.SettingControl {
 func New(m *model.Model, opts ...Option) *Server {
 	s := &Server{
 		writeTimeout: 30 * time.Second,
+		frameTimeout: 30 * time.Second,
 		model:        m,
 		log:          slog.New(slog.DiscardHandler),
 		identity:     Identity{Vendor: "go-iec61850", Model: m.Name, Revision: "0.1"},
@@ -364,13 +373,31 @@ func (s *Server) Serve(ln net.Listener) error {
 	s.lnMu.Lock()
 	s.lns = ln
 	s.lnMu.Unlock()
+	var backoff netretry.Backoff
 	for {
 		raw, err := ln.Accept()
 		if err != nil {
+			// A transient failure (EMFILE, ENFILE, ECONNABORTED…) must not
+			// end the server: once descriptors are freed it serves again.
+			// A closed listener, or a failure that says it is permanent,
+			// still ends it.
+			if netretry.Temporary(err) && !s.isClosed() {
+				d := backoff.Next()
+				s.log.Error("server: accept failed; retrying", "err", err, "retry_in", d)
+				time.Sleep(d)
+				continue
+			}
 			return err
 		}
+		backoff.Reset()
 		go s.serveConn(raw)
 	}
+}
+
+func (s *Server) isClosed() bool {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	return s.closed
 }
 
 // initiate is the MMS Initiate this server answers with. Its
@@ -427,9 +454,18 @@ func (s *Server) serveConn(raw net.Conn) {
 	if ht == 0 {
 		ht = 10 * time.Second
 	}
+	// One deadline covers the whole setup: the TLS handshake, then the
+	// OSI and ACSE exchange.
+	deadline := time.Now().Add(ht)
+	if err := handshakeTLS(raw, deadline); err != nil {
+		s.log.Warn("server: TLS handshake failed", "peer", peer, "err", err)
+		s.releaseSlot()
+		return
+	}
 	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate,
 		E2E: s.e2e, E2ERequired: s.e2eRequired, AProfile: s.aprofile, AProfileRequired: s.apRequired,
-		Responding: s.aeIdentity, HandshakeTimeout: ht, WriteTimeout: s.writeTimeout})
+		Responding: s.aeIdentity, HandshakeTimeout: max(time.Until(deadline), time.Millisecond),
+		WriteTimeout: s.writeTimeout, FrameTimeout: s.frameTimeout, IdleTimeout: s.idleTimeout})
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()
@@ -469,7 +505,11 @@ func (s *Server) serveConn(raw net.Conn) {
 	// client that disconnects mid-transfer leaks nothing.
 	defer h.releaseFiles()
 	if err := sc.Serve(h); err != nil && err != net.ErrClosed {
-		s.log.Debug("server: association ended", "peer", sc.Peer, "err", err)
+		if errors.Is(err, mms.ErrFrameTimeout) || errors.Is(err, mms.ErrIdleTimeout) {
+			s.log.Warn("server: association closed", "peer", sc.Peer, "err", err)
+		} else {
+			s.log.Debug("server: association ended", "peer", sc.Peer, "err", err)
+		}
 	}
 }
 
@@ -608,7 +648,39 @@ func WithWriteTimeout(d time.Duration) Option {
 	return func(s *Server) { s.writeTimeout = d }
 }
 
+// WithFrameTimeout bounds how long a client may take to complete a frame
+// it has started sending (default 30 s; zero or negative for no limit). A
+// client that stops mid-frame is disconnected instead of holding its
+// connection, and one of the server's connection slots, indefinitely.
+func WithFrameTimeout(d time.Duration) Option {
+	return func(s *Server) { s.frameTimeout = d }
+}
+
+// WithIdleTimeout disconnects an association with no traffic in either
+// direction for d (default: never). Reports sent to the client count as
+// traffic. Some clients keep a quiet association open for hours and expect
+// it to stay, so choose d longer than their polling or reporting period.
+func WithIdleTimeout(d time.Duration) Option {
+	return func(s *Server) { s.idleTimeout = d }
+}
+
 // WithHandshakeTimeout bounds the association handshake (default 10 s).
 func WithHandshakeTimeout(d time.Duration) Option {
 	return func(s *Server) { s.handshakeTimeout = d }
+}
+
+// handshakeTLS completes the TLS handshake of a TLS connection (crypto/tls
+// or the OpenSSL engine) by deadline, before anything else is read from it.
+// Done here rather than lazily on the first read, a failure is a TLS
+// failure, not a garbled COTP connection request. Other connections pass.
+func handshakeTLS(raw net.Conn, deadline time.Time) error {
+	hc, ok := raw.(interface {
+		HandshakeContext(context.Context) error
+	})
+	if !ok {
+		return nil
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	return hc.HandshakeContext(ctx)
 }
