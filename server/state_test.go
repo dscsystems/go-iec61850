@@ -190,7 +190,8 @@ func TestDoneFiresOnLocalClose(t *testing.T) {
 
 // Close during an association's handshake, after the AARE is decided but
 // before the association is registered, still ends it: the authenticator
-// runs in exactly that window.
+// runs in exactly that window. Close interrupts the setup, so the client
+// either fails to associate or sees its association end at once.
 func TestCloseDuringHandshakeEndsAssociation(t *testing.T) {
 	m, err := scl.LoadModel("../testdata/simpleIO_direct_control.cid")
 	if err != nil {
@@ -207,7 +208,7 @@ func TestCloseDuringHandshakeEndsAssociation(t *testing.T) {
 	defer cancel()
 	c, err := client.Dial(ctx, addr, client.WithTimeout(3*time.Second))
 	if err != nil {
-		t.Fatal(err)
+		return // the setup was interrupted
 	}
 	defer c.Close()
 	select {

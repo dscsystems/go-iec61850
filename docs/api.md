@@ -16,6 +16,7 @@ Contents:
 - [`goose`](#goose) — GOOSE publish/subscribe
 - [`sv`](#sv) — Sampled Values publish/subscribe
 - [`ethernet`](#ethernet) — raw layer-2 access
+- [`secevent`](#secevent) — cyber-security events
 
 ---
 
@@ -357,6 +358,14 @@ failure (EMFILE, ENFILE) is logged and retried with backoff instead of
 ending `Serve`. The `mms` package offers the same supervision to its own
 callers through `mms.AcceptOptions.FrameTimeout` and `IdleTimeout`; the
 association then ends with `mms.ErrFrameTimeout` or `mms.ErrIdleTimeout`.
+
+Security events (see [`secevent`](#secevent)):
+
+```go
+srv := server.New(m, server.WithCyberEventSink(secevent.JSONLinesSink(os.Stdout)))
+// or server.WithSecurityPolicy(secevent.Policy{Sink: ..., AggregateWindow: ...})
+stats := srv.SecurityStats() // counts by kind and category, drops
+```
 
 ### Pushing values (process side)
 
@@ -714,6 +723,70 @@ Linux AF_PACKET backend; requires `CAP_NET_RAW` (or root). On non-Linux
 platforms `Open` returns an error: no capture-library backend is implemented.
 Use `ethernet.Pipe()` for tests and simulation, or R-GOOSE/R-SV over UDP
 (`rsession`), which works on every platform.
+
+---
+
+## secevent
+
+One structured channel for security events from every layer. An event is
+an observation: a `Kind` (a stable identifier such as `conn.accepted` or
+`assoc.setup_failed`) with a fixed `Category`, default `Severity`, MITRE
+ATT&CK for ICS hint and IEC 62351-14 identifier (`Kind.Info()`), the peer
+(`PeerInfo`: addresses, TLS, ACSE identity), a `SessionID` correlating the
+events of one connection, and the protocol context that applies.
+
+```go
+d := secevent.NewDispatcher(secevent.MultiSink(
+    secevent.JSONLinesSink(f),
+    secevent.FilterSink(secevent.Warning, secevent.SlogSink(logger)),
+), secevent.Options{})
+defer d.Close()
+srv := server.New(m, server.WithCyberEventSink(d)) // a shared dispatcher stays open after srv.Close
+```
+
+The `Dispatcher` never blocks the protocol: events wait in a bounded queue
+(`Options.QueueSize`, default 1024) and those that do not fit are counted
+and announced as `meta.events_dropped`. Repeats of one event (same kind,
+session and subject) within `Options.AggregateWindow` (default 1 s) are
+folded into one carrying `Count` and `FirstSeen`; a negative window
+delivers each. A panicking sink is recovered and reported once as
+`meta.sink_panic`. `SyncSink(s)` delivers from the submitting goroutine,
+for tests.
+
+Sinks: `SinkFunc`, `ChannelSink` (non-blocking, counts drops), `SlogSink`,
+`JSONLinesSink` (one object per line, stable snake_case names),
+`MultiSink`, `FilterSink(min, sink, categories...)`.
+
+`Server.Close` interrupts connections still setting up and waits (up to
+2 s) for every connection to report its end, so close a shared
+dispatcher after the servers using it. `TLSPeer.Verified` is true for a
+verified chain in the connection state (crypto/tls's own verification, or
+the OpenSSL engine's profile check), or, when the server's
+`WithTLS` config verifies clients in `VerifyConnection` as
+`iec62351.ServerConfig` does, for any client that presented a
+certificate. With `Serve` on a TLS listener built elsewhere, pass the same
+config to `WithTLS` for that.
+
+The MMS server reports today:
+
+| Kind | When |
+|------|------|
+| `conn.accepted` | every TCP connection, before TLS and setup |
+| `conn.rejected_limit` | `WithMaxConnections` reached |
+| `conn.accept_error` | a transient `Accept` failure (retried) |
+| `tls.handshake_failed`, `tls.handshake_timeout` | TLS handshake failure |
+| `conn.no_data` | closed before sending anything (port scan, probe) |
+| `conn.never_associated` | no association within the handshake timeout |
+| `assoc.setup_failed` | setup failed; `Stage` is `cotp`, `session`, `presentation`, `acse`, `e2e`, `aprofile`, `auth`, `initiate`, `context` or `reply` |
+| `assoc.established` | association accepted, with the ACSE identity |
+| `dos.slow_frame`, `conn.idle_timeout`, `assoc.aborted_by_peer` | how an association ended, before its `conn.closed` |
+| `conn.closed` | association ended, with a `SessionSummary` (reason, duration, requests, octets) |
+
+`mms.AcceptOptions.Events` and `SessionID` give users of the `mms`
+package the association events; `mms.SetupError` carries the stage of a
+failed setup. `*mms.ServerConn` implements `secevent.Reporter`, so handler
+code can report its own events in the association's context with
+`secevent.Report(req.Conn, ev)`.
 
 ---
 

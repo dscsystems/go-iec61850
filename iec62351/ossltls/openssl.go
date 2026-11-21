@@ -744,7 +744,16 @@ func (c *Conn) verify() error {
 	if c.c.role == Server {
 		o.ServerName = "" // names the server; not checked on clients
 	}
-	return o.VerifyPeer(certs)
+	chain, err := o.VerifyPeerChain(certs)
+	if err != nil {
+		return err
+	}
+	// The profile verified the peer: say so the way crypto/tls does, so
+	// what reads the state sees a verified peer.
+	c.mu.Lock()
+	c.state.VerifiedChains = [][]*x509.Certificate{chain}
+	c.mu.Unlock()
+	return nil
 }
 
 // ConnectionState reports the negotiated version, suite (IANA value, see
