@@ -186,6 +186,10 @@ func TestNativeModeNegotiatesDHE(t *testing.T) {
 	if len(st.PeerCertificates) != 1 || st.PeerCertificates[0].Subject.CommonName != "server" {
 		t.Fatalf("peer certificates %v", st.PeerCertificates)
 	}
+	// The profile's verification is reported as crypto/tls reports its own.
+	if len(st.VerifiedChains) != 1 || st.VerifiedChains[0][0] != st.PeerCertificates[0] {
+		t.Fatalf("verified chains %v", st.VerifiedChains)
+	}
 	echo(t, c, 200<<10)
 
 	// Concurrent writers keep their writes whole.

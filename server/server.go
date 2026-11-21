@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/dscsystems/go-iec61850/internal/netretry"
 	"github.com/dscsystems/go-iec61850/mms"
 	"github.com/dscsystems/go-iec61850/model"
+	"github.com/dscsystems/go-iec61850/secevent"
 )
 
 // Server serves one IED data model over MMS.
@@ -76,6 +78,15 @@ type Server struct {
 	// (WithIdleTimeout).
 	frameTimeout time.Duration
 	idleTimeout  time.Duration
+	// secPolicy configures the security events (WithSecurityPolicy);
+	// secDisp delivers them, and is closed by Close when secOwned.
+	secPolicy secevent.Policy
+	secDisp   *secevent.Dispatcher
+	secOwned  bool
+	events    *secevent.Emitter
+	// connWG counts the connection goroutines, so Close can let them
+	// report their end before closing the dispatcher.
+	connWG sync.WaitGroup
 	// deletableLogs lets clients delete log entries (WithDeletableLogs).
 	deletableLogs bool
 	// status is the Status service's answer: logical<<8 | physical.
@@ -95,7 +106,10 @@ type Server struct {
 	conns  map[*mms.ServerConn]struct{}
 	// closed is set by Close under connMu: an association whose handshake
 	// completes afterwards is closed at once instead of registered.
-	closed   bool
+	closed bool
+	// setup holds the transports of connections still setting up, which
+	// Close interrupts.
+	setup    map[net.Conn]struct{}
 	open     int // slots taken: established associations and those setting up
 	maxConns int
 	connH    func(ConnectionEvent)
@@ -165,6 +179,13 @@ type Option func(*Server)
 func WithLogger(l *slog.Logger) Option { return func(s *Server) { s.log = l } }
 
 // WithTLS enables TLS per IEC 62351-3.
+//
+// A server given a TLS listener of its own through Serve should be given
+// the listener's config here too when that config verifies clients in a
+// hook (VerifyConnection or VerifyPeerCertificate, as
+// iec62351.ServerConfig's does): security events then report a client
+// with a certificate as verified, which the connection state alone does
+// not show.
 func WithTLS(cfg *tls.Config) Option { return func(s *Server) { s.tls = cfg } }
 
 // WithIdentity sets the Identify response.
@@ -312,11 +333,13 @@ func New(m *model.Model, opts ...Option) *Server {
 		log:          slog.New(slog.DiscardHandler),
 		identity:     Identity{Vendor: "go-iec61850", Model: m.Name, Revision: "0.1"},
 		conns:        make(map[*mms.ServerConn]struct{}),
+		setup:        make(map[net.Conn]struct{}),
 		writable:     fcSet(model.SP, model.SV, model.SE),
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.startEvents()
 	// Setting groups must be materialised before the report engine so the
 	// SGCB appears in the model.
 	s.buildSettingGroups()
@@ -384,14 +407,35 @@ func (s *Server) Serve(ln net.Listener) error {
 			if netretry.Temporary(err) && !s.isClosed() {
 				d := backoff.Next()
 				s.log.Error("server: accept failed; retrying", "err", err, "retry_in", d)
+				s.events.Emit(secevent.Event{Kind: secevent.KindConnAcceptError, Err: err,
+					Detail: "accept failed; retrying in " + d.String()})
 				time.Sleep(d)
 				continue
 			}
 			return err
 		}
 		backoff.Reset()
-		go s.serveConn(raw)
+		if !s.trackConn() {
+			raw.Close()
+			continue
+		}
+		go func() {
+			defer s.connWG.Done()
+			s.serveConn(raw)
+		}()
 	}
+}
+
+// trackConn counts a connection goroutine about to start; false once Close has
+// run, when no more are started.
+func (s *Server) trackConn() bool {
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
+	if s.closed {
+		return false
+	}
+	s.connWG.Add(1)
+	return true
 }
 
 func (s *Server) isClosed() bool {
@@ -439,13 +483,26 @@ func (s *Server) serveConn(raw net.Conn) {
 	defer raw.Close()
 	addr := raw.RemoteAddr()
 	peer := addr.String()
+	start := time.Now()
+	var session uint64
+	if s.events.Enabled() {
+		session = secevent.NextSessionID()
+		s.emitConn(raw, session, start, secevent.Event{Kind: secevent.KindConnAccepted})
+	}
 
 	// The slot is taken before the handshake, so a flood of half-open
 	// connections cannot outrun the limit.
 	open, ok := s.takeSlot()
 	if !ok {
 		s.log.Warn("server: connection refused", "peer", peer, "max", s.maxConns)
+		s.emitConn(raw, session, start, secevent.Event{Kind: secevent.KindConnRejectedLimit,
+			Action: secevent.Rejected, Detail: "connection limit reached (" + strconv.Itoa(s.maxConns) + ")"})
 		s.notifyConn(ConnectionEvent{Peer: peer, Addr: addr, State: ConnectionRefused, Open: open})
+		return
+	}
+	if !s.beginSetup(raw) {
+		s.releaseSlot()
+		s.emitConn(raw, session, start, closedLocally(start, "server closing"))
 		return
 	}
 
@@ -459,13 +516,21 @@ func (s *Server) serveConn(raw net.Conn) {
 	deadline := time.Now().Add(ht)
 	if err := handshakeTLS(raw, deadline); err != nil {
 		s.log.Warn("server: TLS handshake failed", "peer", peer, "err", err)
+		s.endSetup(raw)
+		if errors.Is(err, net.ErrClosed) {
+			s.emitConn(raw, session, start, closedLocally(start, "closed locally during TLS handshake"))
+		} else {
+			s.emitConn(raw, session, start, tlsFailure(err))
+		}
 		s.releaseSlot()
 		return
 	}
 	sc, err := mms.AcceptConnOpts(raw, mms.AcceptOptions{Initiate: &init, Authenticate: s.authenticate,
 		E2E: s.e2e, E2ERequired: s.e2eRequired, AProfile: s.aprofile, AProfileRequired: s.apRequired,
 		Responding: s.aeIdentity, HandshakeTimeout: max(time.Until(deadline), time.Millisecond),
-		WriteTimeout: s.writeTimeout, FrameTimeout: s.frameTimeout, IdleTimeout: s.idleTimeout})
+		WriteTimeout: s.writeTimeout, FrameTimeout: s.frameTimeout, IdleTimeout: s.idleTimeout,
+		Events: s.events, SessionID: session, TLSVerifiesPeer: s.tlsVerifiesPeer()})
+	s.endSetup(raw)
 	if err != nil {
 		s.log.Warn("server: association setup failed", "peer", peer, "err", err)
 		s.releaseSlot()
@@ -584,8 +649,14 @@ func (s *Server) Close() error {
 	for sc := range s.conns {
 		sc.Close()
 	}
+	// Connections still in their TLS handshake or association setup end
+	// too, rather than finishing it against a closed server.
+	for raw := range s.setup {
+		raw.Close()
+	}
 	s.connMu.Unlock()
 	s.logs.close()
+	s.closeEvents()
 	return nil
 }
 

@@ -32,6 +32,8 @@ type frameGuard struct {
 	frameTimeout, idleTimeout time.Duration
 
 	on atomic.Bool
+	// in and out count the octets read and written.
+	in, out atomic.Uint64
 	// lastAct is the time of the last octet read or written, in Unix
 	// nanoseconds.
 	lastAct atomic.Int64
@@ -64,7 +66,9 @@ func (g *frameGuard) midFrame() bool { return g.hdrN > 0 || g.remaining > 0 }
 
 func (g *frameGuard) Read(b []byte) (int, error) {
 	if !g.on.Load() {
-		return g.Conn.Read(b)
+		n, err := g.Conn.Read(b)
+		g.in.Add(uint64(n))
+		return n, err
 	}
 	for {
 		mid := g.midFrame()
@@ -83,6 +87,7 @@ func (g *frameGuard) Read(b []byte) (int, error) {
 		}
 		n, err := g.Conn.Read(b)
 		if n > 0 {
+			g.in.Add(uint64(n))
 			g.track(b[:n])
 			g.touch()
 			return n, err
@@ -133,6 +138,7 @@ func (g *frameGuard) track(p []byte) {
 
 func (g *frameGuard) Write(b []byte) (int, error) {
 	n, err := g.Conn.Write(b)
+	g.out.Add(uint64(n))
 	if n > 0 && g.on.Load() {
 		g.touch()
 	}

@@ -18,6 +18,7 @@ import (
 	"github.com/dscsystems/go-iec61850/internal/osi/cotp"
 	"github.com/dscsystems/go-iec61850/internal/osi/presentation"
 	"github.com/dscsystems/go-iec61850/internal/osi/session"
+	"github.com/dscsystems/go-iec61850/secevent"
 )
 
 // ErrReportQueueFull is returned by SendUnconfirmed when the outbound queue is
@@ -70,6 +71,7 @@ type ServerConn struct {
 	AProfilePeer *x509.Certificate
 
 	serverConnExt
+	ev serverConnEvents
 }
 
 // ACSEIdentity is an application-entity identity: the AP-title and
@@ -202,6 +204,32 @@ type AcceptOptions struct {
 	// count as traffic, so a client that only listens to reports stays
 	// connected while they flow.
 	IdleTimeout time.Duration
+
+	// Events, when non-nil, receives the security events of the
+	// association: setup failures (assoc.setup_failed, conn.no_data,
+	// conn.never_associated), assoc.established, and conn.closed when
+	// Serve returns.
+	Events *secevent.Emitter
+	// SessionID correlates the events of this connection with those the
+	// caller emitted before (conn.accepted); zero takes a new one.
+	SessionID uint64
+	// TLSVerifiesPeer says the transport's TLS refuses a client whose
+	// certificate it has not verified, though it may not record a
+	// verified chain: an IEC 62351-3 profile checking certificates in
+	// tls.Config.VerifyConnection does that. Events then report a client
+	// that presented a certificate as verified. Without it only a
+	// verified chain in the connection state counts.
+	TLSVerifiesPeer bool
+
+	// stage is where the handshake is, for the setup failure event.
+	stage *string
+}
+
+// at records the handshake stage reached.
+func (o AcceptOptions) at(stage string) {
+	if o.stage != nil {
+		*o.stage = stage
+	}
 }
 
 func (o AcceptOptions) trace(event string, data []byte) {
@@ -219,22 +247,34 @@ func AcceptConn(raw net.Conn) (*ServerConn, error) {
 // AcceptConnOpts is AcceptConn with explicit control over the response
 // parameters.
 func AcceptConnOpts(raw net.Conn, opts AcceptOptions) (*ServerConn, error) {
+	start := time.Now()
 	if opts.HandshakeTimeout > 0 {
-		raw.SetDeadline(time.Now().Add(opts.HandshakeTimeout))
+		raw.SetDeadline(start.Add(opts.HandshakeTimeout))
 	}
+	if opts.Events.Enabled() && opts.SessionID == 0 {
+		opts.SessionID = secevent.NextSessionID()
+	}
+	stage := StageCOTP
+	opts.stage = &stage
 	// COTP reads and writes through the guard, which supervises framing
 	// and idleness once the association is up; until then the handshake
 	// deadline above governs.
 	guard := newFrameGuard(raw, opts.FrameTimeout, opts.IdleTimeout)
 	sc, err := acceptConn(raw, guard, opts)
-	if err == nil && opts.HandshakeTimeout > 0 {
+	if err != nil {
+		err = &SetupError{Stage: stage, Err: err}
+		emitSetupFailure(raw, guard, opts, start, err.(*SetupError))
+		return nil, err
+	}
+	if opts.HandshakeTimeout > 0 {
 		raw.SetDeadline(time.Time{})
 	}
-	if err == nil {
-		sc.writeTimeout = opts.WriteTimeout
-		guard.enable()
-	}
-	return sc, err
+	sc.writeTimeout = opts.WriteTimeout
+	sc.ev = serverConnEvents{events: opts.Events, sessionID: opts.SessionID, started: start, guard: guard,
+		tlsVerifies: opts.TLSVerifiesPeer}
+	guard.enable()
+	sc.emitEstablished()
+	return sc, nil
 }
 
 func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*ServerConn, error) {
@@ -243,25 +283,30 @@ func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*Serve
 		return nil, fmt.Errorf("mms: COTP accept: %w", err)
 	}
 	// Session CONNECT carrying the presentation CP with the ACSE AARQ.
+	opts.at(StageSession)
 	res, err := session.AcceptServer(ct)
 	if err != nil {
 		return nil, fmt.Errorf("mms: session accept: %w", err)
 	}
 	opts.trace("rx CP", res.UserData)
+	opts.at(StagePresentation)
 	cp, err := presentation.ParseCP(res.UserData)
 	if err != nil {
 		return nil, fmt.Errorf("mms: presentation CP: %w", err)
 	}
 	aarq := cp.UserData
 	opts.trace("rx AARQ", aarq)
+	opts.at(StageACSE)
 	areq, err := acse.ParseAARQFull(aarq)
 	if err != nil {
 		return nil, fmt.Errorf("mms: ACSE AARQ: %w", err)
 	}
 	if isE2EContext(areq.ApplicationContext, opts.E2E) {
+		opts.at(StageE2E)
 		return acceptE2E(raw, ct, res, cp, areq, opts)
 	}
 	if opts.E2E != nil && opts.E2ERequired {
+		opts.at(StageE2E)
 		var responding acse.Identity
 		if opts.Responding != nil {
 			responding = opts.Responding.toACSE()
@@ -279,11 +324,13 @@ func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*Serve
 		}
 		session.Refuse(ct, presentation.BuildCPR(sel, cp.Contexts, aare))
 	}
+	opts.at(StageAProfile)
 	apPeer, respAuth, err := acceptAProfile(raw, ct, areq, opts, refuse)
 	if err != nil {
 		return nil, err
 	}
 	if opts.Authenticate != nil {
+		opts.at(StageAuth)
 		ar := AssociationRequest{Peer: raw.RemoteAddr(), Password: password,
 			Called: identityFromACSE(areq.Called), Calling: identityFromACSE(areq.Calling), AProfile: apPeer}
 		if tc, ok := raw.(tlsConn); ok {
@@ -300,6 +347,7 @@ func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*Serve
 		}
 	}
 	opts.trace("rx InitiateRequest", mmsInit)
+	opts.at(StageInitiate)
 	negotiated, err := ParseInitiateRequest(mmsInit)
 	if err != nil {
 		return nil, fmt.Errorf("mms: initiate request: %w", err)
@@ -319,6 +367,7 @@ func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*Serve
 	}
 	// The contexts are settled before the AARE, which names the MMS one
 	// by the identifier the peer chose for it.
+	opts.at(StageContext)
 	negotiatedCtx := presentation.Negotiate(cp.Contexts)
 	if !negotiatedCtx.HasMMS() {
 		// Without an agreed MMS context nothing sent after the
@@ -337,6 +386,7 @@ func acceptConn(raw net.Conn, tr io.ReadWriteCloser, opts AcceptOptions) (*Serve
 	}
 	_, cpa := presentation.BuildCPA(respondingPSel, cp.Contexts, aare)
 	opts.trace("tx CPA", cpa)
+	opts.at(StageReply)
 	if err := session.Reply(ct, res.CalledSSEL, cpa); err != nil {
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}
@@ -472,7 +522,9 @@ func (sc *ServerConn) pumpUnconfirmed() {
 // Serve reads confirmed requests until the association ends, dispatching
 // each to h. It returns when the peer concludes, the connection closes, or
 // a fatal transport error occurs.
-func (sc *ServerConn) Serve(h Handler) error {
+func (sc *ServerConn) Serve(h Handler) (err error) {
+	sc.ev.serving.Store(true)
+	defer func() { sc.emitClosed(err) }()
 	for {
 		pdu, err := sc.fr.recvMMS()
 		if err != nil {
@@ -574,6 +626,7 @@ func (sc *ServerConn) handleConfirmed(content []byte, h Handler) error {
 	if err != nil {
 		return sc.sendReject(&invokeID, rejectConfirmedRequest, rejectUnrecognizedService)
 	}
+	sc.ev.requests.Add(1)
 	req := &Request{
 		InvokeID: invokeID,
 		Service:  int(serviceTag.Number),
@@ -773,7 +826,12 @@ func (sc *ServerConn) Close() error {
 		sc.unconfClosed = true
 		close(sc.unconf)
 		sc.unconfMu.Unlock()
+		sc.ev.localClose.Store(true)
 		sc.stop()
+		// Closed without being served: nothing else reports its end.
+		if !sc.ev.serving.Load() {
+			sc.emitClosed(net.ErrClosed)
+		}
 	})
 	return sc.raw.Close()
 }
@@ -793,6 +851,7 @@ func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp prese
 		}
 	}()
 	if opts.Authenticate != nil {
+		opts.at(StageAuth)
 		ar := AssociationRequest{Peer: raw.RemoteAddr(), Called: identityFromACSE(areq.Called),
 			Calling: identityFromACSE(areq.Calling), Security: r.assoc.Peer()}
 		if tc, ok := raw.(tlsConn); ok {
@@ -805,6 +864,7 @@ func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp prese
 		}
 	}
 	opts.trace("rx InitiateRequest", r.mmsInit)
+	opts.at(StageInitiate)
 	negotiated, err := ParseInitiateRequest(r.mmsInit)
 	if err != nil {
 		e2eServerApplReject(ct, cp, areq, r, opts.trace)
@@ -817,6 +877,7 @@ func acceptE2E(raw net.Conn, ct *cotp.Conn, sres *session.AcceptResult, cp prese
 	answer := clampInitiate(want, negotiated)
 	initResp := EncodeInitiateResponse(answer)
 	opts.trace("tx InitiateResponse", initResp)
+	opts.at(StageReply)
 	if err := e2eServerAccept(ct, cp, areq, r, initResp, sres.CalledSSEL, opts.trace); err != nil {
 		return nil, fmt.Errorf("mms: session reply: %w", err)
 	}

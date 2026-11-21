@@ -11,6 +11,11 @@
   `ossltls`), `cmd/ied-server`, `cmd/ied-client`, `docs`, `examples`
 - **Status:** P0 decisions taken (§12). P1 done on branch `cyber-events-p1`
   (accept/read retry, explicit TLS handshake, frame and idle timeouts).
+  P2 done on branch `cyber-events-p2`: `secevent` core (Event, Kinds,
+  Dispatcher, sinks, JSON, Emitter, Reporter/Report, Policy skeleton,
+  Stats) and the MMS server's connection and association events. Every
+  Kind's `Std62351` is still its `x-go-iec61850.` extension identifier;
+  mapping the standard IEC 62351-14 identifiers needs the published text.
 
 ## 0. Goals and non-goals
 
@@ -277,7 +282,7 @@ Unchanged from the iec104 plan:
 | `SlogSink(*slog.Logger)` | Severity → `slog.Level` (Critical/Alert → Error+4/Error, Warning → Warn, Notice/Info → Info), attributes from the fields, message prefix `cyber:` |
 | `JSONLinesSink(io.Writer)` | one JSON object per line (file, stdout, socket) |
 | `MultiSink(...Sink)` | fan-out |
-| `FilterSink(min Severity, cats ...Category, s Sink)` | filtering |
+| `FilterSink(min Severity, s Sink, cats ...Category)` | filtering (the categories last, as Go variadics require) |
 
 Output formats stop at JSON lines (iec104 §12 Q5: answer JSON). A syslog/CEF
 formatter can be added later without API change.

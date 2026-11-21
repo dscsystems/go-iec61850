@@ -220,7 +220,15 @@ func (o *Options) now() time.Time {
 // the configurations from ClientConfig and ServerConfig run after the
 // handshake, for TLS engines other than crypto/tls (package ossltls).
 func (o *Options) VerifyPeer(certs []*x509.Certificate) error {
-	err := o.verify(certs)
+	_, err := o.VerifyPeerChain(certs)
+	return err
+}
+
+// VerifyPeerChain is VerifyPeer returning the chain the peer's certificate
+// was accepted with, from the leaf to the root, for a TLS engine to report
+// as verified.
+func (o *Options) VerifyPeerChain(certs []*x509.Certificate) ([]*x509.Certificate, error) {
+	chain, err := o.verifyChain(certs)
 	if err != nil && o.OnEvent != nil {
 		var leaf *x509.Certificate
 		if len(certs) > 0 {
@@ -228,13 +236,20 @@ func (o *Options) VerifyPeer(certs []*x509.Certificate) error {
 		}
 		o.OnEvent(Event{Peer: leaf, Err: err})
 	}
-	return err
+	return chain, err
 }
 
 // verify checks a peer's certificates against the options.
 func (o *Options) verify(certs []*x509.Certificate) error {
+	_, err := o.verifyChain(certs)
+	return err
+}
+
+// verifyChain checks a peer's certificates against the options and returns
+// the chain that passed.
+func (o *Options) verifyChain(certs []*x509.Certificate) ([]*x509.Certificate, error) {
 	if len(certs) == 0 {
-		return ErrNoPeerCertificate
+		return nil, ErrNoPeerCertificate
 	}
 	leaf := certs[0]
 	inter := x509.NewCertPool()
@@ -250,29 +265,31 @@ func (o *Options) verify(certs []*x509.Certificate) error {
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	})
 	if err != nil {
-		return fmt.Errorf("iec62351: %w", err)
+		return nil, fmt.Errorf("iec62351: %w", err)
 	}
 	var lastErr error
+	var good []*x509.Certificate
 	for _, chain := range chains {
 		if lastErr = o.checkChain(chain); lastErr == nil {
+			good = chain
 			break
 		}
 	}
 	if lastErr != nil {
-		return lastErr
+		return nil, lastErr
 	}
 	if o.ServerName != "" && !namesServer(leaf, o.ServerName) {
-		return fmt.Errorf("%w: want %q", ErrServerName, o.ServerName)
+		return nil, fmt.Errorf("%w: want %q", ErrServerName, o.ServerName)
 	}
 	if len(o.AllowedPeers) > 0 {
 		for _, a := range o.AllowedPeers {
 			if bytes.Equal(a.Raw, leaf.Raw) {
-				return nil
+				return good, nil
 			}
 		}
-		return fmt.Errorf("%w: %s", ErrNotAllowed, leaf.Subject)
+		return nil, fmt.Errorf("%w: %s", ErrNotAllowed, leaf.Subject)
 	}
-	return nil
+	return good, nil
 }
 
 // checkChain checks the key strength and revocation of every certificate
